@@ -1,0 +1,292 @@
+"""
+CVE-2025-55182 Scanner Module
+Scans directories for vulnerable React Server Components
+"""
+
+import json
+import os
+from pathlib import Path
+from typing import List, Dict, Optional
+from dataclasses import dataclass
+from packaging import version
+
+
+@dataclass
+class VulnerableProject:
+    """Represents a project with CVE-2025-55182 vulnerability"""
+    path: str
+    react_version: str
+    recommended_version: str
+    risk_level: str
+    next_js_version: Optional[str] = None
+    uses_server_components: bool = False
+    vulnerable_packages: List[str] = None
+
+    def __post_init__(self):
+        if self.vulnerable_packages is None:
+            self.vulnerable_packages = []
+
+
+class CVEScanner:
+    """Scanner for CVE-2025-55182 vulnerability"""
+
+    # Vulnerable React versions
+    VULNERABLE_VERSIONS = ["19.0.0", "19.1.0", "19.1.1", "19.2.0"]
+
+    # Patched versions mapping
+    PATCHED_VERSIONS = {
+        "19.0.0": "19.0.1",
+        "19.1.0": "19.1.2",
+        "19.1.1": "19.1.2",
+        "19.2.0": "19.2.1",
+    }
+
+    # React Server Components packages
+    SERVER_COMPONENT_PACKAGES = [
+        "react-server-dom-webpack",
+        "react-server-dom-parcel",
+        "react-server-dom-turbopack"
+    ]
+
+    def __init__(self, exclude_patterns: Optional[List[str]] = None):
+        """
+        Initialize scanner
+
+        Args:
+            exclude_patterns: List of directory patterns to exclude
+        """
+        self.exclude_patterns = exclude_patterns or [
+            "node_modules",
+            ".git",
+            "dist",
+            "build",
+            ".next",
+            "out",
+            ".cache",
+            "coverage",
+            ".npm",
+            ".bun",
+            "AppData",
+            "Backups"
+        ]
+
+    def should_exclude(self, path: Path) -> bool:
+        """Check if a path should be excluded from scanning"""
+        path_str = str(path).lower()
+        return any(pattern.lower() in path_str for pattern in self.exclude_patterns)
+
+    def find_package_json_files(self, root_path: str, recursive: bool = True) -> List[Path]:
+        """
+        Find all package.json files in a directory
+
+        Args:
+            root_path: Root directory to scan
+            recursive: Whether to scan subdirectories
+
+        Returns:
+            List of Path objects pointing to package.json files
+        """
+        root = Path(root_path)
+        package_files = []
+
+        if not root.exists():
+            return package_files
+
+        if recursive:
+            for path in root.rglob("package.json"):
+                if not self.should_exclude(path.parent):
+                    package_files.append(path)
+        else:
+            package_json = root / "package.json"
+            if package_json.exists():
+                package_files.append(package_json)
+
+        return package_files
+
+    def parse_package_json(self, package_path: Path) -> Optional[Dict]:
+        """
+        Parse a package.json file
+
+        Args:
+            package_path: Path to package.json file
+
+        Returns:
+            Parsed JSON as dictionary, or None if parsing fails
+        """
+        try:
+            with open(package_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, FileNotFoundError, UnicodeDecodeError) as e:
+            print(f"Warning: Could not parse {package_path}: {e}")
+            return None
+
+    def extract_version(self, version_str: str) -> str:
+        """
+        Extract clean version number from version string
+
+        Args:
+            version_str: Version string (e.g., "^19.0.0", "~19.1.0")
+
+        Returns:
+            Clean version number (e.g., "19.0.0")
+        """
+        # Remove common prefixes
+        cleaned = version_str.lstrip("^~>=<")
+        # Handle version ranges (take the first version)
+        if " " in cleaned:
+            cleaned = cleaned.split()[0]
+        return cleaned
+
+    def is_vulnerable_version(self, react_version: str) -> bool:
+        """
+        Check if a React version is vulnerable to CVE-2025-55182
+
+        Args:
+            react_version: React version string
+
+        Returns:
+            True if vulnerable, False otherwise
+        """
+        try:
+            clean_version = self.extract_version(react_version)
+            return clean_version in self.VULNERABLE_VERSIONS
+        except Exception:
+            return False
+
+    def get_recommended_version(self, current_version: str) -> str:
+        """
+        Get the recommended patched version
+
+        Args:
+            current_version: Current vulnerable version
+
+        Returns:
+            Recommended patched version
+        """
+        clean_version = self.extract_version(current_version)
+        return self.PATCHED_VERSIONS.get(clean_version, "19.1.2")
+
+    def check_server_components(self, package_data: Dict) -> tuple[bool, List[str]]:
+        """
+        Check if project uses React Server Components
+
+        Args:
+            package_data: Parsed package.json data
+
+        Returns:
+            Tuple of (uses_server_components, list of vulnerable packages)
+        """
+        vulnerable_packages = []
+        dependencies = {**package_data.get("dependencies", {}),
+                       **package_data.get("devDependencies", {})}
+
+        for pkg in self.SERVER_COMPONENT_PACKAGES:
+            if pkg in dependencies:
+                pkg_version = self.extract_version(dependencies[pkg])
+                if pkg_version in self.VULNERABLE_VERSIONS:
+                    vulnerable_packages.append(f"{pkg}@{pkg_version}")
+
+        # Check if using Next.js (which includes server components)
+        has_nextjs = "next" in dependencies
+
+        return (len(vulnerable_packages) > 0 or has_nextjs, vulnerable_packages)
+
+    def analyze_project(self, package_path: Path) -> Optional[VulnerableProject]:
+        """
+        Analyze a single project for vulnerability
+
+        Args:
+            package_path: Path to package.json file
+
+        Returns:
+            VulnerableProject object if vulnerable, None otherwise
+        """
+        package_data = self.parse_package_json(package_path)
+        if not package_data:
+            return None
+
+        dependencies = package_data.get("dependencies", {})
+        dev_dependencies = package_data.get("devDependencies", {})
+        all_deps = {**dependencies, **dev_dependencies}
+
+        # Check React version
+        react_version = all_deps.get("react")
+        if not react_version:
+            return None
+
+        if not self.is_vulnerable_version(react_version):
+            return None
+
+        # Get Next.js version if present
+        next_version = all_deps.get("next")
+
+        # Check for server components
+        uses_sc, vulnerable_pkgs = self.check_server_components(package_data)
+
+        return VulnerableProject(
+            path=str(package_path.parent),
+            react_version=self.extract_version(react_version),
+            recommended_version=self.get_recommended_version(react_version),
+            risk_level="CRITICAL",
+            next_js_version=self.extract_version(next_version) if next_version else None,
+            uses_server_components=uses_sc,
+            vulnerable_packages=vulnerable_pkgs
+        )
+
+    def scan_directory(self, root_path: str, recursive: bool = True) -> Dict:
+        """
+        Scan a directory for vulnerable projects
+
+        Args:
+            root_path: Root directory to scan
+            recursive: Whether to scan subdirectories
+
+        Returns:
+            Dictionary with scan results
+        """
+        package_files = self.find_package_json_files(root_path, recursive)
+        vulnerable_projects = []
+        safe_projects = []
+
+        for package_path in package_files:
+            result = self.analyze_project(package_path)
+            if result:
+                vulnerable_projects.append(result)
+            else:
+                safe_projects.append(str(package_path.parent))
+
+        return {
+            "summary": {
+                "total_projects": len(package_files),
+                "vulnerable_projects": len(vulnerable_projects),
+                "safe_projects": len(safe_projects)
+            },
+            "vulnerable_projects": [
+                {
+                    "path": vp.path,
+                    "react_version": vp.react_version,
+                    "recommended_version": vp.recommended_version,
+                    "risk_level": vp.risk_level,
+                    "next_js_version": vp.next_js_version,
+                    "uses_server_components": vp.uses_server_components,
+                    "vulnerable_packages": vp.vulnerable_packages
+                }
+                for vp in vulnerable_projects
+            ],
+            "safe_projects": safe_projects
+        }
+
+
+if __name__ == "__main__":
+    # Example usage
+    scanner = CVEScanner()
+    results = scanner.scan_directory(".", recursive=True)
+
+    print(f"Scanned {results['summary']['total_projects']} projects")
+    print(f"Found {results['summary']['vulnerable_projects']} vulnerable projects")
+
+    for vp in results['vulnerable_projects']:
+        print(f"\n[VULNERABLE] {vp['path']}")
+        print(f"  React {vp['react_version']} → {vp['recommended_version']}")
+        if vp['next_js_version']:
+            print(f"  Next.js: {vp['next_js_version']}")
