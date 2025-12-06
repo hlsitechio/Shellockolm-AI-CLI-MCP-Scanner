@@ -7,6 +7,33 @@
 [![CVE](https://img.shields.io/badge/CVE-2025--55182-critical)](https://www.cve.org/CVERecord?id=CVE-2025-55182)
 [![CVSS](https://img.shields.io/badge/CVSS-10.0-red)](https://www.first.org/cvss/)
 
+[![CI Tests](https://github.com/hlsitechio/cve-2025-55182-tools/actions/workflows/ci.yml/badge.svg)](https://github.com/hlsitechio/cve-2025-55182-tools/actions/workflows/ci.yml)
+[![CVE Monitor](https://github.com/hlsitechio/cve-2025-55182-tools/actions/workflows/cve-monitor.yml/badge.svg)](https://github.com/hlsitechio/cve-2025-55182-tools/actions/workflows/cve-monitor.yml)
+[![GitHub issues](https://img.shields.io/github/issues/hlsitechio/cve-2025-55182-tools)](https://github.com/hlsitechio/cve-2025-55182-tools/issues)
+[![GitHub stars](https://img.shields.io/github/stars/hlsitechio/cve-2025-55182-tools)](https://github.com/hlsitechio/cve-2025-55182-tools/stargazers)
+
+---
+
+## 🚨 Quick CVE Links & Resources
+
+### Official Advisories
+| Resource | Link | Description |
+|----------|------|-------------|
+| **CVE Record** | [CVE-2025-55182](https://www.cve.org/CVERecord?id=CVE-2025-55182) | Official CVE database entry |
+| **NVD Details** | [NVD CVE-2025-55182](https://nvd.nist.gov/vuln/detail/CVE-2025-55182) | NIST vulnerability database |
+| **React Security** | [React Blog](https://react.dev/blog/2025/12/03/critical-security-vulnerability-in-react-server-components) | Official React security advisory |
+| **Facebook Advisory** | [Meta Security](https://www.facebook.com/security/advisories/cve-2025-55182) | Facebook security team advisory |
+| **GitHub PR** | [React PR #35277](https://github.com/facebook/react/pull/35277) | Official fix implementation |
+
+### Real-Time Monitoring
+| Service | Purpose |
+|---------|---------|
+| 🔔 [GitHub Security Alerts](https://github.com/hlsitechio/cve-2025-55182-tools/security) | Automated vulnerability alerts |
+| 🤖 [CVE Monitor Workflow](https://github.com/hlsitechio/cve-2025-55182-tools/actions/workflows/cve-monitor.yml) | Daily React CVE scanning |
+| 📊 [CI/CD Status](https://github.com/hlsitechio/cve-2025-55182-tools/actions) | Build and test status |
+
+---
+
 ## 🚨 About CVE-2025-55182 (React2Shell)
 
 **Critical Remote Code Execution Vulnerability**
@@ -32,27 +59,34 @@ An attacker can craft malicious HTTP requests to React Server Function endpoints
 
 ## ✨ Features
 
+### 🤖 **MCP Server Integration** ⭐ FLAGSHIP FEATURE
+
+**Use with Claude Desktop, Cline, or any MCP-compatible AI assistant!**
+
+- **5 powerful tools** for AI-driven security workflows
+- **Real-time vulnerability detection** integrated into your AI workflow
+- **Automated remediation** - Let AI scan, patch, and verify for you
+- **Zero-configuration** - Just add to your MCP config and go
+- **Conversational security** - "Scan my projects for CVE-2025-55182" → Done!
+
+**Perfect for**: Developers using Claude Code, AI-assisted development, automated security workflows
+
 ### 🔍 Multiple Scanning Tools
 - **Simple Scanner** (`scan_simple.py`) - Fast CLI scanner for quick assessments
 - **Mass Scanner** - Batch scanning of entire drives
-- **MCP Server** - AI assistant integration for automated workflows
+- **Auto-Fix Tool** (`auto_fix.py`) - Complete scan→patch→verify automation
 
 ### 🔧 Automated Patching
-- **Auto-Fix Tool** (`auto_fix.py`) - Complete scan→patch→verify automation
-- **Mass Patcher** (`mass_patcher.py`) - Batch patching with dry-run mode
-- **Safe Remediation** - Automatic backups with timestamps
+- **Intelligent patching** - Detects React & Next.js versions
+- **Safe remediation** - Automatic timestamped backups
+- **Dry-run mode** - Preview changes before applying
+- **Batch operations** - Patch multiple projects at once
 
 ### 📊 Comprehensive Reporting
 - JSON audit trails
 - Detailed vulnerability reports
 - Formatted CLI output
-- Installation scripts generation
-
-### 🤖 MCP Integration
-- 5 tools for AI assistants
-- Real-time vulnerability detection
-- Automated remediation workflows
-- Resource endpoints for CVE information
+- Auto-generated npm install scripts
 
 ## 📋 Prerequisites
 
@@ -130,12 +164,43 @@ pip install -r requirements.txt
 
 ## 📖 Usage Guide
 
-### 🔥 Quick Start - Recommended Workflow
+### 🔥 Quick Start Options
 
-**The fastest way to protect your projects:**
+**Choose your preferred method:**
+
+#### Option A: MCP Server (Recommended for AI Users) 🤖
+
+**Use with Claude Desktop or any MCP-compatible AI assistant:**
+
+1. Add to your MCP config (`claude_desktop_config.json`):
+```json
+{
+  "mcpServers": {
+    "react-cve-scanner": {
+      "command": "python",
+      "args": ["G:\\mcp\\React_cve_MCP\\server.py"]
+    }
+  }
+}
+```
+
+2. Restart Claude Desktop
+
+3. Use natural language:
+```
+"Scan my G:/projects directory for CVE-2025-55182"
+"Patch all vulnerable projects and verify the fixes"
+"Generate a security report for my React applications"
+```
+
+**That's it!** The AI handles everything automatically.
+
+#### Option B: CLI Auto-Fix (Recommended for Terminal Users) ⚡
+
+**The fastest command-line way:**
 
 ```bash
-# 1. Scan and auto-fix all vulnerabilities (RECOMMENDED)
+# 1. Scan and auto-fix all vulnerabilities
 python auto_fix.py /path/to/projects
 
 # That's it! This will:

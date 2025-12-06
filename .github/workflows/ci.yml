@@ -1,0 +1,115 @@
+name: CI - Tests and Linting
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test on ${{ matrix.os }} - Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ['3.10', '3.11', '3.12']
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov black flake8 mypy
+
+    - name: Lint with flake8
+      run: |
+        # Stop build if there are Python syntax errors or undefined names
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        # Exit-zero treats all errors as warnings
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=88 --statistics
+
+    - name: Check code formatting with Black
+      run: |
+        black --check --diff .
+
+    - name: Type checking with mypy
+      continue-on-error: true
+      run: |
+        mypy *.py --ignore-missing-imports
+
+    - name: Run basic tool tests
+      run: |
+        # Test scanner import
+        python -c "from scanner import CVEScanner; print('Scanner OK')"
+        # Test remediation import
+        python -c "from remediation import Remediator; print('Remediator OK')"
+        # Test scan_simple help
+        python scan_simple.py --help
+        # Test auto_fix help
+        python auto_fix.py --help
+
+    - name: Test scanner on sample data
+      run: |
+        # Create test package.json
+        mkdir -p test_project
+        echo '{"dependencies": {"react": "19.0.0", "react-dom": "19.0.0"}}' > test_project/package.json
+        # Run scanner
+        python scan_simple.py test_project || true
+
+  security-scan:
+    name: Security Scanning
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run Bandit security scan
+      uses: tj-actions/bandit@v5.1
+      with:
+        targets: |
+          .
+        options: "-r --format json --output bandit-report.json"
+
+    - name: Upload Bandit report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: bandit-security-report
+        path: bandit-report.json
+
+  code-quality:
+    name: Code Quality Analysis
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install radon
+
+    - name: Check cyclomatic complexity
+      run: |
+        radon cc . -a -nb
+
+    - name: Check maintainability index
+      run: |
+        radon mi . -nb
