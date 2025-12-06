@@ -88,7 +88,7 @@ aiofiles>=23.0.0        # Async file operations
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/cve-2025-55182-tools.git
+git clone https://github.com/hlsitechio/cve-2025-55182-tools.git
 cd cve-2025-55182-tools
 
 # Install dependencies
@@ -705,9 +705,9 @@ See [LICENSE](LICENSE) file for full details.
 - [Model Context Protocol](https://modelcontextprotocol.io/)
 
 ### Community
-- [Report Issues](https://github.com/YOUR_USERNAME/cve-2025-55182-tools/issues)
-- [Discussions](https://github.com/YOUR_USERNAME/cve-2025-55182-tools/discussions)
-- [Security Vulnerabilities](https://github.com/YOUR_USERNAME/cve-2025-55182-tools/security)
+- [Report Issues](https://github.com/hlsitechio/cve-2025-55182-tools/issues)
+- [Discussions](https://github.com/hlsitechio/cve-2025-55182-tools/discussions)
+- [Security Vulnerabilities](https://github.com/hlsitechio/cve-2025-55182-tools/security)
 
 ## 🙏 Acknowledgments
 
@@ -728,8 +728,8 @@ See [LICENSE](LICENSE) file for full details.
 ### Getting Help
 
 - 📖 **Documentation**: Check this README and other docs
-- 🐛 **Bug Reports**: [Open an issue](https://github.com/YOUR_USERNAME/cve-2025-55182-tools/issues)
-- 💬 **Questions**: [Start a discussion](https://github.com/YOUR_USERNAME/cve-2025-55182-tools/discussions)
+- 🐛 **Bug Reports**: [Open an issue](https://github.com/hlsitechio/cve-2025-55182-tools/issues)
+- 💬 **Questions**: [Start a discussion](https://github.com/hlsitechio/cve-2025-55182-tools/discussions)
 - 🔒 **Security Issues**: See [SECURITY.md](SECURITY.md)
 
 ### Professional Support
@@ -767,8 +767,8 @@ For enterprise support, training, or custom integrations:
 
 If this helped you, please ⭐ **star the repo** and share it with other developers!
 
-[Report Bug](https://github.com/YOUR_USERNAME/cve-2025-55182-tools/issues) ·
-[Request Feature](https://github.com/YOUR_USERNAME/cve-2025-55182-tools/issues) ·
-[Contribute](https://github.com/YOUR_USERNAME/cve-2025-55182-tools/pulls)
+[Report Bug](https://github.com/hlsitechio/cve-2025-55182-tools/issues) ·
+[Request Feature](https://github.com/hlsitechio/cve-2025-55182-tools/issues) ·
+[Contribute](https://github.com/hlsitechio/cve-2025-55182-tools/pulls)
 
 </div>
