@@ -8,6 +8,8 @@
 
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/hlsitechio/cve-2025-55182-tools?color=success)](https://github.com/hlsitechio/cve-2025-55182-tools/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/hlsitechio/cve-2025-55182-tools/total?color=brightgreen)](https://github.com/hlsitechio/cve-2025-55182-tools/releases)
 [![CVE](https://img.shields.io/badge/CVE-2025--55182-critical)](https://www.cve.org/CVERecord?id=CVE-2025-55182)
 [![CVSS](https://img.shields.io/badge/CVSS-10.0-red)](https://www.first.org/cvss/)
 

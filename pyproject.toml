@@ -1,0 +1,95 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cve-2025-55182-tools"
+version = "1.1.0"
+description = "Complete security toolkit for CVE-2025-55182 (React Server Components RCE vulnerability)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+keywords = [
+    "security", "vulnerability", "cve", "react", "nextjs", "rce",
+    "vulnerability-scanner", "security-tools", "patch-management",
+    "react-server-components", "cybersecurity", "devsecops",
+    "npm", "malware-scanner", "supply-chain-security"
+]
+authors = [
+    {name = "HLS iTech", email = "hlarosesurprenant@gmail.com"}
+]
+maintainers = [
+    {name = "HLS iTech", email = "hlarosesurprenant@gmail.com"}
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Intended Audience :: Information Technology",
+    "Topic :: Security",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: System :: Systems Administration",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Environment :: Console",
+]
+
+dependencies = [
+    "mcp>=1.0.0",
+    "pydantic>=2.0.0",
+    "packaging>=23.0",
+    "aiofiles>=23.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "flake8>=6.0.0",
+    "mypy>=1.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/hlsitechio/cve-2025-55182-tools"
+Documentation = "https://github.com/hlsitechio/cve-2025-55182-tools/blob/main/README.md"
+Repository = "https://github.com/hlsitechio/cve-2025-55182-tools"
+"Bug Tracker" = "https://github.com/hlsitechio/cve-2025-55182-tools/issues"
+Changelog = "https://github.com/hlsitechio/cve-2025-55182-tools/blob/main/CHANGELOG.md"
+
+[project.scripts]
+cve-2025-55182-scan = "scan_simple:main"
+cve-2025-55182-fix = "auto_fix:main"
+cve-2025-55182-patch = "mass_patcher:main"
+cve-2025-55182-malware = "malware_scanner:main"
+
+[tool.setuptools]
+packages = ["cve_2025_55182_tools"]
+
+[tool.setuptools.package-data]
+"*" = ["*.md", "*.txt"]
+
+[tool.black]
+line-length = 88
+target-version = ['py310', 'py311', 'py312']
+include = '\.pyi?$'
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = "-v --cov=. --cov-report=html --cov-report=term"
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
