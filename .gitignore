@@ -158,3 +158,4 @@ test_results/
 *.temp
 temp/
 tmp/
+github_scan_report.json

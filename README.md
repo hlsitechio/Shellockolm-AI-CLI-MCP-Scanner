@@ -30,9 +30,51 @@ python auto_fix.py /your/projects
 
 **🎯 100% Patch Success Rate** • **✅ Production-Tested on 2,665+ Projects** • **🚀 Zero False Positives**
 
-[Quick Start](#-quick-start-options) • [Features](#-features) • [Documentation](#-documentation) • [Community](#-community--contributing)
+[Quick Start](#-quick-start-options) • [GitHub Scanner](#-github-repository-scanner-new) • [Features](#-features) • [Documentation](#-documentation)
 
 </div>
+
+---
+
+## 🚀 GitHub Repository Scanner [NEW!]
+
+**Scan ALL your GitHub repositories in 30 seconds - No cloning required!**
+
+```bash
+# Scan all your repositories
+python github_scanner.py
+
+# Scan your organization
+python github_scanner.py --org yourcompany
+```
+
+**Real Results:**
+```
+Total Repositories:  23
+Vulnerable Found:    4
+Errors:              0
+
+[PUBLIC] hlsitechio/gemini-it-pro-cli
+  Current: React 19.2.0 → Fix: Update to 19.2.1
+
+[PUBLIC] hlsitechio/CyberSleuth
+  Current: React 19.1.1 → Fix: Update to 19.2.1
+```
+
+### Why GitHub Scanner is a Game-Changer
+
+| react2shell-scanner (837★) | **Our Tool** |
+|-----------------------------|--------------|
+| ✅ Detect vulnerabilities | ✅ Detect vulnerabilities |
+| ❌ Local files only | ✅ **Scan GitHub directly** |
+| ❌ Manual patching | ✅ **Auto-patch in 2 minutes** |
+| ❌ One project at a time | ✅ **All repos in 30 seconds** |
+| ❌ No AI integration | ✅ **MCP server for AI** |
+| ❌ No malware detection | ✅ **NPM malware scanner** |
+
+**🔒 Security:** Uses official GitHub CLI - your token is never stored or transmitted
+
+**📚 Documentation:** [Complete GitHub Scanner Guide](docs/GITHUB_SCANNER.md)
 
 ---
 
