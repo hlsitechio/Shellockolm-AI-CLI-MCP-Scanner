@@ -25,6 +25,9 @@ class VulnerableProject:
     next_js_recommended: Optional[str] = None
     uses_server_components: bool = False
     vulnerable_packages: List[str] = field(default_factory=list)
+    affected_frameworks: List[str] = field(default_factory=list)
+    found_in_lockfiles: List[str] = field(default_factory=list)
+    vulnerable_packages_in_lockfiles: List[str] = field(default_factory=list)
 
 
 class CVEScanner:
@@ -63,6 +66,25 @@ class CVEScanner:
         "react-server-dom-webpack",
         "react-server-dom-parcel",
         "react-server-dom-turbopack"
+    ]
+
+    # Affected frameworks and bundlers (from official CVE advisory)
+    AFFECTED_FRAMEWORKS = [
+        "next",
+        "react-router",
+        "waku",
+        "@parcel/rsc",
+        "@vitejs/plugin-rsc",
+        "rwsdk"
+    ]
+
+    # Lockfile patterns to scan
+    LOCKFILE_PATTERNS = [
+        "package-lock.json",  # npm
+        "yarn.lock",          # yarn
+        "pnpm-lock.yaml",     # pnpm
+        "bun.lockb",          # bun (binary format - harder to parse)
+        "npm-shrinkwrap.json" # npm shrinkwrap
     ]
 
     def __init__(self, exclude_patterns: Optional[List[str]] = None):
@@ -169,6 +191,57 @@ class CVEScanner:
 
         return package_files
 
+    def find_lockfiles(self, root_path: str, recursive: bool = True, max_depth: int = 5) -> Dict[str, List[Path]]:
+        """
+        Find all lockfiles in a directory (OPTIMIZED FOR SPEED)
+
+        Args:
+            root_path: Root directory to scan
+            recursive: Whether to scan subdirectories
+            max_depth: Maximum directory depth to scan (default 5 for speed)
+
+        Returns:
+            Dictionary mapping lockfile types to lists of Path objects
+        """
+        root = Path(root_path)
+        lockfiles = {pattern: [] for pattern in self.LOCKFILE_PATTERNS}
+
+        if not root.exists():
+            return lockfiles
+
+        if recursive:
+            import os
+            for dirpath, dirnames, filenames in os.walk(root):
+                current_path = Path(dirpath)
+
+                # Calculate depth
+                try:
+                    depth = len(current_path.relative_to(root).parts)
+                except ValueError:
+                    depth = 0
+
+                # Stop if too deep
+                if depth > max_depth:
+                    dirnames.clear()
+                    continue
+
+                # Remove excluded directories IN-PLACE
+                dirnames[:] = [d for d in dirnames if not self.should_exclude(current_path / d)]
+
+                # Check for lockfiles in current directory
+                if not self.should_exclude(current_path):
+                    for lockfile_pattern in self.LOCKFILE_PATTERNS:
+                        if lockfile_pattern in filenames:
+                            lockfile_path = current_path / lockfile_pattern
+                            lockfiles[lockfile_pattern].append(lockfile_path)
+        else:
+            for lockfile_pattern in self.LOCKFILE_PATTERNS:
+                lockfile_path = root / lockfile_pattern
+                if lockfile_path.exists():
+                    lockfiles[lockfile_pattern].append(lockfile_path)
+
+        return lockfiles
+
     def parse_package_json(self, package_path: Path) -> Optional[Dict]:
         """
         Parse a package.json file
@@ -185,6 +258,193 @@ class CVEScanner:
         except (json.JSONDecodeError, FileNotFoundError, UnicodeDecodeError) as e:
             print(f"Warning: Could not parse {package_path}: {e}")
             return None
+
+    def parse_package_lock_json(self, lockfile_path: Path) -> Optional[Dict]:
+        """
+        Parse package-lock.json or npm-shrinkwrap.json
+
+        Args:
+            lockfile_path: Path to lockfile
+
+        Returns:
+            Dictionary of package@version found in lockfile
+        """
+        try:
+            with open(lockfile_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                packages = {}
+
+                # package-lock.json v2/v3 format
+                if "packages" in data:
+                    for pkg_path, pkg_info in data.get("packages", {}).items():
+                        if pkg_path.startswith("node_modules/"):
+                            pkg_name = pkg_path.replace("node_modules/", "")
+                            if "version" in pkg_info:
+                                packages[pkg_name] = pkg_info["version"]
+
+                # package-lock.json v1 format
+                if "dependencies" in data:
+                    def extract_deps(deps_dict):
+                        for pkg_name, pkg_info in deps_dict.items():
+                            if "version" in pkg_info:
+                                packages[pkg_name] = pkg_info["version"]
+                            if "dependencies" in pkg_info:
+                                extract_deps(pkg_info["dependencies"])
+
+                    extract_deps(data.get("dependencies", {}))
+
+                return packages
+        except (json.JSONDecodeError, FileNotFoundError, UnicodeDecodeError) as e:
+            print(f"Warning: Could not parse {lockfile_path}: {e}")
+            return None
+
+    def parse_yarn_lock(self, lockfile_path: Path) -> Optional[Dict]:
+        """
+        Parse yarn.lock file
+
+        Args:
+            lockfile_path: Path to yarn.lock
+
+        Returns:
+            Dictionary of package@version found in lockfile
+        """
+        try:
+            packages = {}
+            with open(lockfile_path, 'r', encoding='utf-8') as f:
+                current_package = None
+                for line in f:
+                    line = line.strip()
+
+                    # Package declaration (starts with package name)
+                    if line and not line.startswith("#") and not line.startswith(" "):
+                        # Extract package name from line like: "react@^19.0.0", react@^19.0.0:
+                        if "@" in line and (line.endswith(":") or "," in line):
+                            # Handle multiple package specs on one line
+                            parts = line.replace(":", "").replace('"', '').split(",")
+                            for part in parts:
+                                part = part.strip()
+                                if "@" in part:
+                                    pkg_name = part.split("@")[0].strip()
+                                    if pkg_name:
+                                        current_package = pkg_name
+
+                    # Version line
+                    elif current_package and line.startswith("version"):
+                        version = line.split('"')[1] if '"' in line else line.split()[1]
+                        packages[current_package] = version
+                        current_package = None
+
+            return packages
+        except (FileNotFoundError, UnicodeDecodeError) as e:
+            print(f"Warning: Could not parse {lockfile_path}: {e}")
+            return None
+
+    def parse_pnpm_lock(self, lockfile_path: Path) -> Optional[Dict]:
+        """
+        Parse pnpm-lock.yaml file
+
+        Args:
+            lockfile_path: Path to pnpm-lock.yaml
+
+        Returns:
+            Dictionary of package@version found in lockfile
+        """
+        try:
+            # Try to use PyYAML if available
+            try:
+                import yaml
+                with open(lockfile_path, 'r', encoding='utf-8') as f:
+                    data = yaml.safe_load(f)
+                    packages = {}
+
+                    # pnpm v6+ format
+                    if "packages" in data:
+                        for pkg_spec, pkg_info in data.get("packages", {}).items():
+                            # Extract package name and version from spec like "/react/19.0.0"
+                            parts = pkg_spec.strip("/").split("/")
+                            if len(parts) >= 2:
+                                pkg_name = "/".join(parts[:-1])
+                                version = parts[-1]
+                                packages[pkg_name] = version
+
+                    return packages
+            except ImportError:
+                # Fallback: basic text parsing
+                packages = {}
+                with open(lockfile_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        # Look for patterns like "  /react/19.0.0:"
+                        if line.strip().startswith("/") and ":" in line:
+                            spec = line.strip().replace(":", "")
+                            parts = spec.strip("/").split("/")
+                            if len(parts) >= 2:
+                                pkg_name = "/".join(parts[:-1])
+                                version = parts[-1]
+                                packages[pkg_name] = version
+
+                return packages
+        except (FileNotFoundError, UnicodeDecodeError) as e:
+            print(f"Warning: Could not parse {lockfile_path}: {e}")
+            return None
+
+    def check_lockfiles_for_vulnerabilities(self, project_dir: Path) -> Dict:
+        """
+        Check all lockfiles in a project directory for vulnerable packages
+
+        Args:
+            project_dir: Project directory path
+
+        Returns:
+            Dictionary with lockfile vulnerability information
+        """
+        vulnerabilities = {
+            "found_in_lockfiles": [],
+            "vulnerable_packages_in_lockfiles": []
+        }
+
+        # Check each lockfile type
+        lockfile_parsers = {
+            "package-lock.json": self.parse_package_lock_json,
+            "npm-shrinkwrap.json": self.parse_package_lock_json,
+            "yarn.lock": self.parse_yarn_lock,
+            "pnpm-lock.yaml": self.parse_pnpm_lock,
+        }
+
+        for lockfile_name, parser in lockfile_parsers.items():
+            lockfile_path = project_dir / lockfile_name
+            if lockfile_path.exists():
+                print(f"  📄 Checking {lockfile_name}...")
+                packages = parser(lockfile_path)
+                if packages:
+                    # Check for vulnerable React versions
+                    for pkg_name, pkg_version in packages.items():
+                        if pkg_name == "react" and pkg_version in self.VULNERABLE_VERSIONS:
+                            vulnerabilities["found_in_lockfiles"].append(lockfile_name)
+                            vulnerabilities["vulnerable_packages_in_lockfiles"].append(
+                                f"{pkg_name}@{pkg_version} in {lockfile_name}"
+                            )
+
+                        # Check for vulnerable server component packages
+                        if pkg_name in self.SERVER_COMPONENT_PACKAGES and pkg_version in self.VULNERABLE_VERSIONS:
+                            vulnerabilities["found_in_lockfiles"].append(lockfile_name)
+                            vulnerabilities["vulnerable_packages_in_lockfiles"].append(
+                                f"{pkg_name}@{pkg_version} in {lockfile_name}"
+                            )
+
+                        # Check for vulnerable Next.js versions
+                        if pkg_name == "next":
+                            is_vuln, _ = self.is_nextjs_vulnerable(pkg_version)
+                            if is_vuln:
+                                vulnerabilities["found_in_lockfiles"].append(lockfile_name)
+                                vulnerabilities["vulnerable_packages_in_lockfiles"].append(
+                                    f"{pkg_name}@{pkg_version} in {lockfile_name}"
+                                )
+
+        # Deduplicate
+        vulnerabilities["found_in_lockfiles"] = list(set(vulnerabilities["found_in_lockfiles"]))
+        vulnerabilities["vulnerable_packages_in_lockfiles"] = list(set(vulnerabilities["vulnerable_packages_in_lockfiles"]))
+
+        return vulnerabilities
 
     def extract_version(self, version_str: str) -> str:
         """
@@ -276,34 +536,42 @@ class CVEScanner:
         clean_version = self.extract_version(current_version)
         return self.PATCHED_VERSIONS.get(clean_version, "19.1.2")
 
-    def check_server_components(self, package_data: Dict) -> tuple[bool, List[str]]:
+    def check_server_components(self, package_data: Dict) -> tuple[bool, List[str], List[str]]:
         """
-        Check if project uses React Server Components
+        Check if project uses React Server Components and affected frameworks
 
         Args:
             package_data: Parsed package.json data
 
         Returns:
-            Tuple of (uses_server_components, list of vulnerable packages)
+            Tuple of (uses_server_components, list of vulnerable packages, list of affected frameworks)
         """
         vulnerable_packages = []
+        affected_frameworks = []
         dependencies = {**package_data.get("dependencies", {}),
                        **package_data.get("devDependencies", {})}
 
+        # Check for vulnerable React Server Component packages
         for pkg in self.SERVER_COMPONENT_PACKAGES:
             if pkg in dependencies:
                 pkg_version = self.extract_version(dependencies[pkg])
                 if pkg_version in self.VULNERABLE_VERSIONS:
                     vulnerable_packages.append(f"{pkg}@{pkg_version}")
 
+        # Check for affected frameworks (from official CVE advisory)
+        for framework in self.AFFECTED_FRAMEWORKS:
+            if framework in dependencies:
+                affected_frameworks.append(f"{framework}@{self.extract_version(dependencies[framework])}")
+
         # Check if using Next.js (which includes server components)
         has_nextjs = "next" in dependencies
+        has_server_components = len(vulnerable_packages) > 0 or has_nextjs
 
-        return (len(vulnerable_packages) > 0 or has_nextjs, vulnerable_packages)
+        return (has_server_components, vulnerable_packages, affected_frameworks)
 
     def analyze_project(self, package_path: Path) -> Optional[VulnerableProject]:
         """
-        Analyze a single project for vulnerability
+        Analyze a single project for vulnerability (including lockfiles)
 
         Args:
             package_path: Path to package.json file
@@ -335,8 +603,11 @@ class CVEScanner:
         if next_version:
             next_js_vulnerable, next_js_recommended = self.is_nextjs_vulnerable(next_version)
 
-        # Check for server components
-        uses_sc, vulnerable_pkgs = self.check_server_components(package_data)
+        # Check for server components and affected frameworks
+        uses_sc, vulnerable_pkgs, affected_fws = self.check_server_components(package_data)
+
+        # Check lockfiles for additional vulnerability confirmation
+        lockfile_vulns = self.check_lockfiles_for_vulnerabilities(package_path.parent)
 
         return VulnerableProject(
             path=str(package_path.parent),
@@ -348,7 +619,10 @@ class CVEScanner:
             next_js_vulnerable=next_js_vulnerable,
             next_js_recommended=next_js_recommended,
             uses_server_components=uses_sc,
-            vulnerable_packages=vulnerable_pkgs
+            vulnerable_packages=vulnerable_pkgs,
+            affected_frameworks=affected_fws,
+            found_in_lockfiles=lockfile_vulns["found_in_lockfiles"],
+            vulnerable_packages_in_lockfiles=lockfile_vulns["vulnerable_packages_in_lockfiles"]
         )
 
     def scan_directory(self, root_path: str, recursive: bool = True) -> Dict:
@@ -391,7 +665,10 @@ class CVEScanner:
                     "next_js_vulnerable": vp.next_js_vulnerable,
                     "next_js_recommended": vp.next_js_recommended,
                     "uses_server_components": vp.uses_server_components,
-                    "vulnerable_packages": vp.vulnerable_packages
+                    "vulnerable_packages": vp.vulnerable_packages,
+                    "affected_frameworks": vp.affected_frameworks,
+                    "found_in_lockfiles": vp.found_in_lockfiles,
+                    "vulnerable_packages_in_lockfiles": vp.vulnerable_packages_in_lockfiles
                 }
                 for vp in vulnerable_projects
             ],
