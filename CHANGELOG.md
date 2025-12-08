@@ -5,6 +5,57 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2025-12-08
+
+### 🔍 Major Rebranding: Welcome to Shelllockolm!
+
+**BREAKING CHANGES:**
+- Package renamed: `cve-2025-55182-tools` → `shelllockolm`
+- CLI commands renamed:
+  - `cve-2025-55182-scan` → `shelllockolm` / `shelllockolm-scan`
+  - `cve-2025-55182-fix` → `shelllockolm-fix`
+  - `cve-2025-55182-patch` → `shelllockolm-patch`
+  - `cve-2025-55182-malware` → `shelllockolm-malware`
+- New command: `shelllockolm-github` for GitHub repository scanning
+- Repository URL updated to `https://github.com/hlsitechio/shelllockolm`
+
+### Added
+- **CVE-2025-66478 Detection** - Comprehensive Next.js vulnerability scanning
+- **Dual CVE Support** - Track both CVE-2025-55182 and CVE-2025-66478
+- **Next.js Version Ranges** - Precise detection for all 15.x and 16.x versions
+- **Vulnerability Database** (`vulnerability_database.py`) - Centralized CVE tracking
+- **Enhanced Privacy Protection** - Comprehensive .gitignore for scan results
+- **Privacy & Security Guide** (`PRIVACY_AND_SECURITY.md`) - Complete data protection guide
+- **Detective Theme Branding** - "Elementary security for complex codebases"
+- New keywords: shelllockolm, sherlock-holmes, detective, threat-detection
+
+### Changed
+- **Project Description**: "Your Security Detective for React, Next.js & npm"
+- **Tagline**: "Elementary, my dear developer! Detect CVEs, malware, and supply chain attacks"
+- **README**: Complete rebrand with detective theme
+- **MCP Server**: Updated to v1.1.0 with dual CVE support
+- **Scanner**: Enhanced with Next.js vulnerability ranges
+- Package structure updated to use src/ layout
+
+### Security
+- Enhanced .gitignore to prevent scan report leakage
+- Added protection for backup files and configuration
+- Privacy-first design with local-only scanning
+- Comprehensive documentation on data protection
+
+### Fixed
+- Next.js version detection across all 15.x and 16.x ranges
+- Canary version handling for Next.js
+- MCP resource URIs updated for both CVEs
+
+### Documentation
+- New PRIVACY_AND_SECURITY.md guide
+- Updated README with Shelllockolm branding
+- Added TAGLINE_OPTIONS.md with marketing concepts
+- Enhanced vulnerability documentation
+
+---
+
 ## [1.1.0] - 2025-12-06
 
 ### Added
@@ -61,6 +112,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Release Notes
 
+### v2.0.0 Highlights 🔍
+
+**Shelllockolm** - Your Security Detective for React, Next.js & npm!
+
+This major release represents a complete rebranding and significant expansion:
+
+**🎯 Dual CVE Detection:**
+- CVE-2025-55182 (React Server Components RCE)
+- CVE-2025-66478 (Vercel/Next.js advisory)
+
+**🔐 Enhanced Security:**
+- Privacy-first design with comprehensive .gitignore
+- Local-only scanning with no code upload
+- Complete data protection documentation
+
+**🚀 New Features:**
+- Next.js version range detection (15.x, 16.x)
+- Centralized vulnerability database
+- Enhanced malware detection
+- GitHub repository scanning
+
+**💡 Why "Shelllockolm"?**
+A play on "Sherlock Holmes" - your detective for finding security threats. Elementary!
+
+**Migration Guide:**
+- Update package references from `cve-2025-55182-tools` to `shelllockolm`
+- Update CLI commands (see BREAKING CHANGES above)
+- Repository URL: https://github.com/hlsitechio/shelllockolm
+
+### v1.1.0 Highlights
+
+**NPM Malware Detection** - Complete supply chain security scanning.
+
 ### v1.0.0 Highlights
 
 This is the initial production-ready release of the CVE-2025-55182 security toolkit. The tools have been extensively tested and successfully used to secure 15 production React applications.
@@ -80,25 +164,26 @@ This is the initial production-ready release of the CVE-2025-55182 security tool
 
 ## Future Roadmap
 
-### Planned for v1.1.0
-- [ ] PyPI package publishing
-- [ ] VS Code extension
-- [ ] Enhanced test coverage
-- [ ] Vue.js framework support
-- [ ] Angular framework support
+### Planned for v2.1.0
+- [ ] PyPI package publishing (as shelllockolm)
+- [ ] npm package for direct installation
+- [ ] Enhanced GitHub Scanner features
+- [ ] Real-time vulnerability notifications
 
-### Planned for v1.2.0
+### Planned for v2.2.0
+- [ ] Historical React CVE database expansion
+- [ ] Additional framework support (Vue.js, Angular)
 - [ ] HTML/PDF report generation
 - [ ] CI/CD integration examples
-- [ ] Docker container support
-- [ ] Kubernetes deployment guides
 
-### Planned for v2.0.0
-- [ ] Multi-CVE detection support
+### Planned for v3.0.0
 - [ ] Real-time monitoring dashboard
 - [ ] Webhook notifications
 - [ ] Enterprise SSO integration
+- [ ] Multi-language support
 
 ---
 
-[1.0.0]: https://github.com/hlsitechio/cve-2025-55182-tools/releases/tag/v1.0.0
+[2.0.0]: https://github.com/hlsitechio/shelllockolm/releases/tag/v2.0.0
+[1.1.0]: https://github.com/hlsitechio/shelllockolm/releases/tag/v1.1.0
+[1.0.0]: https://github.com/hlsitechio/shelllockolm/releases/tag/v1.0.0
