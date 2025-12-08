@@ -1,4 +1,4 @@
-# Contributing to CVE-2025-55182 Security Tools
+# Contributing to Shelllockolm
 
 Thank you for your interest in contributing to this security project! We welcome contributions from the community to help protect React developers worldwide from critical vulnerabilities.
 
@@ -30,12 +30,12 @@ Before contributing, ensure you have:
 1. **Fork the repository** on GitHub
 2. **Clone your fork** locally:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/cve-2025-55182-tools.git
-   cd cve-2025-55182-tools
+   git clone https://github.com/YOUR_USERNAME/shelllockolm.git
+   cd shelllockolm
    ```
 3. **Add upstream remote**:
    ```bash
-   git remote add upstream https://github.com/hlsitechio/cve-2025-55182-tools.git
+   git remote add upstream https://github.com/hlsitechio/shelllockolm.git
    ```
 
 ### Development Setup

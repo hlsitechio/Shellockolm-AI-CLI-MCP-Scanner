@@ -3,7 +3,7 @@
 **Date**: December 6, 2025
 **Version**: 1.1.0
 **Status**: Production-Ready, Fully Tested, Ready for Viral Growth
-**Repository**: https://github.com/hlsitechio/cve-2025-55182-tools
+**Repository**: https://github.com/hlsitechio/shelllockolm
 
 ---
 
@@ -199,13 +199,13 @@ Status:             CLEAN
 
 ### GitHub Release
 - **Version**: v1.1.0
-- **URL**: https://github.com/hlsitechio/cve-2025-55182-tools/releases/tag/v1.1.0
+- **URL**: https://github.com/hlsitechio/shelllockolm/releases/tag/v1.1.0
 - **Status**: Published
 - **Assets**: Downloadable source code
 - **Release Notes**: Complete feature list and metrics
 
 ### PyPI Package (Ready for Publishing)
-- **Package Name**: cve-2025-55182-tools
+- **Package Name**: shelllockolm
 - **Version**: 1.1.0
 - **Python**: 3.10+
 - **Platforms**: Windows, Linux, macOS
@@ -213,7 +213,7 @@ Status:             CLEAN
 
 **Future CLI Commands:**
 ```bash
-pip install cve-2025-55182-tools
+pip install shelllockolm
 
 cve-2025-55182-scan /your/projects
 cve-2025-55182-fix /your/projects
@@ -534,7 +534,7 @@ This project successfully delivers:
 
 ---
 
-**Repository**: https://github.com/hlsitechio/cve-2025-55182-tools
+**Repository**: https://github.com/hlsitechio/shelllockolm
 **Release**: v1.1.0
 **Status**: 🚀 READY FOR LAUNCH
 **License**: MIT

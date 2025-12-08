@@ -6,8 +6,8 @@
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/hlsitechio/cve-2025-55182-tools
-cd cve-2025-55182-tools
+git clone https://github.com/hlsitechio/shelllockolm
+cd shelllockolm
 
 # 2. Install dependencies
 pip install -r requirements.txt
@@ -133,5 +133,5 @@ A: Yes! Use the `scanner.py` tool for read-only scanning.
 
 - 📖 [Full Documentation](../README.md)
 - 🔍 [GitHub Scanner Guide](GITHUB_SCANNER.md)
-- 🐛 [Report Issues](https://github.com/hlsitechio/cve-2025-55182-tools/issues)
-- 💬 [Ask Questions](https://github.com/hlsitechio/cve-2025-55182-tools/discussions)
+- 🐛 [Report Issues](https://github.com/hlsitechio/shelllockolm/issues)
+- 💬 [Ask Questions](https://github.com/hlsitechio/shelllockolm/discussions)

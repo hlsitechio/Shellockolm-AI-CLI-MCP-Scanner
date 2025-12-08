@@ -228,8 +228,8 @@ All security actions have been logged:
 
 For questions about this scan or the security tools:
 
-- **GitHub Repository**: https://github.com/hlsitechio/cve-2025-55182-tools
-- **Issues**: https://github.com/hlsitechio/cve-2025-55182-tools/issues
+- **GitHub Repository**: https://github.com/hlsitechio/shelllockolm
+- **Issues**: https://github.com/hlsitechio/shelllockolm/issues
 - **Security Policy**: See SECURITY.md
 
 ---
