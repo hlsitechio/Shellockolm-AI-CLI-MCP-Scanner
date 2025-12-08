@@ -6,8 +6,8 @@
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/hlsitechio/shelllockolm
-cd shelllockolm
+git clone https://github.com/hlsitechio/shellockolm
+cd shellockolm
 
 # 2. Install dependencies
 pip install -r requirements.txt
@@ -133,5 +133,5 @@ A: Yes! Use the `scanner.py` tool for read-only scanning.
 
 - 📖 [Full Documentation](../README.md)
 - 🔍 [GitHub Scanner Guide](GITHUB_SCANNER.md)
-- 🐛 [Report Issues](https://github.com/hlsitechio/shelllockolm/issues)
-- 💬 [Ask Questions](https://github.com/hlsitechio/shelllockolm/discussions)
+- 🐛 [Report Issues](https://github.com/hlsitechio/shellockolm/issues)
+- 💬 [Ask Questions](https://github.com/hlsitechio/shellockolm/discussions)

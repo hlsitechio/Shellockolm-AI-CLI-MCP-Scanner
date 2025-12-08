@@ -30,12 +30,12 @@ Before contributing, ensure you have:
 1. **Fork the repository** on GitHub
 2. **Clone your fork** locally:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/shelllockolm.git
-   cd shelllockolm
+   git clone https://github.com/YOUR_USERNAME/shellockolm.git
+   cd shellockolm
    ```
 3. **Add upstream remote**:
    ```bash
-   git remote add upstream https://github.com/hlsitechio/shelllockolm.git
+   git remote add upstream https://github.com/hlsitechio/shellockolm.git
    ```
 
 ### Development Setup

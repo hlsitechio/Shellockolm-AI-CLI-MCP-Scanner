@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "shelllockolm"
+name = "shellockolm"
 version = "2.0.0"
 description = "Your Security Detective for React, Next.js & npm - Detect CVEs, malware, and supply chain attacks"
 readme = "README.md"
@@ -13,7 +13,7 @@ keywords = [
     "security", "vulnerability", "cve", "react", "nextjs", "rce",
     "vulnerability-scanner", "security-tools", "patch-management",
     "react-server-components", "cybersecurity", "devsecops",
-    "npm", "malware-scanner", "supply-chain-security", "shelllockolm",
+    "npm", "malware-scanner", "supply-chain-security", "shellockolm",
     "sherlock-holmes", "detective", "threat-detection"
 ]
 authors = [
@@ -59,23 +59,23 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/hlsitechio/shelllockolm"
-Documentation = "https://github.com/hlsitechio/shelllockolm/blob/main/README.md"
-Repository = "https://github.com/hlsitechio/shelllockolm"
-"Bug Tracker" = "https://github.com/hlsitechio/shelllockolm/issues"
-Changelog = "https://github.com/hlsitechio/shelllockolm/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/hlsitechio/shellockolm"
+Documentation = "https://github.com/hlsitechio/shellockolm/blob/main/README.md"
+Repository = "https://github.com/hlsitechio/shellockolm"
+"Bug Tracker" = "https://github.com/hlsitechio/shellockolm/issues"
+Changelog = "https://github.com/hlsitechio/shellockolm/blob/main/CHANGELOG.md"
 
 [project.scripts]
-shelllockolm = "scan_simple:main"
-shelllockolm-scan = "scan_simple:main"
-shelllockolm-fix = "auto_fix:main"
-shelllockolm-patch = "mass_patcher:main"
-shelllockolm-malware = "malware_scanner:main"
-shelllockolm-github = "github_scanner:main"
+shellockolm = "scan_simple:main"
+shellockolm-scan = "scan_simple:main"
+shellockolm-fix = "auto_fix:main"
+shellockolm-patch = "mass_patcher:main"
+shellockolm-malware = "malware_scanner:main"
+shellockolm-github = "github_scanner:main"
 
 [tool.setuptools]
-packages = ["shelllockolm"]
-package-dir = {"shelllockolm" = "src"}
+packages = ["shellockolm"]
+package-dir = {"shellockolm" = "src"}
 
 [tool.setuptools.package-data]
 "*" = ["*.md", "*.txt"]

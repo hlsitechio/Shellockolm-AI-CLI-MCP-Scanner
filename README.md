@@ -8,8 +8,8 @@
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
 [![MIT License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![GitHub Release](https://img.shields.io/github/v/release/hlsitechio/cve-2025-55182-tools?color=success)](https://github.com/hlsitechio/cve-2025-55182-tools/releases/latest)
-[![CI Status](https://github.com/hlsitechio/cve-2025-55182-tools/actions/workflows/ci.yml/badge.svg)](https://github.com/hlsitechio/cve-2025-55182-tools/actions)
+[![GitHub Release](https://img.shields.io/github/v/release/hlsitechio/cve-2025-55182-tools?color=success)](https://github.com/hlsitechio/shellockolm/releases/latest)
+[![CI Status](https://github.com/hlsitechio/shellockolm/actions/workflows/ci.yml/badge.svg)](https://github.com/hlsitechio/shellockolm/actions)
 
 </div>
 
@@ -62,7 +62,7 @@ python src/github_scanner.py
 ### 1. Install
 
 ```bash
-git clone https://github.com/hlsitechio/cve-2025-55182-tools
+git clone https://github.com/hlsitechio/shellockolm
 cd cve-2025-55182-tools
 pip install -r requirements.txt
 ```
@@ -243,8 +243,8 @@ python src/auto_fix.py /audit --json > audit_report.json
 ## Support
 
 - 📖 [Documentation](docs/)
-- 🐛 [Report Issues](https://github.com/hlsitechio/cve-2025-55182-tools/issues)
-- 💬 [Discussions](https://github.com/hlsitechio/cve-2025-55182-tools/discussions)
+- 🐛 [Report Issues](https://github.com/hlsitechio/shellockolm/issues)
+- 💬 [Discussions](https://github.com/hlsitechio/shellockolm/discussions)
 - 📧 Email: hlarosesurprenant@gmail.com
 
 ---
@@ -273,6 +273,6 @@ MIT License - See [LICENSE](LICENSE) for details.
 
 **Built with security in mind by developers, for developers**
 
-[Get Started](#quick-start) • [Documentation](docs/) • [Report Issue](https://github.com/hlsitechio/cve-2025-55182-tools/issues)
+[Get Started](#quick-start) • [Documentation](docs/) • [Report Issue](https://github.com/hlsitechio/shellockolm/issues)
 
 </div>

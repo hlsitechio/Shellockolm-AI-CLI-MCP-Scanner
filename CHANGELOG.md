@@ -10,14 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### 🔍 Major Rebranding: Welcome to Shelllockolm!
 
 **BREAKING CHANGES:**
-- Package renamed: `cve-2025-55182-tools` → `shelllockolm`
+- Package renamed: `cve-2025-55182-tools` → `shellockolm`
 - CLI commands renamed:
-  - `cve-2025-55182-scan` → `shelllockolm` / `shelllockolm-scan`
-  - `cve-2025-55182-fix` → `shelllockolm-fix`
-  - `cve-2025-55182-patch` → `shelllockolm-patch`
-  - `cve-2025-55182-malware` → `shelllockolm-malware`
-- New command: `shelllockolm-github` for GitHub repository scanning
-- Repository URL updated to `https://github.com/hlsitechio/shelllockolm`
+  - `cve-2025-55182-scan` → `shellockolm` / `shellockolm-scan`
+  - `cve-2025-55182-fix` → `shellockolm-fix`
+  - `cve-2025-55182-patch` → `shellockolm-patch`
+  - `cve-2025-55182-malware` → `shellockolm-malware`
+- New command: `shellockolm-github` for GitHub repository scanning
+- Repository URL updated to `https://github.com/hlsitechio/shellockolm`
 
 ### Added
 - **CVE-2025-66478 Detection** - Comprehensive Next.js vulnerability scanning
@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Enhanced Privacy Protection** - Comprehensive .gitignore for scan results
 - **Privacy & Security Guide** (`PRIVACY_AND_SECURITY.md`) - Complete data protection guide
 - **Detective Theme Branding** - "Elementary security for complex codebases"
-- New keywords: shelllockolm, sherlock-holmes, detective, threat-detection
+- New keywords: shellockolm, sherlock-holmes, detective, threat-detection
 
 ### Changed
 - **Project Description**: "Your Security Detective for React, Next.js & npm"
@@ -137,9 +137,9 @@ This major release represents a complete rebranding and significant expansion:
 A play on "Sherlock Holmes" - your detective for finding security threats. Elementary!
 
 **Migration Guide:**
-- Update package references from `cve-2025-55182-tools` to `shelllockolm`
+- Update package references from `cve-2025-55182-tools` to `shellockolm`
 - Update CLI commands (see BREAKING CHANGES above)
-- Repository URL: https://github.com/hlsitechio/shelllockolm
+- Repository URL: https://github.com/hlsitechio/shellockolm
 
 ### v1.1.0 Highlights
 
@@ -165,7 +165,7 @@ This is the initial production-ready release of the CVE-2025-55182 security tool
 ## Future Roadmap
 
 ### Planned for v2.1.0
-- [ ] PyPI package publishing (as shelllockolm)
+- [ ] PyPI package publishing (as shellockolm)
 - [ ] npm package for direct installation
 - [ ] Enhanced GitHub Scanner features
 - [ ] Real-time vulnerability notifications
@@ -184,6 +184,6 @@ This is the initial production-ready release of the CVE-2025-55182 security tool
 
 ---
 
-[2.0.0]: https://github.com/hlsitechio/shelllockolm/releases/tag/v2.0.0
-[1.1.0]: https://github.com/hlsitechio/shelllockolm/releases/tag/v1.1.0
-[1.0.0]: https://github.com/hlsitechio/shelllockolm/releases/tag/v1.0.0
+[2.0.0]: https://github.com/hlsitechio/shellockolm/releases/tag/v2.0.0
+[1.1.0]: https://github.com/hlsitechio/shellockolm/releases/tag/v1.1.0
+[1.0.0]: https://github.com/hlsitechio/shellockolm/releases/tag/v1.0.0

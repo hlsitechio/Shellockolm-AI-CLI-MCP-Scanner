@@ -360,8 +360,8 @@ A: Absolutely! See CI/CD Integration section above.
 ## Support
 
 - 📧 Email: hlarosesurprenant@gmail.com
-- 🐛 Issues: https://github.com/hlsitechio/shelllockolm/issues
-- 💬 Discussions: https://github.com/hlsitechio/shelllockolm/discussions
+- 🐛 Issues: https://github.com/hlsitechio/shellockolm/issues
+- 💬 Discussions: https://github.com/hlsitechio/shellockolm/discussions
 
 ## License
 
