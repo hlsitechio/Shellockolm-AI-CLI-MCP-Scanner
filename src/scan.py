@@ -2,6 +2,8 @@
 """
 Quick CLI tool to scan for CVE-2025-55182 vulnerabilities
 Usage: python scan.py [path]
+
+🔍 Shellockolm - Dark Theme Edition
 """
 
 import sys
@@ -12,20 +14,36 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich import box
+from rich.theme import Theme
 
-console = Console()
+# 🎨 DARK THEME CONFIGURATION
+dark_theme = Theme({
+    "info": "bright_cyan",
+    "warning": "bright_yellow",
+    "danger": "bright_red bold",
+    "success": "bright_green",
+    "highlight": "bright_magenta",
+    "path": "bright_blue",
+    "command": "bright_green italic",
+    "title": "bold bright_white",
+    "subtitle": "bright_cyan italic",
+    "detective": "bright_yellow bold"  # Sherlock theme!
+})
+
+console = Console(theme=dark_theme)
 
 
 def print_banner():
-    """Print banner"""
+    """Print Shellockolm banner with dark theme"""
     banner = """
 ╔═══════════════════════════════════════════════════════════╗
-║           CVE-2025-55182 VULNERABILITY SCANNER            ║
-║        React Server Components RCE Detection Tool         ║
+║          🔍 SHELLOCKOLM - SECURITY DETECTIVE              ║
+║        CVE-2025-55182 & CVE-2025-66478 Scanner           ║
 ║                    CVSS 10.0 CRITICAL                     ║
 ╚═══════════════════════════════════════════════════════════╝
 """
-    console.print(banner, style="bold red")
+    console.print(banner, style="detective")
+    console.print("[subtitle]Elementary security for complex codebases[/subtitle]\n")
 
 
 def main():
@@ -37,70 +55,88 @@ def main():
     else:
         scan_path = "."
 
-    console.print(f"\n[bold cyan]Scanning:[/bold cyan] {Path(scan_path).resolve()}")
-    console.print("[yellow]This may take a few minutes for large directories...[/yellow]\n")
+    console.print(f"[title]Scanning:[/title] [path]{Path(scan_path).resolve()}[/path]")
+    console.print("[warning]This may take a few minutes for large directories...[/warning]\n")
 
     # Initialize scanner
     scanner = CVEScanner()
 
-    # Perform scan
-    with console.status("[bold green]Scanning projects..."):
+    # Perform scan with detective theme
+    with console.status("[success]🔍 Investigating projects for vulnerabilities..."):
         results = scanner.scan_directory(scan_path, recursive=True)
 
     # Print summary
     summary = results['summary']
-    console.print("\n[bold]SCAN SUMMARY[/bold]")
-    console.print(f"  Total projects scanned: [cyan]{summary['total_projects']}[/cyan]")
-    console.print(f"  Vulnerable projects:    [red]{summary['vulnerable_projects']}[/red]")
-    console.print(f"  Safe projects:          [green]{summary['safe_projects']}[/green]\n")
+    console.print("\n[title]═══ INVESTIGATION SUMMARY ═══[/title]")
+    console.print(f"  📂 Total projects scanned: [info]{summary['total_projects']}[/info]")
+    console.print(f"  ⚠️  Vulnerable projects:    [danger]{summary['vulnerable_projects']}[/danger]")
+    console.print(f"  ✅ Safe projects:          [success]{summary['safe_projects']}[/success]\n")
 
     # Print vulnerable projects in a table
     if results['vulnerable_projects']:
-        console.print("[bold red]⚠️  CRITICAL VULNERABILITIES DETECTED![/bold red]\n")
+        console.print("[danger]🚨 CRITICAL VULNERABILITIES DETECTED![/danger]\n")
 
-        table = Table(title="Vulnerable Projects", box=box.ROUNDED)
-        table.add_column("Path", style="cyan", no_wrap=False)
-        table.add_column("React Version", style="red")
-        table.add_column("Fix Version", style="green")
-        table.add_column("Next.js", style="yellow")
-        table.add_column("Server Components", style="magenta")
+        table = Table(
+            title="🔍 Vulnerable Projects Detected",
+            box=box.DOUBLE_EDGE,
+            border_style="bright_red"
+        )
+        table.add_column("📁 Path", style="path", no_wrap=False)
+        table.add_column("⚠️ React Version", style="danger")
+        table.add_column("✅ Fix Version", style="success")
+        table.add_column("🌐 Next.js", style="warning")
+        table.add_column("🔧 Server Components", style="highlight")
 
         for vp in results['vulnerable_projects']:
+            next_js_status = vp['next_js_version'] or "N/A"
+            if vp['next_js_vulnerable']:
+                next_js_status += " ⚠️"
+
             table.add_row(
                 vp['path'],
                 vp['react_version'],
                 vp['recommended_version'],
-                vp['next_js_version'] or "N/A",
-                "✓" if vp['uses_server_components'] else "✗"
+                next_js_status,
+                "✅ Yes" if vp['uses_server_components'] else "❌ No"
             )
 
         console.print(table)
         console.print()
 
         # Print remediation steps
-        console.print("[bold]REMEDIATION STEPS:[/bold]")
+        console.print("[title]🔧 REMEDIATION STEPS:[/title]")
+        console.print("[subtitle]Elementary fixes for detected vulnerabilities[/subtitle]\n")
+
         for i, vp in enumerate(results['vulnerable_projects'], 1):
-            console.print(f"\n[bold cyan]{i}. {vp['path']}[/bold cyan]")
-            console.print(f"   [yellow]cd {vp['path']}[/yellow]")
-            console.print(f"   [green]npm install react@{vp['recommended_version']} react-dom@{vp['recommended_version']}[/green]")
-            console.print(f"   [green]npm run build[/green]")
+            console.print(f"[info]┌─ Case #{i}: {vp['path']}[/info]")
+            console.print(f"[path]│  cd {vp['path']}[/path]")
+            console.print(f"[command]│  npm install react@{vp['recommended_version']} react-dom@{vp['recommended_version']}[/command]")
+
+            # Show Next.js fix if needed
+            if vp['next_js_vulnerable'] and vp['next_js_recommended']:
+                console.print(f"[command]│  npm install next@{vp['next_js_recommended']}[/command]")
+
+            console.print(f"[command]│  npm run build[/command]")
+            console.print(f"[info]└─ ✓ Case resolved[/info]\n")
 
         console.print()
-        console.print("[bold red]⚠️  IMMEDIATE ACTION REQUIRED - CVSS 10.0 RCE VULNERABILITY[/bold red]")
+        console.print("[danger]⚠️  IMMEDIATE ACTION REQUIRED - CVSS 10.0 RCE VULNERABILITY[/danger]")
 
         # Save detailed report
         report_path = Path("cve_2025_55182_scan_report.json")
         with open(report_path, 'w') as f:
             json.dump(results, f, indent=2)
-        console.print(f"\n[bold]Detailed report saved to:[/bold] {report_path.resolve()}")
+        console.print(f"\n[title]📋 Detailed report saved to:[/title] [path]{report_path.resolve()}[/path]")
 
     else:
         console.print(Panel(
-            "[bold green]✓ All projects are safe![/bold green]\n\n"
-            "No vulnerable React versions detected.\n"
-            "Your projects are not affected by CVE-2025-55182.",
-            title="Security Status",
-            border_style="green"
+            "[success]✅ All projects are secure![/success]\n\n"
+            "🔍 Investigation complete: No vulnerable React versions detected.\n"
+            "🛡️  Your projects are protected from CVE-2025-55182 & CVE-2025-66478.\n\n"
+            "[subtitle]Elementary, my dear developer![/subtitle]",
+            title="🎉 Security Status: SAFE",
+            border_style="bright_green",
+            box=box.DOUBLE
         ))
 
     console.print()
@@ -110,8 +146,8 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        console.print("\n[yellow]Scan interrupted by user[/yellow]")
+        console.print("\n[warning]⚠️  Investigation interrupted by user[/warning]")
         sys.exit(1)
     except Exception as e:
-        console.print(f"\n[bold red]Error:[/bold red] {e}")
+        console.print(f"\n[danger]❌ Error:[/danger] {e}")
         sys.exit(1)
