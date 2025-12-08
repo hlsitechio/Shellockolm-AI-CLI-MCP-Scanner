@@ -197,3 +197,157 @@ projects_to_scan.txt
 mcp_server.log
 server_*.log
 *.log.json
+
+# ============================================================================
+# ADDITIONAL PRIVACY PROTECTION - ENHANCED
+# ============================================================================
+
+# All JSON output files (scan results, vulnerability data, etc.)
+*.scan.json
+*.result.json
+*.findings.json
+*.vulnerabilities.json
+*-scan-*.json
+*-report-*.json
+audit*.json
+security*.json
+
+# CSV/Excel exports (may contain project paths)
+*_scan*.csv
+*_report*.csv
+*_results*.csv
+*.xlsx
+*.xls
+vulnerability*.csv
+security*.csv
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+scan_cache.db
+vulnerability.db
+
+# Cache directories
+.cache/
+__cache__/
+.scan_cache/
+.vulnerability_cache/
+node_modules_cache/
+
+# User-specific configuration
+config.local.json
+config.user.json
+.user_config.json
+settings.local.json
+.settings/
+
+# API keys and tokens (CRITICAL - never commit these!)
+*.key
+*.token
+api_keys.txt
+tokens.txt
+.secrets
+.env.local
+.env.production
+.env.*.local
+
+# Debug outputs
+debug*.log
+debug*.txt
+*.debug
+trace*.log
+error*.log
+
+# Project-specific paths files
+scanned_projects.txt
+project_paths.txt
+repo_list.txt
+github_repos.txt
+
+# Screenshots (might show project paths)
+screenshot*.png
+screen*.jpg
+capture*.png
+
+# Compressed archives (might contain scan results)
+*_scan*.zip
+*_report*.tar.gz
+*_results*.7z
+backup_*.zip
+
+# Generated documentation
+docs/generated/
+docs/api/
+site/
+
+# Python notebooks with outputs
+*.ipynb_checkpoints/
+*-checkpoint.ipynb
+
+# OS-specific
+Thumbs.db
+desktop.ini
+.Spotlight-V100
+.Trashes
+
+# Editor backups
+*~
+*.bak
+*.orig
+*.rej
+
+# Local test data
+test_data/
+fixtures/
+sample_projects/
+
+# Build artifacts
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Runtime data
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage reports
+.coverage.*
+coverage/
+.nyc_output/
+
+# Profiling data
+*.prof
+*.lprof
+
+# Package manager locks (contains dependency tree info)
+package-lock.json.backup
+yarn.lock.backup
+pnpm-lock.yaml.backup
+
+# Local development
+.local/
+local/
+my_*/
+
+# CI/CD artifacts
+.github/workflows/local_*
+.gitlab-ci.local.yml
+
+# Docker artifacts (might contain paths)
+docker-compose.override.yml
+.dockerignore.local
+
+# Generated files
+generated/
+auto_generated/
+.generated/
+
+# User notes and TODOs
+NOTES.md
+TODO.md
+TASKS.md
+.notes/
+

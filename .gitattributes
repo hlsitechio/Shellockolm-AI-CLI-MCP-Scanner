@@ -1,0 +1,38 @@
+# Git Attributes for Shellockolm
+# Ensures certain file types are never tracked or compared
+
+# Never track these files (security-sensitive)
+*_report*.json filter=lfs diff=lfs merge=lfs -text
+*_scan*.json filter=lfs diff=lfs merge=lfs -text
+*.key binary
+*.token binary
+.secrets binary
+.env.* binary
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+
+# Archives
+*.zip binary
+*.tar.gz binary
+*.7z binary
+
+# Database files
+*.db binary
+*.sqlite binary
+*.sqlite3 binary
+
+# Mark certain files as generated (not for review)
+*_report*.* linguist-generated=true
+*_scan*.* linguist-generated=true
+*.backup linguist-generated=true
+
+# Export files as binary
+*.csv binary
+*.xlsx binary
+*.xls binary
