@@ -7,9 +7,15 @@ Scans for vulnerable React and Next.js versions
 """
 
 import sys
+import io
 import json
 from pathlib import Path
 from scanner import CVEScanner
+
+# Fix UTF-8 encoding for Windows console
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 
 # 🎨 DARK THEME ANSI COLORS (Windows Compatible)
