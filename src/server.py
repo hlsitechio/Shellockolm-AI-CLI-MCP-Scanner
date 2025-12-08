@@ -1,6 +1,7 @@
 """
-CVE-2025-55182 MCP Server
-Model Context Protocol server for detecting and patching CVE-2025-55182
+CVE-2025-55182 & CVE-2025-66478 MCP Server
+Model Context Protocol server for detecting and patching CVE-2025-55182 & CVE-2025-66478
+These are duplicate CVEs for the same React Server Components vulnerability
 """
 
 import asyncio
@@ -30,7 +31,13 @@ async def handle_list_resources() -> list[types.Resource]:
         types.Resource(
             uri="cve://2025-55182",
             name="CVE-2025-55182 Details",
-            description="Information about the React Server Components RCE vulnerability",
+            description="Information about the React Server Components RCE vulnerability (Primary CVE)",
+            mimeType="text/plain"
+        ),
+        types.Resource(
+            uri="cve://2025-66478",
+            name="CVE-2025-66478 Details",
+            description="Information about the React Server Components RCE vulnerability (Duplicate CVE from Vercel/Next.js advisory)",
             mimeType="text/plain"
         )
     ]
@@ -39,36 +46,51 @@ async def handle_list_resources() -> list[types.Resource]:
 @server.read_resource()
 async def handle_read_resource(uri: str) -> str:
     """Read a resource"""
-    if uri == "cve://2025-55182":
-        return """CVE-2025-55182: React Server Components Remote Code Execution
+    if uri == "cve://2025-55182" or uri == "cve://2025-66478":
+        cve_title = "CVE-2025-55182 & CVE-2025-66478" if uri == "cve://2025-55182" else "CVE-2025-66478 (Same as CVE-2025-55182)"
+        return f"""{cve_title}: React Server Components Remote Code Execution
 
 **CVSS Score**: 10.0 (CRITICAL)
 **Type**: Unauthenticated Remote Code Execution (RCE)
+**CVE IDs**: CVE-2025-55182, CVE-2025-66478 (duplicate identifiers for the same vulnerability)
 
 **Description**:
 An unauthenticated attacker can craft malicious HTTP requests to Server Function
 endpoints that, when deserialized by React, achieve remote code execution on the server.
+This is a deserialization of untrusted data vulnerability without sufficient verification.
 
 **Affected Packages**:
 - react-server-dom-webpack: 19.0.0, 19.1.0, 19.1.1, 19.2.0
 - react-server-dom-parcel: 19.0.0, 19.1.0, 19.1.1, 19.2.0
 - react-server-dom-turbopack: 19.0.0, 19.1.0, 19.1.1, 19.2.0
 
-**Patched Versions**:
+**Patched React Versions**:
 - 19.0.1 (for 19.0.x series)
 - 19.1.2 (for 19.1.x series)
 - 19.2.1 (for 19.2.x series)
 
+**Patched Next.js Versions**:
+- 15.0.5+ (for 15.0.x series)
+- 15.1.9+ (for 15.1.x series)
+- 15.2.6+ (for 15.2.x series)
+- 15.3.6+ (for 15.3.x series)
+- 15.4.8+ (for 15.4.x series)
+- 15.5.7+ (for 15.5.x series)
+- 16.0.7+ (for 16.0.x series)
+- Canary: 15.6.0-canary.58, 16.1.0-canary.12+
+
 **Root Cause**:
 The vulnerable code unsafely deserializes payloads from HTTP requests to
-Server Function endpoints.
+Server Function endpoints without sufficient validation.
 
 **Affected Frameworks**:
-Next.js, React Router, Waku, Parcel, Vite RSC plugin, Redwood SDK
+Next.js (15.x, 16.x with App Router), React Router, Waku, Parcel, Vite RSC plugin, Redwood SDK
 
 **References**:
 - https://react.dev/blog/2025/12/03/critical-security-vulnerability-in-react-server-components
 - https://www.cve.org/CVERecord?id=CVE-2025-55182
+- https://www.cve.org/CVERecord?id=CVE-2025-66478
+- https://github.com/vercel/next.js/security/advisories/GHSA-9qr9-h5gf-34mp
 - https://github.com/facebook/react/pull/35277
 
 **Discovered By**: Lachlan Davidson (November 29, 2025)
@@ -83,7 +105,7 @@ async def handle_list_tools() -> list[types.Tool]:
     return [
         types.Tool(
             name="scan_directory",
-            description="Scan a directory for vulnerable React projects affected by CVE-2025-55182",
+            description="Scan a directory for vulnerable React projects affected by CVE-2025-55182 & CVE-2025-66478",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -102,7 +124,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="analyze_project",
-            description="Analyze a specific project for CVE-2025-55182 vulnerability details",
+            description="Analyze a specific project for CVE-2025-55182 & CVE-2025-66478 vulnerability details",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -190,7 +212,10 @@ async def handle_call_tool(
         results = scanner.scan_directory(path, recursive)
 
         # Format results as readable text
+        cve_list = ', '.join(results['summary']['cve_ids'])
         output = f"""# Scan Results for {path}
+
+## CVEs Scanned: {cve_list}
 
 ## Summary
 - Total projects scanned: {results['summary']['total_projects']}
@@ -202,14 +227,22 @@ async def handle_call_tool(
             output += "## Vulnerable Projects (CRITICAL - Immediate Action Required)\n\n"
             for vp in results['vulnerable_projects']:
                 output += f"### {vp['path']}\n"
+                output += f"- **CVEs**: {', '.join(vp['cve_ids'])}\n"
                 output += f"- **Current React Version**: {vp['react_version']}\n"
-                output += f"- **Recommended Version**: {vp['recommended_version']}\n"
+                output += f"- **Recommended React Version**: {vp['recommended_version']}\n"
                 output += f"- **Risk Level**: {vp['risk_level']}\n"
                 if vp['next_js_version']:
-                    output += f"- **Next.js Version**: {vp['next_js_version']}\n"
+                    output += f"- **Next.js Version**: {vp['next_js_version']}"
+                    if vp['next_js_vulnerable']:
+                        output += f" ⚠️ VULNERABLE → Upgrade to {vp['next_js_recommended']}\n"
+                    else:
+                        output += " ✅ Patched\n"
                 if vp['vulnerable_packages']:
                     output += f"- **Vulnerable Packages**: {', '.join(vp['vulnerable_packages'])}\n"
-                output += f"\n**Fix Command**: `npm install react@{vp['recommended_version']} react-dom@{vp['recommended_version']}`\n\n"
+                output += f"\n**Fix Command**:\n```bash\ncd {vp['path']}\nnpm install react@{vp['recommended_version']} react-dom@{vp['recommended_version']}"
+                if vp['next_js_vulnerable'] and vp['next_js_recommended']:
+                    output += f" next@{vp['next_js_recommended']}"
+                output += "\n```\n\n"
 
         return [types.TextContent(type="text", text=output)]
 
@@ -221,15 +254,19 @@ async def handle_call_tool(
         result = scanner.analyze_project(path)
 
         if not result:
-            output = f"✅ Project at {path.parent} is NOT vulnerable to CVE-2025-55182"
+            output = f"✅ Project at {path.parent} is NOT vulnerable to CVE-2025-55182 / CVE-2025-66478"
         else:
             output = f"""🚨 CRITICAL VULNERABILITY DETECTED
 
+**CVEs**: {', '.join(result.cve_ids)}
 **Project**: {result.path}
 **React Version**: {result.react_version}
-**Recommended Version**: {result.recommended_version}
+**Recommended React Version**: {result.recommended_version}
 **Risk Level**: {result.risk_level}
-**Next.js Version**: {result.next_js_version or 'N/A'}
+**Next.js Version**: {result.next_js_version or 'N/A'}"""
+            if result.next_js_vulnerable:
+                output += f" ⚠️ VULNERABLE\n**Recommended Next.js Version**: {result.next_js_recommended}"
+            output += f"""
 **Uses Server Components**: {result.uses_server_components}
 
 **Vulnerable Packages**:
@@ -238,7 +275,10 @@ async def handle_call_tool(
 **Remediation**:
 ```bash
 cd {result.path}
-npm install react@{result.recommended_version} react-dom@{result.recommended_version}
+npm install react@{result.recommended_version} react-dom@{result.recommended_version}"""
+            if result.next_js_vulnerable and result.next_js_recommended:
+                output += f" next@{result.next_js_recommended}"
+            output += """
 npm run build
 # Test thoroughly before deploying
 ```
@@ -255,7 +295,7 @@ npm run build
         if not project:
             return [types.TextContent(
                 type="text",
-                text=f"Project at {path.parent} is not vulnerable to CVE-2025-55182. No patching needed."
+                text=f"Project at {path.parent} is not vulnerable to CVE-2025-55182 / CVE-2025-66478. No patching needed."
             )]
 
         target_version = arguments.get("target_version", project.recommended_version)
@@ -275,6 +315,8 @@ npm run build
             output += "\n"
             if result["backup_location"]:
                 output += f"**Backup created**: {result['backup_location']}\n\n"
+            if project.next_js_vulnerable:
+                output += f"\n⚠️ **Note**: Next.js {project.next_js_version} is also vulnerable. Consider upgrading to {project.next_js_recommended}\n\n"
             output += "## Next Steps:\n"
             for step in result["next_steps"]:
                 output += f"- {step}\n"
@@ -317,9 +359,11 @@ npm run build
         output_path = arguments.get("output_path")
 
         results = scanner.scan_directory(scan_path, recursive=True)
+        cve_list = ', '.join(results['summary']['cve_ids'])
 
-        report = f"""# CVE-2025-55182 Vulnerability Report
+        report = f"""# CVE-2025-55182 & CVE-2025-66478 Vulnerability Report
 
+**CVEs**: {cve_list}
 **Scan Date**: {asyncio.get_event_loop().time()}
 **Scanned Path**: {scan_path}
 
@@ -335,15 +379,22 @@ npm run build
         for vp in results['vulnerable_projects']:
             report += f"""### {vp['path']}
 
+- **CVEs**: {', '.join(vp['cve_ids'])}
 - **Current React**: {vp['react_version']}
-- **Required Update**: {vp['recommended_version']}
+- **Required React Update**: {vp['recommended_version']}
 - **Risk Level**: {vp['risk_level']}
-- **Next.js**: {vp['next_js_version'] or 'N/A'}
+- **Next.js**: {vp['next_js_version'] or 'N/A'}"""
+            if vp['next_js_vulnerable']:
+                report += f" ⚠️ VULNERABLE → {vp['next_js_recommended']}"
+            report += """
 
 **Fix**:
 ```bash
 cd {vp['path']}
-npm install react@{vp['recommended_version']} react-dom@{vp['recommended_version']}
+npm install react@{vp['recommended_version']} react-dom@{vp['recommended_version']}"""
+            if vp['next_js_vulnerable'] and vp['next_js_recommended']:
+                report += f" next@{vp['next_js_recommended']}"
+            report += """
 ```
 
 ---
@@ -369,7 +420,7 @@ async def main():
             write_stream,
             InitializationOptions(
                 server_name="react-cve-scanner",
-                server_version="1.0.0",
+                server_version="1.1.0",
                 capabilities=server.get_capabilities(
                     notification_options=NotificationOptions(),
                     experimental_capabilities={},

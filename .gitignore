@@ -159,3 +159,41 @@ test_results/
 temp/
 tmp/
 github_scan_report.json
+
+# ============================================================================
+# SECURITY SENSITIVE FILES - DO NOT COMMIT
+# These files may contain paths, project names, and vulnerability details
+# from YOUR projects. Keep them local only!
+# ============================================================================
+
+# ALL scan reports - NEVER commit these
+*_report*.json
+*_report*.txt
+*_report*.md
+*_scan*.json
+*_scan*.txt
+vulnerability_report*.json
+scan_report*.json
+malware_scan_report_*.json
+
+# Backup files with project data
+*_backup.*
+package.json.backup*
+
+# Output directories
+scan_output/
+reports/
+vulnerability_reports/
+scan_results/
+
+# Local configuration files
+.local_config.json
+local_settings.json
+my_projects.txt
+project_list.txt
+projects_to_scan.txt
+
+# MCP server logs
+mcp_server.log
+server_*.log
+*.log.json

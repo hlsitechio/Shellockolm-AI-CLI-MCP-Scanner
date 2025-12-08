@@ -1,34 +1,37 @@
 """
-CVE-2025-55182 Scanner Module
+CVE-2025-55182 & CVE-2025-66478 Scanner Module
 Scans directories for vulnerable React Server Components
+These are duplicate CVEs for the same vulnerability
 """
 
 import json
 import os
 from pathlib import Path
 from typing import List, Dict, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from packaging import version
 
 
 @dataclass
 class VulnerableProject:
-    """Represents a project with CVE-2025-55182 vulnerability"""
+    """Represents a project with CVE-2025-55182/CVE-2025-66478 vulnerability"""
     path: str
     react_version: str
     recommended_version: str
     risk_level: str
+    cve_ids: List[str] = field(default_factory=lambda: ["CVE-2025-55182", "CVE-2025-66478"])
     next_js_version: Optional[str] = None
+    next_js_vulnerable: bool = False
+    next_js_recommended: Optional[str] = None
     uses_server_components: bool = False
-    vulnerable_packages: List[str] = None
-
-    def __post_init__(self):
-        if self.vulnerable_packages is None:
-            self.vulnerable_packages = []
+    vulnerable_packages: List[str] = field(default_factory=list)
 
 
 class CVEScanner:
-    """Scanner for CVE-2025-55182 vulnerability"""
+    """Scanner for CVE-2025-55182 & CVE-2025-66478 vulnerability"""
+
+    # CVE Information
+    CVE_IDS = ["CVE-2025-55182", "CVE-2025-66478"]
 
     # Vulnerable React versions
     VULNERABLE_VERSIONS = ["19.0.0", "19.1.0", "19.1.1", "19.2.0"]
@@ -40,6 +43,20 @@ class CVEScanner:
         "19.1.1": "19.1.2",
         "19.2.0": "19.2.1",
     }
+
+    # Next.js vulnerable versions and patches (based on CVE-2025-66478 / GHSA-9qr9-h5gf-34mp)
+    NEXTJS_VULNERABLE_RANGES = {
+        "15.0": {"min": "15.0.0", "max": "15.0.4", "patch": "15.0.5"},
+        "15.1": {"min": "15.1.0", "max": "15.1.8", "patch": "15.1.9"},
+        "15.2": {"min": "15.2.0", "max": "15.2.5", "patch": "15.2.6"},
+        "15.3": {"min": "15.3.0", "max": "15.3.5", "patch": "15.3.6"},
+        "15.4": {"min": "15.4.0", "max": "15.4.7", "patch": "15.4.8"},
+        "15.5": {"min": "15.5.0", "max": "15.5.6", "patch": "15.5.7"},
+        "16.0": {"min": "16.0.0", "max": "16.0.6", "patch": "16.0.7"},
+    }
+
+    # Next.js canary versions are also affected
+    NEXTJS_CANARY_SAFE_MIN = "14.3.0-canary.77"
 
     # React Server Components packages
     SERVER_COMPONENT_PACKAGES = [
@@ -139,7 +156,7 @@ class CVEScanner:
 
     def is_vulnerable_version(self, react_version: str) -> bool:
         """
-        Check if a React version is vulnerable to CVE-2025-55182
+        Check if a React version is vulnerable to CVE-2025-55182/CVE-2025-66478
 
         Args:
             react_version: React version string
@@ -152,6 +169,50 @@ class CVEScanner:
             return clean_version in self.VULNERABLE_VERSIONS
         except Exception:
             return False
+
+    def is_nextjs_vulnerable(self, next_version: str) -> tuple[bool, Optional[str]]:
+        """
+        Check if a Next.js version is vulnerable to CVE-2025-66478
+
+        Args:
+            next_version: Next.js version string
+
+        Returns:
+            Tuple of (is_vulnerable, recommended_patch_version)
+        """
+        try:
+            clean_version = self.extract_version(next_version)
+
+            # Handle canary versions
+            if "canary" in clean_version:
+                # Versions before 14.3.0-canary.77 are vulnerable
+                # This is a simplified check
+                return (True, "15.6.0-canary.58 or 16.1.0-canary.12+")
+
+            # Parse major.minor version
+            parts = clean_version.split(".")
+            if len(parts) < 2:
+                return (False, None)
+
+            major_minor = f"{parts[0]}.{parts[1]}"
+
+            # Check if version falls in vulnerable range
+            if major_minor in self.NEXTJS_VULNERABLE_RANGES:
+                range_info = self.NEXTJS_VULNERABLE_RANGES[major_minor]
+                try:
+                    v = version.parse(clean_version)
+                    v_min = version.parse(range_info["min"])
+                    v_max = version.parse(range_info["max"])
+
+                    if v_min <= v <= v_max:
+                        return (True, range_info["patch"])
+                except Exception:
+                    # If version parsing fails, assume vulnerable for this range
+                    return (True, range_info["patch"])
+
+            return (False, None)
+        except Exception:
+            return (False, None)
 
     def get_recommended_version(self, current_version: str) -> str:
         """
@@ -217,8 +278,13 @@ class CVEScanner:
         if not self.is_vulnerable_version(react_version):
             return None
 
-        # Get Next.js version if present
+        # Get Next.js version if present and check if vulnerable
         next_version = all_deps.get("next")
+        next_js_vulnerable = False
+        next_js_recommended = None
+
+        if next_version:
+            next_js_vulnerable, next_js_recommended = self.is_nextjs_vulnerable(next_version)
 
         # Check for server components
         uses_sc, vulnerable_pkgs = self.check_server_components(package_data)
@@ -228,7 +294,10 @@ class CVEScanner:
             react_version=self.extract_version(react_version),
             recommended_version=self.get_recommended_version(react_version),
             risk_level="CRITICAL",
+            cve_ids=self.CVE_IDS,
             next_js_version=self.extract_version(next_version) if next_version else None,
+            next_js_vulnerable=next_js_vulnerable,
+            next_js_recommended=next_js_recommended,
             uses_server_components=uses_sc,
             vulnerable_packages=vulnerable_pkgs
         )
@@ -259,7 +328,8 @@ class CVEScanner:
             "summary": {
                 "total_projects": len(package_files),
                 "vulnerable_projects": len(vulnerable_projects),
-                "safe_projects": len(safe_projects)
+                "safe_projects": len(safe_projects),
+                "cve_ids": self.CVE_IDS
             },
             "vulnerable_projects": [
                 {
@@ -267,7 +337,10 @@ class CVEScanner:
                     "react_version": vp.react_version,
                     "recommended_version": vp.recommended_version,
                     "risk_level": vp.risk_level,
+                    "cve_ids": vp.cve_ids,
                     "next_js_version": vp.next_js_version,
+                    "next_js_vulnerable": vp.next_js_vulnerable,
+                    "next_js_recommended": vp.next_js_recommended,
                     "uses_server_components": vp.uses_server_components,
                     "vulnerable_packages": vp.vulnerable_packages
                 }
@@ -282,11 +355,17 @@ if __name__ == "__main__":
     scanner = CVEScanner()
     results = scanner.scan_directory(".", recursive=True)
 
+    print(f"Scanning for {', '.join(scanner.CVE_IDS)}")
     print(f"Scanned {results['summary']['total_projects']} projects")
     print(f"Found {results['summary']['vulnerable_projects']} vulnerable projects")
 
     for vp in results['vulnerable_projects']:
         print(f"\n[VULNERABLE] {vp['path']}")
+        print(f"  CVEs: {', '.join(vp['cve_ids'])}")
         print(f"  React {vp['react_version']} → {vp['recommended_version']}")
         if vp['next_js_version']:
-            print(f"  Next.js: {vp['next_js_version']}")
+            print(f"  Next.js: {vp['next_js_version']}", end="")
+            if vp['next_js_vulnerable']:
+                print(f" → {vp['next_js_recommended']} (VULNERABLE)")
+            else:
+                print(" (OK)")
