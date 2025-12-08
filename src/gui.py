@@ -11,6 +11,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, scrolledtext
 from pathlib import Path
 import json
+import time
 from threading import Thread
 from scanner import CVEScanner
 from malware_scanner import MalwareScanner
@@ -57,6 +58,12 @@ class ShellockolmGUI:
         self.scan_cve = tk.BooleanVar(value=True)
         self.scan_malware = tk.BooleanVar(value=True)
         self.scan_recursive = tk.BooleanVar(value=True)
+
+        # Progress tracking
+        self.start_time = None
+        self.timer_id = None
+        self.projects_scanned = 0
+        self.current_file = ""
 
         # Configure styles
         self.setup_styles()
@@ -282,6 +289,7 @@ class ShellockolmGUI:
         status_frame = tk.Frame(self.root, bg=Colors.BG_PANEL, pady=10, padx=20)
         status_frame.pack(fill=tk.X, side=tk.BOTTOM)
 
+        # Left side: Status text
         self.status_label = tk.Label(status_frame,
                                      text="Ready to investigate",
                                      bg=Colors.BG_PANEL,
@@ -290,10 +298,21 @@ class ShellockolmGUI:
                                      anchor=tk.W)
         self.status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
+        # Right side: Timer and progress
+        right_frame = tk.Frame(status_frame, bg=Colors.BG_PANEL)
+        right_frame.pack(side=tk.RIGHT)
+
+        self.timer_label = tk.Label(right_frame,
+                                    text="⏱️ 00:00",
+                                    bg=Colors.BG_PANEL,
+                                    fg=Colors.INFO,
+                                    font=('Segoe UI', 9, 'bold'))
+        self.timer_label.pack(side=tk.LEFT, padx=(0, 10))
+
         # Progress indicator
-        self.progress = ttk.Progressbar(status_frame,
+        self.progress = ttk.Progressbar(right_frame,
                                        mode='indeterminate',
-                                       length=200)
+                                       length=150)
         # Don't pack it yet - only show during scan
 
     def browse_directory(self):
@@ -311,22 +330,43 @@ class ShellockolmGUI:
 
         scan_path = self.dir_entry.get()
         if not Path(scan_path).exists():
-            self.append_text("❌ Error: Directory does not exist\n", "danger")
+            self.append_to_tab('summary', "❌ Error: Directory does not exist\n", "danger")
             return
 
         self.scanning = True
         self.scan_btn.configure(state='disabled')
         self.clear_results()
 
+        # Reset tracking
+        self.projects_scanned = 0
+        self.current_file = ""
+        self.start_time = time.time()
+
         # Show progress
-        self.progress.pack(side=tk.RIGHT, padx=(10, 0))
+        self.progress.pack(side=tk.LEFT)
         self.progress.start(10)
         self.status_label.configure(text=f"🔎 Investigating {scan_path}...")
+
+        # Start timer
+        self.update_timer()
 
         # Start scan in background thread
         scan_thread = Thread(target=self.run_scan, args=(scan_path,))
         scan_thread.daemon = True
         scan_thread.start()
+
+    def update_timer(self):
+        """Update the elapsed time display"""
+        if self.scanning and self.start_time:
+            elapsed = int(time.time() - self.start_time)
+            minutes = elapsed // 60
+            seconds = elapsed % 60
+            self.timer_label.configure(text=f"⏱️ {minutes:02d}:{seconds:02d}")
+            self.timer_id = self.root.after(1000, self.update_timer)
+
+    def update_progress(self, message):
+        """Update progress status"""
+        self.root.after(0, self.status_label.configure, {'text': message})
 
     def run_scan(self, scan_path):
         """Execute the scan (runs in background thread)"""
@@ -353,9 +393,19 @@ class ShellockolmGUI:
             # Run CVE scan if enabled
             if self.scan_cve.get():
                 try:
-                    self.root.after(0, self.status_label.configure, {'text': '🔍 Running CVE scanner...'})
+                    self.update_progress('🔍 Finding package.json files...')
                     self.root.after(0, self.append_to_tab, 'cve_scanner', "🔍 Initializing CVE scanner...\n", "info")
+
+                    # Find package.json files first to show count
+                    package_files = list(Path(scan_path).rglob('package.json') if recursive else Path(scan_path).glob('package.json'))
+                    package_files = [f for f in package_files if 'node_modules' not in str(f)]
+
+                    self.update_progress(f'🔍 Found {len(package_files)} projects to scan...')
+                    self.root.after(0, self.append_to_tab, 'cve_scanner', f"📂 Found {len(package_files)} projects\n", "info")
+
                     results['cve'] = self.cve_scanner.scan_directory(scan_path, recursive=recursive)
+
+                    self.update_progress('✅ CVE scan completed')
                     self.root.after(0, self.append_to_tab, 'cve_scanner', "✅ CVE scan completed!\n\n", "success")
                 except Exception as e:
                     error_msg = f"❌ CVE Scanner Error: {str(e)}\n\n"
@@ -365,9 +415,12 @@ class ShellockolmGUI:
             # Run Malware scan if enabled
             if self.scan_malware.get():
                 try:
-                    self.root.after(0, self.status_label.configure, {'text': '☠️ Running malware scanner...'})
+                    self.update_progress('☠️ Scanning for malware indicators...')
                     self.root.after(0, self.append_to_tab, 'malware_scanner', "☠️ Initializing malware scanner...\n", "info")
+
                     results['malware'] = self.malware_scanner.scan_directory(scan_path)
+
+                    self.update_progress('✅ Malware scan completed')
                     self.root.after(0, self.append_to_tab, 'malware_scanner', "✅ Malware scan completed!\n\n", "success")
                 except Exception as e:
                     error_msg = f"❌ Malware Scanner Error: {str(e)}\n\n"
@@ -396,7 +449,20 @@ class ShellockolmGUI:
         self.scan_btn.configure(state='normal')
         self.progress.stop()
         self.progress.pack_forget()
-        self.status_label.configure(text="Investigation complete")
+
+        # Stop timer and show final time
+        if self.timer_id:
+            self.root.after_cancel(self.timer_id)
+            self.timer_id = None
+
+        if self.start_time:
+            elapsed = int(time.time() - self.start_time)
+            minutes = elapsed // 60
+            seconds = elapsed % 60
+            self.timer_label.configure(text=f"⏱️ {minutes:02d}:{seconds:02d} (completed)")
+            self.status_label.configure(text=f"✅ Investigation complete in {minutes}m {seconds}s")
+        else:
+            self.status_label.configure(text="Investigation complete")
 
     def display_all_results(self, results):
         """Display all scan results in appropriate tabs"""
