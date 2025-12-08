@@ -73,6 +73,7 @@ class CVEScanner:
             exclude_patterns: List of directory patterns to exclude
         """
         self.exclude_patterns = exclude_patterns or [
+            # Development folders
             "node_modules",
             ".git",
             "dist",
@@ -83,8 +84,34 @@ class CVEScanner:
             "coverage",
             ".npm",
             ".bun",
+            # Windows system folders (MASSIVE speed boost)
+            "Windows",
+            "Program Files",
+            "Program Files (x86)",
+            "ProgramData",
+            "$Recycle.Bin",
+            "System Volume Information",
+            "$WINDOWS.~BT",
+            "Recovery",
+            "PerfLogs",
             "AppData",
-            "Backups"
+            "Backups",
+            # Common large folders
+            "Downloads",
+            "Videos",
+            "Music",
+            "Pictures",
+            "Documents",
+            # Python/Node package caches
+            ".venv",
+            "venv",
+            "env",
+            "__pycache__",
+            ".pytest_cache",
+            # IDE folders
+            ".vscode",
+            ".idea",
+            ".vs"
         ]
 
     def should_exclude(self, path: Path) -> bool:
@@ -92,13 +119,14 @@ class CVEScanner:
         path_str = str(path).lower()
         return any(pattern.lower() in path_str for pattern in self.exclude_patterns)
 
-    def find_package_json_files(self, root_path: str, recursive: bool = True) -> List[Path]:
+    def find_package_json_files(self, root_path: str, recursive: bool = True, max_depth: int = 5) -> List[Path]:
         """
-        Find all package.json files in a directory
+        Find all package.json files in a directory (OPTIMIZED FOR SPEED)
 
         Args:
             root_path: Root directory to scan
             recursive: Whether to scan subdirectories
+            max_depth: Maximum directory depth to scan (default 5 for speed)
 
         Returns:
             List of Path objects pointing to package.json files
@@ -110,9 +138,30 @@ class CVEScanner:
             return package_files
 
         if recursive:
-            for path in root.rglob("package.json"):
-                if not self.should_exclude(path.parent):
-                    package_files.append(path)
+            # Use os.walk for speed - it allows early exclusion
+            import os
+            for dirpath, dirnames, filenames in os.walk(root):
+                current_path = Path(dirpath)
+
+                # Calculate depth
+                try:
+                    depth = len(current_path.relative_to(root).parts)
+                except ValueError:
+                    depth = 0
+
+                # Stop if too deep
+                if depth > max_depth:
+                    dirnames.clear()  # Don't recurse further
+                    continue
+
+                # Remove excluded directories IN-PLACE (prevents walking into them)
+                dirnames[:] = [d for d in dirnames if not self.should_exclude(current_path / d)]
+
+                # Check for package.json in current directory
+                if "package.json" in filenames:
+                    pkg_path = current_path / "package.json"
+                    if not self.should_exclude(current_path):
+                        package_files.append(pkg_path)
         else:
             package_json = root / "package.json"
             if package_json.exists():

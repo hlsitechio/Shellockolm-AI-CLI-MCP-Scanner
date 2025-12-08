@@ -74,6 +74,7 @@ class ShellockolmGUI:
         self.scan_cve = tk.BooleanVar(value=True)
         self.scan_malware = tk.BooleanVar(value=True)
         self.scan_recursive = tk.BooleanVar(value=True)
+        self.max_depth = tk.IntVar(value=5)  # Default depth limit for speed
 
         # Progress tracking
         self.start_time = None
@@ -217,7 +218,27 @@ class ShellockolmGUI:
                                         activebackground=Colors.BG_PANEL,
                                         activeforeground=Colors.FG_PRIMARY,
                                         font=('Segoe UI', 9))
-        recursive_check.pack(side=tk.LEFT)
+        recursive_check.pack(side=tk.LEFT, padx=(0, 15))
+
+        # Depth limit
+        depth_label = tk.Label(options_frame,
+                              text="⚡ Max Depth:",
+                              bg=Colors.BG_PANEL,
+                              fg=Colors.FG_PRIMARY,
+                              font=('Segoe UI', 9))
+        depth_label.pack(side=tk.LEFT, padx=(0, 5))
+
+        depth_spinbox = tk.Spinbox(options_frame,
+                                   from_=1,
+                                   to=20,
+                                   textvariable=self.max_depth,
+                                   width=5,
+                                   bg=Colors.BG_INPUT,
+                                   fg=Colors.FG_PRIMARY,
+                                   font=('Segoe UI', 9),
+                                   relief=tk.FLAT,
+                                   buttonbackground=Colors.BG_BUTTON)
+        depth_spinbox.pack(side=tk.LEFT)
 
         # Action buttons
         btn_frame = tk.Frame(main_frame, bg=Colors.BG_PANEL)
@@ -414,11 +435,13 @@ class ShellockolmGUI:
                     self.root.after(0, self.append_to_tab, 'cve_scanner', "=" * 70 + "\n", "detective")
 
                     # Find package.json files first to show count
-                    package_files = list(Path(scan_path).rglob('package.json') if recursive else Path(scan_path).glob('package.json'))
-                    package_files = [f for f in package_files if 'node_modules' not in str(f)]
+                    max_depth_val = self.max_depth.get()
+                    self.root.after(0, self.append_to_tab, 'cve_scanner', f"⚡ Search depth limit: {max_depth_val} levels\n", "warning")
+
+                    package_files = self.cve_scanner.find_package_json_files(scan_path, recursive=recursive, max_depth=max_depth_val)
 
                     self.update_progress(f'🔍 Found {len(package_files)} projects to scan...')
-                    self.root.after(0, self.append_to_tab, 'cve_scanner', f"📂 Found {len(package_files)} projects to scan\n\n", "info")
+                    self.root.after(0, self.append_to_tab, 'cve_scanner', f"📂 Found {len(package_files)} projects in {len(package_files)} locations\n\n", "info")
 
                     # Redirect stdout to capture scanner output
                     old_stdout = sys.stdout
