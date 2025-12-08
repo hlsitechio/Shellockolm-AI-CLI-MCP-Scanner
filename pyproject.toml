@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cve-2025-55182-tools"
-version = "1.1.0"
-description = "Complete security toolkit for CVE-2025-55182 (React Server Components RCE vulnerability)"
+name = "shelllockolm"
+version = "2.0.0"
+description = "Your Security Detective for React, Next.js & npm - Detect CVEs, malware, and supply chain attacks"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
@@ -13,7 +13,8 @@ keywords = [
     "security", "vulnerability", "cve", "react", "nextjs", "rce",
     "vulnerability-scanner", "security-tools", "patch-management",
     "react-server-components", "cybersecurity", "devsecops",
-    "npm", "malware-scanner", "supply-chain-security"
+    "npm", "malware-scanner", "supply-chain-security", "shelllockolm",
+    "sherlock-holmes", "detective", "threat-detection"
 ]
 authors = [
     {name = "HLS iTech", email = "hlarosesurprenant@gmail.com"}
@@ -58,20 +59,23 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/hlsitechio/cve-2025-55182-tools"
-Documentation = "https://github.com/hlsitechio/cve-2025-55182-tools/blob/main/README.md"
-Repository = "https://github.com/hlsitechio/cve-2025-55182-tools"
-"Bug Tracker" = "https://github.com/hlsitechio/cve-2025-55182-tools/issues"
-Changelog = "https://github.com/hlsitechio/cve-2025-55182-tools/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/hlsitechio/shelllockolm"
+Documentation = "https://github.com/hlsitechio/shelllockolm/blob/main/README.md"
+Repository = "https://github.com/hlsitechio/shelllockolm"
+"Bug Tracker" = "https://github.com/hlsitechio/shelllockolm/issues"
+Changelog = "https://github.com/hlsitechio/shelllockolm/blob/main/CHANGELOG.md"
 
 [project.scripts]
-cve-2025-55182-scan = "scan_simple:main"
-cve-2025-55182-fix = "auto_fix:main"
-cve-2025-55182-patch = "mass_patcher:main"
-cve-2025-55182-malware = "malware_scanner:main"
+shelllockolm = "scan_simple:main"
+shelllockolm-scan = "scan_simple:main"
+shelllockolm-fix = "auto_fix:main"
+shelllockolm-patch = "mass_patcher:main"
+shelllockolm-malware = "malware_scanner:main"
+shelllockolm-github = "github_scanner:main"
 
 [tool.setuptools]
-packages = ["cve_2025_55182_tools"]
+packages = ["shelllockolm"]
+package-dir = {"shelllockolm" = "src"}
 
 [tool.setuptools.package-data]
 "*" = ["*.md", "*.txt"]
