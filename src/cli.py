@@ -261,16 +261,15 @@ def print_banner(show_full: bool = True):
 [dim]React • Next.js • Node.js • n8n • npm • Supply Chain[/dim]
 
 [bright_green]✓ 29 CVEs  ✓ 6 Scanners  ✓ Malware  ✓ Secrets  ✓ Auto-Fix[/bright_green]
-[link=https://github.com/hlsitechio/shellockolm][bright_blue]🔗 github.com/hlsitechio/shellockolm[/bright_blue][/link]{session_line}
+[link=https://github.com/hlsitechio/shellockolm][bright_blue]🔗 github.com/hlsitechio/shellockolm[/bright_blue][/link]
 ────────────────────────────────────────────────────────────────────
-[bright_yellow]💡 Tip:[/bright_yellow] {tip}"""
+[bright_yellow]💡 Tip:[/bright_yellow] {tip}{session_line}"""
 
     console.print(Panel(
         info_content,
         border_style="bright_cyan",
         padding=(0, 2),
     ))
-    console.print()
 
 
 def severity_style(severity: str) -> str:
