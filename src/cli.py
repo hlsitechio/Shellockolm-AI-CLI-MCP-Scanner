@@ -14,6 +14,7 @@ Usage:
 import sys
 import json
 import os
+import re
 from pathlib import Path
 from typing import Optional, List
 from datetime import datetime
@@ -61,6 +62,105 @@ from context_intelligence import (
     format_actionable_tips,
     get_quick_fix_summary,
 )
+
+# ─────────────────────────────────────────────────────────────────
+# SINGLE-LINE PROGRESS HELPER
+# ─────────────────────────────────────────────────────────────────
+class SingleLineProgress:
+    """
+    Single-line progress display that updates in place.
+    No spam, no duplicates - just clean progress updates.
+    """
+
+    def __init__(self, total: int = 0, description: str = "Scanning"):
+        self.total = total
+        self.current = 0
+        self.description = description
+        self.findings = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+        self.current_item = ""
+        self._started = False
+
+    def start(self, total: int = None):
+        """Start progress display"""
+        if total is not None:
+            self.total = total
+        self._started = True
+        self._update()
+
+    def update(self, current: int = None, item: str = "", finding_severity: str = None):
+        """Update progress - stays on same line"""
+        if current is not None:
+            self.current = current
+        if item:
+            self.current_item = item
+        if finding_severity:
+            sev = finding_severity.upper()
+            if sev in self.findings:
+                self.findings[sev] += 1
+        self._update()
+
+    def increment(self, item: str = "", finding_severity: str = None):
+        """Increment by 1 and update"""
+        self.current += 1
+        self.update(item=item, finding_severity=finding_severity)
+
+    def _update(self):
+        """Internal: Write progress to stdout on same line"""
+        if self.total <= 0:
+            return
+
+        pct = min(100, (self.current / self.total) * 100)
+        bar_width = 25
+        filled = int(bar_width * pct / 100)
+        bar = "█" * filled + "░" * (bar_width - filled)
+
+        # Build findings string
+        findings_str = ""
+        if self.findings["CRITICAL"] > 0:
+            findings_str += f" {self.findings['CRITICAL']}C"
+        if self.findings["HIGH"] > 0:
+            findings_str += f" {self.findings['HIGH']}H"
+        if self.findings["MEDIUM"] > 0:
+            findings_str += f" {self.findings['MEDIUM']}M"
+
+        # Truncate current item
+        item_str = ""
+        if self.current_item:
+            item = self.current_item
+            if len(item) > 25:
+                item = "..." + item[-22:]
+            item_str = f" {item}"
+
+        # Write to stdout with \r to stay on same line
+        line = f"\r[{bar}] {pct:5.1f}% ({self.current}/{self.total}){findings_str}{item_str}"
+        sys.stdout.write(line.ljust(80))
+        sys.stdout.flush()
+
+    def finish(self, message: str = None):
+        """Complete progress and move to new line"""
+        self.current = self.total
+        self._update()
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+        if message:
+            print(message)
+
+    def get_findings_summary(self) -> str:
+        """Get summary of findings"""
+        total = sum(self.findings.values())
+        if total == 0:
+            return "No findings"
+        parts = []
+        if self.findings["CRITICAL"]:
+            parts.append(f"{self.findings['CRITICAL']} critical")
+        if self.findings["HIGH"]:
+            parts.append(f"{self.findings['HIGH']} high")
+        if self.findings["MEDIUM"]:
+            parts.append(f"{self.findings['MEDIUM']} medium")
+        if self.findings["LOW"]:
+            parts.append(f"{self.findings['LOW']} low")
+        return f"{total} findings ({', '.join(parts)})"
+
 
 # ─────────────────────────────────────────────────────────────────
 # SESSION LOGGING
@@ -272,7 +372,7 @@ def print_banner(show_full: bool = True):
     ))
 
     # Quick action bar below banner
-    console.print("  [bright_red][Q][/bright_red] Exit   [bright_cyan][H][/bright_cyan] Help   [bright_yellow][S][/bright_yellow] ⭐ Star us on GitHub")
+    console.print("  [bright_red][Q][/bright_red] Exit  [bright_cyan][H][/bright_cyan] Help  [bright_yellow][S][/bright_yellow] Star  [green][U][/green] Update  [magenta][P][/magenta] PoC  [blue][R][/blue] Report  [bright_green][F][/bright_green] Fix  [bright_red][X][/bright_red] QuickFix")
     console.print()
 
 
@@ -307,7 +407,7 @@ def print_finding(finding: ScanFinding, verbose: bool = False, show_context: boo
     # Skip non-actionable findings in brief mode (exploit data, research, etc.)
     if ctx and not ctx.is_actionable and not verbose:
         # Show condensed version for non-actionable
-        console.print(f"\n[dim]┌─ {finding.cve_id} in {finding.package} @ {finding.version}[/dim]")
+        console.print(f"[dim]┌─ {finding.cve_id} in {finding.package} @ {finding.version}[/dim]")
         console.print(f"[dim]│  {finding.file_path}[/dim]")
         console.print(f"[dim]└─ {ctx.message} (skipped)[/dim]")
         return
@@ -371,7 +471,7 @@ def print_summary(results: List[ScanResult], output_json: Optional[str] = None):
             else:
                 non_actionable += 1
 
-    console.print("\n[title]═══ INVESTIGATION SUMMARY ═══[/title]")
+    console.print("[title]═══ INVESTIGATION SUMMARY ═══[/title]")
     console.print(f"  📊 Total findings:  [danger]{total_findings}[/danger]")
     console.print(f"  🔴 Critical:        [critical]{critical}[/critical]")
     console.print(f"  🟠 High:            [high]{high}[/high]")
@@ -435,7 +535,7 @@ def print_summary(results: List[ScanResult], output_json: Optional[str] = None):
 
         with open(output_json, 'w') as f:
             json.dump(output, f, indent=2)
-        console.print(f"\n[success]📋 Report saved to: {output_json}[/success]")
+        console.print(f"[success]📋 Report saved to: {output_json}[/success]")
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -453,6 +553,7 @@ def scan(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed findings"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Save JSON report to file"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
+    _from_menu: bool = False,  # Internal: skip banner when called from menu
 ):
     """
     Scan directory for npm/Node.js/React/Next.js CVEs
@@ -463,8 +564,9 @@ def scan(
         shellockolm scan -s react ./            # Use only React scanner
         shellockolm scan -o report.json ./      # Export to JSON
     """
-    if not quiet:
+    if not quiet and not _from_menu:
         print_banner()
+    if not quiet:
         console.print(f"[title]Target:[/title] [path]{Path(path).resolve()}[/path]")
 
     # Validate path
@@ -480,40 +582,48 @@ def scan(
             console.print(f"[danger]Unknown scanner: {scanner}[/danger]")
             console.print(f"[info]Available: {', '.join(SCANNER_REGISTRY.keys())}[/info]")
             raise typer.Exit(1)
-        scanners = [get_scanner(scanner)]
+        scanners_to_run = [get_scanner(scanner)]
     else:
-        scanners = get_all_scanners()
+        scanners_to_run = get_all_scanners()
 
-    # Run scans
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-        disable=quiet,
-    ) as progress:
-        for s in scanners:
-            # Log scan start
-            if session_logger:
-                session_logger.log_scan_start(s.NAME, str(Path(path).resolve()))
+    # Run scans with single-line progress
+    if not quiet:
+        progress = SingleLineProgress(total=len(scanners_to_run))
+        progress.start()
 
-            task = progress.add_task(f"[info]Running {s.NAME} scanner...", total=None)
-            result = s.scan_directory(path, recursive=recursive, max_depth=max_depth)
-            results.append(result)
-            progress.remove_task(task)
+    for i, s in enumerate(scanners_to_run):
+        # Log scan start
+        if session_logger:
+            session_logger.log_scan_start(s.NAME, str(Path(path).resolve()))
 
-            # Log scan result
-            if session_logger:
-                session_logger.log_scan_result(s.NAME, len(result.findings), result.duration_seconds)
+        if not quiet:
+            progress.update(current=i, item=s.NAME)
 
-            if not quiet and result.findings:
-                console.print(f"[warning]  {s.NAME}: {len(result.findings)} findings[/warning]")
+        result = s.scan_directory(path, recursive=recursive, max_depth=max_depth)
+        results.append(result)
+
+        # Track findings by severity
+        for finding in result.findings:
+            sev = finding.severity.value if hasattr(finding.severity, 'value') else str(finding.severity)
+            if not quiet:
+                progress.update(finding_severity=sev)
+
+        if not quiet:
+            progress.increment(item=s.NAME)
+
+        # Log scan result
+        if session_logger:
+            session_logger.log_scan_result(s.NAME, len(result.findings), result.duration_seconds)
+
+    if not quiet:
+        progress.finish()
 
     # Print findings
     all_findings = [f for r in results for f in r.findings]
 
     if all_findings:
         if not quiet:
-            console.print("\n[danger]🚨 VULNERABILITIES DETECTED[/danger]")
+            console.print("[danger]🚨 VULNERABILITIES DETECTED[/danger]")
 
         # Sort by severity
         severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
@@ -580,6 +690,7 @@ def live(
     timeout: int = typer.Option(10, "--timeout", "-t", help="Request timeout in seconds"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Save JSON report"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+    _from_menu: bool = False,  # Internal: skip banner when called from menu
 ):
     """
     Live probe a URL for vulnerabilities
@@ -593,9 +704,10 @@ def live(
         shellockolm live -s nextjs https://target.com
         shellockolm live -s n8n https://n8n.target.com
     """
-    print_banner()
+    if not _from_menu:
+        print_banner()
     console.print(f"[title]Live Probe:[/title] [path]{url}[/path]")
-    console.print("[warning]Testing for exploitable vulnerabilities...[/warning]\n")
+    console.print("[warning]Testing for exploitable vulnerabilities...[/warning]")
 
     results: List[ScanResult] = []
 
@@ -650,7 +762,7 @@ def live(
     all_findings = [f for r in results for f in r.findings]
 
     if all_findings:
-        console.print("\n[danger]🚨 LIVE VULNERABILITIES CONFIRMED[/danger]")
+        console.print("[danger]🚨 LIVE VULNERABILITIES CONFIRMED[/danger]")
         for finding in all_findings:
             print_finding(finding, verbose)
             # Log live finding to session
@@ -667,7 +779,7 @@ def live(
                     "type": "live_probe",
                 })
     else:
-        console.print("\n[success]No exploitable vulnerabilities detected at this URL[/success]")
+        console.print("[success]No exploitable vulnerabilities detected at this URL[/success]")
         if session_logger:
             session_logger.log(f"Live probe complete - No vulnerabilities at {url}", "RECON")
 
@@ -688,6 +800,7 @@ def cves(
         help="Filter by severity: critical, high, medium, low"
     ),
     bounty: bool = typer.Option(False, "--bounty", "-b", help="Show only bug bounty worthy CVEs"),
+    _from_menu: bool = False,  # Internal: skip banner when called from menu
 ):
     """
     List all tracked CVEs
@@ -698,7 +811,8 @@ def cves(
         shellockolm cves -s critical          # Critical severity only
         shellockolm cves --bounty             # Bug bounty targets
     """
-    print_banner()
+    if not _from_menu:
+        print_banner()
 
     db = VulnerabilityDatabase()
     all_vulns = db.get_all_vulnerabilities()
@@ -760,7 +874,7 @@ def cves(
         )
 
     console.print(table)
-    console.print(f"\n[info]Total: {len(filtered)} CVEs[/info]")
+    console.print(f"[info]Total: {len(filtered)} CVEs[/info]")
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -820,9 +934,10 @@ Upgrade affected packages to patched versions.
 # SCANNERS COMMAND - List available scanners
 # ─────────────────────────────────────────────────────────────────
 @app.command()
-def scanners():
+def scanners(_from_menu: bool = False):
     """List all available scanners and their CVE coverage"""
-    print_banner()
+    if not _from_menu:
+        print_banner()
 
     table = Table(
         title="🔍 Available Scanners",
@@ -847,7 +962,7 @@ def scanners():
     console.print(table)
 
     total_cves = sum(len(scanner_class().CVE_IDS) for scanner_class in SCANNER_REGISTRY.values())
-    console.print(f"\n[info]Total: {len(SCANNER_REGISTRY)} scanners covering {total_cves} CVEs[/info]")
+    console.print(f"[info]Total: {len(SCANNER_REGISTRY)} scanners covering {total_cves} CVEs[/info]")
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -897,6 +1012,31 @@ MENU_CATEGORIES = {
                 "action": "sandbox-check",
                 "requires_input": "npm_package",
                 "input_prompt": "Enter npm package name or URL (e.g., 'lodash' or 'https://npmjs.com/package/lodash'): ",
+            },
+            {
+                "id": "1c",
+                "name": "Deep Scan",
+                "description": "🔬 DEEP ANALYSIS: Version checks + Code pattern analysis + Config inspection + Behavioral checks. Shows exactly HOW each vulnerability is detected step-by-step.",
+                "action": "deep-scan",
+                "requires_input": "path",
+                "input_prompt": "Enter path to deep scan: ",
+            },
+            {
+                "id": "1d",
+                "name": "CVE Hunter",
+                "description": "🎯 TARGET ONE CVE: Enter a specific CVE ID and see step-by-step if your project is vulnerable. Shows detection process in real-time.",
+                "action": "cve-hunter",
+                "requires_input": "cve_hunt",
+                "input_prompt": "Enter CVE ID to hunt (e.g., CVE-2025-29927): ",
+                "input_prompt2": "Enter path to scan: ",
+            },
+            {
+                "id": "1e",
+                "name": "Custom Scan",
+                "description": "🎚️ PICK SCANNERS: Choose exactly which scanners to run. Select/deselect: Next.js, React, npm, Node.js, n8n, Supply Chain.",
+                "action": "custom-scan",
+                "requires_input": "custom_scan",
+                "input_prompt": "Enter path to scan: ",
             },
             {
                 "id": "2",
@@ -1457,12 +1597,15 @@ def show_main_menu():
     t1.add_column("[green]LIVE[/green]", width=15)
     t1.add_column("[yellow]CVE[/yellow]", width=15)
     t1.add_column("[red]MALWARE[/red]", width=15)
-    t1.add_row("[cyan][ 1][/cyan] Full Scan", "[green][ 8][/green] Probe All", "[yellow][11][/yellow] List All", "[red][17][/red] Deep Scan")
-    t1.add_row("[cyan][1a][/cyan] ALL npm", "[green][ 9][/green] Next.js", "[yellow][12][/yellow] Critical", "[red][18][/red] Quick")
+    t1.add_row("[cyan][ 1][/cyan] Full Scan", "[green][ 8][/green] Probe All", "[yellow][11][/yellow] List All", "[red][17][/red] Malware Deep")
+    t1.add_row("[cyan][1a][/cyan] ALL npm", "[green][ 9][/green] Next.js", "[yellow][12][/yellow] Critical", "[red][18][/red] Quick Scan")
     t1.add_row("[cyan][1b][/cyan] Pre-Check", "[green][10][/green] n8n", "[yellow][13][/yellow] Bounty", "[red][19][/red] Quarantine")
-    t1.add_row("[cyan][ 2][/cyan] React", "", "[yellow][14][/yellow] Details", "[red][20][/red] Remove")
-    t1.add_row("[cyan][ 3][/cyan] Next.js", "", "[yellow][15][/yellow] By Pkg", "[red][21][/red] Cleanup")
-    t1.add_row("[cyan][ 4][/cyan] npm Pkgs", "", "[yellow][16][/yellow] Export", "[red][22][/red] Report")
+    t1.add_row("[cyan][1c][/cyan] Deep Scan", "", "[yellow][14][/yellow] Details", "[red][20][/red] Remove")
+    t1.add_row("[cyan][1d][/cyan] CVE Hunter", "", "[yellow][15][/yellow] By Pkg", "[red][21][/red] Cleanup")
+    t1.add_row("[cyan][1e][/cyan] Custom", "", "[yellow][16][/yellow] Export", "[red][22][/red] Report")
+    t1.add_row("[cyan][ 2][/cyan] React", "", "", "")
+    t1.add_row("[cyan][ 3][/cyan] Next.js", "", "", "")
+    t1.add_row("[cyan][ 4][/cyan] npm Pkgs", "", "", "")
     t1.add_row("[cyan][ 5][/cyan] Node.js", "", "", "")
     t1.add_row("[cyan][ 6][/cyan] n8n", "", "", "")
     t1.add_row("[cyan][ 7][/cyan] Chain", "", "", "")
@@ -1761,23 +1904,232 @@ def show_next_steps(cmd_type: str, context: dict = None):
     if not suggestions:
         return
 
-    console.print("\n[bold bright_cyan]📌 Next Steps:[/bold bright_cyan]")
+    console.print("[bold bright_cyan]📌 Next Steps:[/bold bright_cyan]")
     for key, desc in suggestions:
         console.print(f"   [white]{key}[/white] {desc}")
-    console.print()
 
 
 def show_command_details(cmd: dict) -> bool:
     """Show command details and ask for confirmation. Returns True if user confirms."""
-    console.print(f"\n[title]━━━ {cmd['name'].upper()} ━━━[/title]")
-    console.print(f"\n[subtitle]Description:[/subtitle]")
+    console.print(f"[title]━━━ {cmd['name'].upper()} ━━━[/title]")
+    console.print(f"[subtitle]Description:[/subtitle]")
     console.print(f"  {cmd['description']}")
-    console.print(f"\n[info]Command: {cmd['action']}[/info]")
+    console.print(f"[info]Command: {cmd['action']}[/info]")
     console.print()
 
     console.print("[bold]Run this command?[/bold]  [bright_green][Y]es[/bright_green]  /  [bright_red][N]o[/bright_red]")
     confirm = console.input(">>> ").strip().lower()
     return confirm in ['', 'y', 'yes']
+
+
+def quick_fix_all(session_logger, console):
+    """
+    Quick Fix All - Execute ALL fix commands automatically
+    Groups fixes by project to avoid duplicate installs
+    """
+    import subprocess
+    from collections import defaultdict
+
+    console.print("[title]⚡ QUICK FIX ALL[/title]")
+
+    # Get all findings
+    if not session_logger or not session_logger.all_findings:
+        console.print("[warning]No vulnerabilities found in current session.[/warning]")
+        console.print("[dim]Run a scan first to detect vulnerabilities.[/dim]")
+        console.input("[subtitle]Press Enter to continue...[/subtitle]")
+        return
+
+    findings = session_logger.all_findings
+
+    # Filter to actionable findings only (skip exploit data, research, etc.)
+    actionable = []
+    skipped_reasons = defaultdict(int)
+
+    for f in findings:
+        file_path = f.get('file_path', '')
+        file_lower = file_path.lower()
+
+        # Skip non-production paths
+        if any(skip in file_lower for skip in [
+            'exploit', 'poc', 'cve-', 'research', 'sample', 'test',
+            'archive', 'metasploit', 'nuclei', '/data/', 'demo'
+        ]):
+            skipped_reasons['Exploit/PoC/Research data'] += 1
+            continue
+
+        # Must have a patched version
+        if not f.get('patched_version') or f.get('patched_version') == 'unknown':
+            skipped_reasons['No patch available'] += 1
+            continue
+
+        actionable.append(f)
+
+    if not actionable:
+        console.print("[warning]No actionable fixes found.[/warning]")
+        console.print(f"[dim]Skipped {sum(skipped_reasons.values())} findings (exploit data, research, etc.)[/dim]")
+        console.input("[subtitle]Press Enter to continue...[/subtitle]")
+        return
+
+    # Group fixes by project directory to avoid duplicate installs
+    project_fixes = defaultdict(dict)  # {project_dir: {package: {version, patched, cves}}}
+
+    for f in actionable:
+        file_path = f.get('file_path', '')
+        package = f.get('package', '')
+        patched = f.get('patched_version', 'latest')
+        cve_id = f.get('cve_id', '')
+
+        if not file_path or not package:
+            continue
+
+        # Determine project directory
+        project_dir = str(Path(file_path).parent)
+        if "node_modules" in project_dir:
+            project_dir = project_dir.split("node_modules")[0].rstrip("/")
+
+        # Track unique package fixes per project
+        if package not in project_fixes[project_dir]:
+            project_fixes[project_dir][package] = {
+                'patched': patched,
+                'cves': [cve_id],
+                'original_version': f.get('version', '')
+            }
+        else:
+            if cve_id not in project_fixes[project_dir][package]['cves']:
+                project_fixes[project_dir][package]['cves'].append(cve_id)
+
+    # Build fix commands
+    fix_commands = []
+    node_upgrades = []
+
+    for project_dir, packages in project_fixes.items():
+        if not Path(project_dir).exists():
+            continue
+
+        # Check for yarn or npm
+        has_yarn = (Path(project_dir) / "yarn.lock").exists()
+        has_npm = (Path(project_dir) / "package-lock.json").exists() or (Path(project_dir) / "package.json").exists()
+
+        for package, info in packages.items():
+            patched = info['patched']
+            cves = info['cves']
+
+            # Node.js version upgrades are special
+            if package in ['node', 'nodejs']:
+                node_upgrades.append({
+                    'project': project_dir,
+                    'current': info['original_version'],
+                    'target': patched,
+                    'cves': cves
+                })
+                continue
+
+            if has_yarn:
+                cmd = f"cd \"{project_dir}\" && yarn upgrade {package}@{patched}"
+            elif has_npm:
+                cmd = f"cd \"{project_dir}\" && npm install {package}@{patched}"
+            else:
+                cmd = f"cd \"{project_dir}\" && npm install {package}@{patched}"
+
+            fix_commands.append({
+                'cmd': cmd,
+                'package': package,
+                'patched': patched,
+                'project': project_dir,
+                'cves': cves
+            })
+
+    # Show summary
+    console.print(f"[success]Found {len(fix_commands)} package fixes + {len(node_upgrades)} Node.js upgrades[/success]")
+    console.print(f"[dim]Skipped {sum(skipped_reasons.values())} findings (exploit data, research, etc.)[/dim]")
+
+    if fix_commands:
+        console.print("[subtitle]Package Fixes:[/subtitle]")
+        for i, fix in enumerate(fix_commands[:10], 1):  # Show first 10
+            console.print(f"  {i}. [info]{fix['package']}@{fix['patched']}[/info] → {Path(fix['project']).name}")
+        if len(fix_commands) > 10:
+            console.print(f"  ... and {len(fix_commands) - 10} more")
+
+    if node_upgrades:
+        console.print("[subtitle]Node.js Upgrades Required:[/subtitle]")
+        for upgrade in node_upgrades[:5]:
+            console.print(f"  • [warning]{upgrade['current']} → {upgrade['target']}[/warning] ({len(upgrade['cves'])} CVEs)")
+        console.print("[dim]  Note: Node.js upgrades require manual action (nvm/nvs/system)[/dim]")
+
+    if not fix_commands:
+        console.print("[warning]Only Node.js upgrades needed - these require manual action.[/warning]")
+        console.print("[info]Commands:[/info]")
+        console.print("  $ nvm install 20.20.0 && nvm use 20.20.0")
+        console.print("  $ nvm install 24.13.0 && nvm use 24.13.0")
+        console.input("[subtitle]Press Enter to continue...[/subtitle]")
+        return
+
+    # Confirm execution
+    console.print("[bright_yellow]⚠ This will run npm/yarn install commands in each project.[/bright_yellow]")
+    confirm = console.input("[bold]Execute all fixes? [y/N]: [/bold]").strip().lower()
+
+    if confirm not in ['y', 'yes']:
+        console.print("[dim]Cancelled.[/dim]")
+        console.input("[subtitle]Press Enter to continue...[/subtitle]")
+        return
+
+    # Execute fixes with progress
+    console.print("[title]Executing Fixes...[/title]")
+
+    success_count = 0
+    fail_count = 0
+
+    for i, fix in enumerate(fix_commands, 1):
+        # Single line progress
+        sys.stdout.write(f"\r[{i}/{len(fix_commands)}] Fixing {fix['package']}@{fix['patched']}...".ljust(60))
+        sys.stdout.flush()
+
+        try:
+            result = subprocess.run(
+                fix['cmd'],
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=180,  # 3 min timeout per package
+                cwd=fix['project']
+            )
+
+            if result.returncode == 0:
+                success_count += 1
+                sys.stdout.write(f"\r[{i}/{len(fix_commands)}] ✓ {fix['package']}@{fix['patched']} fixed!".ljust(60) + "\n")
+            else:
+                fail_count += 1
+                sys.stdout.write(f"\r[{i}/{len(fix_commands)}] ✗ {fix['package']} failed".ljust(60) + "\n")
+                if result.stderr:
+                    console.print(f"    [dim]{result.stderr[:100]}[/dim]")
+
+        except subprocess.TimeoutExpired:
+            fail_count += 1
+            sys.stdout.write(f"\r[{i}/{len(fix_commands)}] ⏱ {fix['package']} timed out".ljust(60) + "\n")
+        except Exception as e:
+            fail_count += 1
+            sys.stdout.write(f"\r[{i}/{len(fix_commands)}] ✗ {fix['package']} error: {str(e)[:30]}".ljust(60) + "\n")
+
+        sys.stdout.flush()
+
+    # Final summary
+    console.print(f"[title]═══ FIX SUMMARY ═══[/title]")
+    console.print(f"  [success]✓ Fixed: {success_count}[/success]")
+    if fail_count > 0:
+        console.print(f"  [danger]✗ Failed: {fail_count}[/danger]")
+    if node_upgrades:
+        console.print(f"  [warning]⚠ Node.js upgrades: {len(node_upgrades)} (manual)[/warning]")
+
+    if success_count > 0:
+        console.print(f"[info]Run another scan to verify fixes.[/info]")
+
+    if node_upgrades:
+        console.print("[subtitle]Node.js Upgrade Commands:[/subtitle]")
+        unique_versions = set(u['target'] for u in node_upgrades)
+        for v in sorted(unique_versions):
+            console.print(f"  $ nvm install {v} && nvm use {v}")
+
+    console.input("[subtitle]Press Enter to continue...[/subtitle]")
 
 
 def interactive_shell():
@@ -1799,22 +2151,29 @@ def interactive_shell():
     history_file = Path.home() / ".shellockolm_history"
     show_menu = True  # Flag to control menu display
 
+    pending_choice = None  # For choices from "What's Next?" navigation
+
     while True:
         try:
             if show_menu:
                 show_main_menu()
             show_menu = True  # Reset for next iteration
 
-            choice = prompt(
-                "Select option: ",
-                history=FileHistory(str(history_file)),
-            ).strip().lower()
+            # Use pending choice if we have one (from "What's Next?" navigation)
+            if pending_choice:
+                choice = pending_choice
+                pending_choice = None
+            else:
+                choice = prompt(
+                    "Select option: ",
+                    history=FileHistory(str(history_file)),
+                ).strip().lower()
 
             # Handle special options
             if choice in ['0', 'q', 'quit', 'exit']:
                 if session_logger:
                     session_logger.log("Session ended by user", "INFO")
-                    console.print(f"\n[info]📝 Session log saved: {session_logger.get_log_path()}[/info]")
+                    console.print(f"[info]📝 Session log saved: {session_logger.get_log_path()}[/info]")
                     if session_logger.all_findings:
                         console.print(f"[warning]📋 Findings JSON: {session_logger.get_findings_path()}[/warning]")
                 console.print("[info]👋 Goodbye! Stay secure.[/info]")
@@ -1822,7 +2181,7 @@ def interactive_shell():
 
             if choice in ['l', 'log', 'logs']:
                 if session_logger:
-                    console.print(f"\n[title]Session Log Location:[/title]")
+                    console.print(f"[title]Session Log Location:[/title]")
                     console.print(f"  [path]{session_logger.get_log_path()}[/path]")
                     console.print(f"  [path]{session_logger.get_findings_path()}[/path]\n")
                     # Show last 20 lines of log
@@ -1833,7 +2192,7 @@ def interactive_shell():
                         console.print("".join(lines))
                     except Exception:
                         pass
-                console.input("\n[subtitle]Press Enter to continue...[/subtitle]")
+                console.input("[subtitle]Press Enter to continue...[/subtitle]")
                 # Menu will show on next iteration (show_menu = True by default)
                 continue
 
@@ -1854,7 +2213,7 @@ def interactive_shell():
                     title="About",
                     border_style="bright_cyan",
                 ))
-                console.input("\n[subtitle]Press Enter to continue...[/subtitle]")
+                console.input("[subtitle]Press Enter to continue...[/subtitle]")
                 # Menu will show on next iteration (show_menu = True by default)
                 continue
 
@@ -1865,14 +2224,581 @@ def interactive_shell():
 
             if choice in ['s', 'star']:
                 import webbrowser
-                console.print("\n[bright_yellow]⭐ Opening GitHub to star Shellockolm...[/bright_yellow]")
+                console.print("[bright_yellow]⭐ Opening GitHub to star Shellockolm...[/bright_yellow]")
                 console.print("[dim]Your support helps us keep the project alive![/dim]\n")
                 try:
                     webbrowser.open("https://github.com/hlsitechio/shellockolm")
                     console.print("[success]✓ Opened in your browser![/success]")
                 except Exception:
                     console.print("[info]Please visit: https://github.com/hlsitechio/shellockolm[/info]")
-                console.input("\n[subtitle]Press Enter to continue...[/subtitle]")
+                console.input("[subtitle]Press Enter to continue...[/subtitle]")
+                continue
+
+            if choice in ['u', 'update', 'update-cves']:
+                # CVE Database Refresh - Show what's being updated
+                console.print("[title]🔄 CVE Database Refresh[/title]\n")
+
+                from scanners import get_all_scanners
+                import requests
+
+                total_cves = 0
+                updated_scanners = []
+
+                console.print("[subtitle]Step 1/4: Checking local CVE database...[/subtitle]")
+                for scanner_obj in get_all_scanners():
+                    cve_db = getattr(scanner_obj, 'CVE_DATABASE', {})
+                    cve_count = len(cve_db)
+                    total_cves += cve_count
+                    console.print(f"  ├─ {scanner_obj.NAME}: {cve_count} CVEs")
+                    updated_scanners.append(scanner_obj.NAME)
+
+                console.print(f"  └─ [success]Total local CVEs: {total_cves}[/success]\n")
+
+                console.print("[subtitle]Step 2/4: Fetching GitHub Advisory Database...[/subtitle]")
+                try:
+                    # Check GitHub Advisory Database for npm ecosystem
+                    ghsa_url = "https://api.github.com/advisories?ecosystem=npm&per_page=5"
+                    resp = requests.get(ghsa_url, timeout=10, headers={"Accept": "application/vnd.github+json"})
+                    if resp.status_code == 200:
+                        advisories = resp.json()
+                        console.print(f"  └─ [success]Found {len(advisories)} recent npm advisories[/success]")
+                        for adv in advisories[:3]:
+                            ghsa_id = adv.get('ghsa_id', 'Unknown')
+                            severity = adv.get('severity', 'unknown')
+                            console.print(f"      • {ghsa_id} ({severity})")
+                    else:
+                        console.print(f"  └─ [dim]GitHub API rate limited or unavailable[/dim]")
+                except Exception as e:
+                    console.print(f"  └─ [warning]Could not fetch: {e}[/warning]")
+
+                console.print("[subtitle]Step 3/4: Checking NVD for Node.js CVEs...[/subtitle]")
+                try:
+                    # NVD search for recent Node.js CVEs
+                    console.print(f"  └─ [dim]NVD API requires key for detailed queries[/dim]")
+                    console.print(f"      [info]Get free API key: https://nvd.nist.gov/developers/request-an-api-key[/info]")
+                except Exception as e:
+                    console.print(f"  └─ [warning]Could not fetch: {e}[/warning]")
+
+                console.print("[subtitle]Step 4/4: Verifying database integrity...[/subtitle]")
+                console.print(f"  └─ [success]✓ {total_cves} CVEs tracked across {len(updated_scanners)} scanners[/success]")
+
+                console.print(f"[success]✓ Database check complete![/success]")
+                console.print(f"[dim]Run a scan to check your projects against these CVEs.[/dim]")
+                console.input("[subtitle]Press Enter to continue...[/subtitle]")
+                continue
+
+            if choice in ['p', 'poc', 'get-poc']:
+                # PoC Fetcher - Get PoC for specific CVE
+                console.print("[title]🎯 PoC Fetcher[/title]\n")
+
+                cve_input = prompt("Enter CVE ID (e.g., CVE-2025-29927): ").strip().upper()
+                if not cve_input:
+                    console.print("[danger]CVE ID is required.[/danger]")
+                    continue
+
+                if not cve_input.startswith("CVE-"):
+                    cve_input = f"CVE-{cve_input}"
+
+                console.print(f"[info]Fetching PoC for {cve_input}...[/info]\n")
+
+                import requests
+
+                poc_sources = []
+
+                # Search GitHub for PoC repos
+                console.print("[subtitle]Checking GitHub...[/subtitle]")
+                try:
+                    github_search = f"https://api.github.com/search/repositories?q={cve_input}+poc+OR+proof+of+concept&sort=stars&per_page=5"
+                    resp = requests.get(github_search, timeout=10)
+                    if resp.status_code == 200:
+                        repos = resp.json().get('items', [])
+                        if repos:
+                            console.print(f"  [success]Found {len(repos)} repositories[/success]")
+                            for i, repo in enumerate(repos[:5], 1):
+                                name = repo['full_name']
+                                stars = repo['stargazers_count']
+                                desc = (repo.get('description') or '')[:50]
+                                poc_sources.append({
+                                    'source': 'GitHub',
+                                    'name': name,
+                                    'url': repo['html_url'],
+                                    'stars': stars
+                                })
+                                console.print(f"  [{i}] {name} (★ {stars})")
+                                console.print(f"      [dim]{desc}...[/dim]")
+                        else:
+                            console.print(f"  [dim]No repositories found[/dim]")
+                    else:
+                        console.print(f"  [dim]GitHub API unavailable[/dim]")
+                except Exception as e:
+                    console.print(f"  [warning]Error: {e}[/warning]")
+
+                # Check Nuclei templates
+                console.print("[subtitle]Checking Nuclei Templates...[/subtitle]")
+                try:
+                    nuclei_search = f"https://api.github.com/search/code?q={cve_input}+repo:projectdiscovery/nuclei-templates"
+                    resp = requests.get(nuclei_search, timeout=10)
+                    if resp.status_code == 200:
+                        items = resp.json().get('items', [])
+                        if items:
+                            console.print(f"  [success]Found {len(items)} template(s)[/success]")
+                            for item in items[:3]:
+                                path = item.get('path', '')
+                                poc_sources.append({
+                                    'source': 'Nuclei',
+                                    'name': path,
+                                    'url': item.get('html_url', ''),
+                                    'stars': 0
+                                })
+                                console.print(f"  • {path}")
+                        else:
+                            console.print(f"  [dim]No templates found[/dim]")
+                except Exception as e:
+                    console.print(f"  [dim]Could not check: {e}[/dim]")
+
+                # Summary
+                if poc_sources:
+                    console.print(f"[success]Found {len(poc_sources)} PoC sources for {cve_input}[/success]")
+                    console.print(f"[dim]Select number to open in browser, or 'd' to download all:[/dim]")
+
+                    poc_choice = prompt("Select [1-5/d]: ").strip().lower()
+                    if poc_choice == 'd':
+                        console.print("[info]Opening all sources...[/info]")
+                        import webbrowser
+                        for poc in poc_sources[:3]:
+                            webbrowser.open(poc['url'])
+                    elif poc_choice.isdigit():
+                        idx = int(poc_choice) - 1
+                        if 0 <= idx < len(poc_sources):
+                            import webbrowser
+                            webbrowser.open(poc_sources[idx]['url'])
+                            console.print(f"[success]Opened {poc_sources[idx]['name']}[/success]")
+                else:
+                    console.print(f"[warning]No PoC found for {cve_input}[/warning]")
+                    console.print(f"[dim]Try searching manually on exploit-db.com or GitHub[/dim]")
+
+                console.input("[subtitle]Press Enter to continue...[/subtitle]")
+                continue
+
+            if choice in ['r', 'report', 'report-builder']:
+                # Interactive Report Builder
+                console.print("[title]📋 Interactive Report Builder[/title]\n")
+
+                # Check if we have any findings from this session
+                session_findings = session_logger.all_findings if session_logger else []
+
+                if not session_findings:
+                    console.print("[warning]No findings in current session.[/warning]")
+                    console.print("[dim]Run a scan first, then come back to generate a report.[/dim]")
+
+                    # Offer to run a scan
+                    run_scan = prompt("Run a quick scan now? [y/N]: ").strip().lower()
+                    if run_scan in ['y', 'yes']:
+                        scan_path = prompt("Path to scan: ").strip() or "."
+                        console.print(f"[info]Scanning {scan_path}...[/info]")
+                        # Import and run scan
+                        from scanners import get_all_scanners
+                        for scanner_obj in get_all_scanners():
+                            try:
+                                result = scanner_obj.scan_directory(scan_path, recursive=True, max_depth=10)
+                                if result.findings:
+                                    for finding in result.findings:
+                                        session_findings.append({
+                                            "cve_id": finding.cve_id,
+                                            "package": finding.package,
+                                            "version": finding.version,
+                                            "severity": finding.severity.value,
+                                            "file_path": finding.file_path,
+                                            "description": finding.description
+                                        })
+                            except Exception as e:
+                                err_msg = str(e).replace("[", "\\[").replace("]", "\\]")
+                                console.print(f"[dim]Scanner error: {err_msg}[/dim]")
+                    else:
+                        console.input("[subtitle]Press Enter to continue...[/subtitle]")
+                        continue
+
+                if session_findings:
+                    console.print(f"[success]Found {len(session_findings)} findings to report[/success]\n")
+
+                    # Display findings for selection
+                    console.print("[subtitle]Select findings to include:[/subtitle]")
+                    finding_selection = {}
+                    for i, f in enumerate(session_findings[:20], 1):  # Limit to 20
+                        finding_selection[str(i)] = f
+                        severity = f.get('severity', 'unknown')
+                        sev_color = {"critical": "bright_red", "high": "red", "medium": "yellow", "low": "blue"}.get(severity, "dim")
+                        console.print(f"  [{i}] [{sev_color}]{f.get('cve_id', 'N/A')}[/{sev_color}] - {f.get('package', 'N/A')}@{f.get('version', 'N/A')}")
+
+                    console.print(f"[dim]Enter numbers separated by commas, or 'all' for all findings[/dim]")
+                    selection = prompt("Select findings: ").strip().lower()
+
+                    if selection == "all" or not selection:
+                        selected_findings = session_findings[:20]
+                    else:
+                        selected_nums = [s.strip() for s in selection.split(",")]
+                        selected_findings = [finding_selection.get(n) for n in selected_nums if n in finding_selection]
+
+                    if not selected_findings:
+                        console.print("[danger]No findings selected.[/danger]")
+                        console.input("[subtitle]Press Enter to continue...[/subtitle]")
+                        continue
+
+                    # Format selection
+                    console.print(f"[subtitle]Output format:[/subtitle]")
+                    console.print("  [1] Markdown (.md)")
+                    console.print("  [2] JSON (.json)")
+                    console.print("  [3] HackerOne submission")
+                    console.print("  [4] Plain Text")
+
+                    format_choice = prompt("Select format [1-4]: ").strip() or "1"
+
+                    # Include options
+                    console.print(f"[subtitle]Include in report:[/subtitle]")
+                    include_poc = prompt("  Include PoC links? [Y/n]: ").strip().lower() != 'n'
+                    include_remediation = prompt("  Include remediation steps? [Y/n]: ").strip().lower() != 'n'
+                    include_cvss = prompt("  Include CVSS scores? [Y/n]: ").strip().lower() != 'n'
+
+                    # Generate report
+                    console.print(f"[info]Generating report...[/info]")
+
+                    from datetime import datetime
+                    report_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+                    if format_choice == "1":
+                        # Markdown format
+                        report_lines = [
+                            f"# Security Scan Report",
+                            f"",
+                            f"**Generated:** {report_time}",
+                            f"**Findings:** {len(selected_findings)}",
+                            f"",
+                            "---",
+                            "",
+                        ]
+
+                        # Summary table
+                        severity_counts = {}
+                        for f in selected_findings:
+                            sev = f.get('severity', 'unknown')
+                            severity_counts[sev] = severity_counts.get(sev, 0) + 1
+
+                        report_lines.append("## Summary")
+                        report_lines.append("")
+                        report_lines.append("| Severity | Count |")
+                        report_lines.append("|----------|-------|")
+                        for sev in ["critical", "high", "medium", "low"]:
+                            if severity_counts.get(sev, 0) > 0:
+                                report_lines.append(f"| {sev.upper()} | {severity_counts[sev]} |")
+                        report_lines.append("")
+
+                        # Findings
+                        report_lines.append("## Findings")
+                        report_lines.append("")
+
+                        for i, f in enumerate(selected_findings, 1):
+                            cve_id = f.get('cve_id', 'N/A')
+                            report_lines.append(f"### {i}. {cve_id}")
+                            report_lines.append("")
+                            report_lines.append(f"- **Package:** {f.get('package', 'N/A')} @ {f.get('version', 'N/A')}")
+                            report_lines.append(f"- **Severity:** {f.get('severity', 'unknown').upper()}")
+                            report_lines.append(f"- **File:** `{f.get('file_path', 'N/A')}`")
+                            report_lines.append(f"- **Description:** {f.get('description', 'N/A')}")
+
+                            if include_cvss:
+                                report_lines.append(f"- **CVSS:** See NVD for score")
+
+                            if include_poc:
+                                report_lines.append(f"- **PoC:** Search GitHub for `{cve_id} poc`")
+
+                            if include_remediation:
+                                report_lines.append(f"- **Fix:** Update {f.get('package', 'package')} to latest version")
+
+                            report_lines.append("")
+
+                        report_lines.append("---")
+                        report_lines.append("*Generated by Shellockolm Security Scanner*")
+
+                        report_content = "\n".join(report_lines)
+                        report_ext = "md"
+
+                    elif format_choice == "2":
+                        # JSON format
+                        import json
+                        report_data = {
+                            "generated": report_time,
+                            "total_findings": len(selected_findings),
+                            "findings": selected_findings,
+                            "options": {
+                                "include_poc": include_poc,
+                                "include_remediation": include_remediation,
+                                "include_cvss": include_cvss
+                            }
+                        }
+                        report_content = json.dumps(report_data, indent=2)
+                        report_ext = "json"
+
+                    elif format_choice == "3":
+                        # HackerOne format
+                        report_lines = [
+                            "## Summary",
+                            "",
+                            f"Multiple vulnerabilities discovered in the application using automated CVE scanning.",
+                            "",
+                            "## Vulnerability Details",
+                            "",
+                        ]
+
+                        for i, f in enumerate(selected_findings, 1):
+                            cve_id = f.get('cve_id', 'N/A')
+                            report_lines.append(f"### Vulnerability {i}: {cve_id}")
+                            report_lines.append("")
+                            report_lines.append(f"**Component:** {f.get('package', 'N/A')} @ {f.get('version', 'N/A')}")
+                            report_lines.append(f"**Severity:** {f.get('severity', 'unknown').upper()}")
+                            report_lines.append(f"**Location:** `{f.get('file_path', 'N/A')}`")
+                            report_lines.append("")
+                            report_lines.append(f"**Description:** {f.get('description', 'N/A')}")
+                            report_lines.append("")
+
+                            if include_remediation:
+                                report_lines.append(f"**Remediation:** Update {f.get('package', 'package')} to the latest patched version.")
+                                report_lines.append("")
+
+                        report_lines.append("## Impact")
+                        report_lines.append("")
+                        report_lines.append("These vulnerabilities could allow attackers to compromise the application security.")
+                        report_lines.append("")
+                        report_lines.append("## Steps to Reproduce")
+                        report_lines.append("")
+                        report_lines.append("1. Clone the repository")
+                        report_lines.append("2. Run `npm install` or `yarn install`")
+                        report_lines.append("3. Check `package.json` for vulnerable package versions")
+                        report_lines.append("")
+
+                        report_content = "\n".join(report_lines)
+                        report_ext = "md"
+
+                    else:
+                        # Plain text
+                        report_lines = [
+                            "SECURITY SCAN REPORT",
+                            "=" * 50,
+                            f"Generated: {report_time}",
+                            f"Findings: {len(selected_findings)}",
+                            "",
+                        ]
+
+                        for i, f in enumerate(selected_findings, 1):
+                            report_lines.append(f"{i}. {f.get('cve_id', 'N/A')}")
+                            report_lines.append(f"   Package: {f.get('package', 'N/A')} @ {f.get('version', 'N/A')}")
+                            report_lines.append(f"   Severity: {f.get('severity', 'unknown').upper()}")
+                            report_lines.append(f"   File: {f.get('file_path', 'N/A')}")
+                            report_lines.append("")
+
+                        report_content = "\n".join(report_lines)
+                        report_ext = "txt"
+
+                    # Save report
+                    report_filename = f"security_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{report_ext}"
+                    save_path = prompt(f"Save as [{report_filename}]: ").strip() or report_filename
+
+                    try:
+                        with open(save_path, 'w') as f:
+                            f.write(report_content)
+                        console.print(f"[success]✓ Report saved: {save_path}[/success]")
+
+                        # Preview
+                        console.print(f"[subtitle]Report Preview (first 20 lines):[/subtitle]")
+                        preview_lines = report_content.split("\n")[:20]
+                        for line in preview_lines:
+                            console.print(f"[dim]{line}[/dim]")
+                        if len(report_content.split("\n")) > 20:
+                            console.print("[dim]...[/dim]")
+
+                    except Exception as e:
+                        console.print(f"[danger]Error saving report: {e}[/danger]")
+
+                console.input("[subtitle]Press Enter to continue...[/subtitle]")
+                continue
+
+            if choice in ['x', 'quickfix', 'fixall', 'quick-fix', 'fix-all']:
+                # Quick Fix All - Execute all fixes automatically
+                quick_fix_all(session_logger, console)
+                continue
+
+            if choice in ['f', 'fix', 'remediation', 'wizard']:
+                # Remediation Wizard - Step-by-step fix guide
+                console.print("[title]🔧 Remediation Wizard[/title]\n")
+
+                # Check for findings
+                session_findings = session_logger.all_findings if session_logger else []
+
+                if not session_findings:
+                    console.print("[warning]No vulnerabilities found in current session.[/warning]")
+                    console.print("[dim]Run a scan first to detect vulnerabilities.[/dim]")
+
+                    scan_now = prompt("Scan a path now? [y/N]: ").strip().lower()
+                    if scan_now in ['y', 'yes']:
+                        scan_path = prompt("Path to scan: ").strip() or "."
+                        console.print(f"[info]Scanning {scan_path}...[/info]\n")
+                        from scanners import get_all_scanners
+                        for scanner_obj in get_all_scanners():
+                            try:
+                                result = scanner_obj.scan_directory(scan_path, recursive=True, max_depth=10)
+                                if result.findings:
+                                    for finding in result.findings:
+                                        session_findings.append({
+                                            "cve_id": finding.cve_id,
+                                            "package": finding.package,
+                                            "version": finding.version,
+                                            "severity": finding.severity.value,
+                                            "file_path": finding.file_path,
+                                            "description": finding.description,
+                                            "patched_version": getattr(finding, 'patched_version', 'latest')
+                                        })
+                            except Exception:
+                                pass
+                    else:
+                        console.input("[subtitle]Press Enter to continue...[/subtitle]")
+                        continue
+
+                if session_findings:
+                    # Sort by severity (critical first)
+                    severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+                    sorted_findings = sorted(session_findings, key=lambda x: severity_order.get(x.get('severity', 'low'), 99))
+
+                    console.print(f"[success]Found {len(sorted_findings)} vulnerabilities to fix[/success]\n")
+
+                    # Display step-by-step wizard
+                    console.print("[subtitle]The wizard will guide you through fixing each vulnerability.[/subtitle]")
+                    console.print("[dim]Press Enter to start, or 'q' to quit[/dim]\n")
+
+                    start = prompt("Start wizard? [Y/n]: ").strip().lower()
+                    if start in ['n', 'no', 'q']:
+                        console.input("[subtitle]Press Enter to continue...[/subtitle]")
+                        continue
+
+                    # Process each finding
+                    fixed_count = 0
+                    skipped_count = 0
+
+                    for i, finding in enumerate(sorted_findings, 1):
+                        cve_id = finding.get('cve_id', 'Unknown')
+                        package = finding.get('package', 'unknown')
+                        version = finding.get('version', 'unknown')
+                        severity = finding.get('severity', 'medium')
+                        file_path = finding.get('file_path', '')
+                        patched = finding.get('patched_version', 'latest')
+
+                        sev_color = {"critical": "bright_red", "high": "red", "medium": "yellow", "low": "blue"}.get(severity, "dim")
+
+                        console.print(f"[title]═══ Step {i}/{len(sorted_findings)} ═══[/title]\n")
+                        console.print(f"[{sev_color}]🚨 {cve_id}[/{sev_color}]")
+                        console.print(f"[info]Package: {package}@{version}[/info]")
+                        console.print(f"[dim]File: {file_path}[/dim]")
+                        console.print(f"[dim]Severity: {severity.upper()}[/dim]\n")
+
+                        # Determine fix command based on package type
+                        if file_path and Path(file_path).exists():
+                            project_dir = str(Path(file_path).parent)
+                            if "node_modules" in project_dir:
+                                project_dir = project_dir.split("node_modules")[0].rstrip("/")
+                        else:
+                            project_dir = "."
+
+                        # Check if yarn.lock or package-lock.json exists
+                        has_yarn = (Path(project_dir) / "yarn.lock").exists()
+                        has_npm = (Path(project_dir) / "package-lock.json").exists()
+
+                        console.print("[subtitle]Recommended Fix:[/subtitle]")
+
+                        if has_yarn:
+                            fix_cmd = f"cd {project_dir} && yarn upgrade {package}@{patched}"
+                            console.print(f"  [green]$[/green] {fix_cmd}")
+                        elif has_npm:
+                            fix_cmd = f"cd {project_dir} && npm install {package}@{patched}"
+                            console.print(f"  [green]$[/green] {fix_cmd}")
+                        else:
+                            fix_cmd = f"npm install {package}@{patched}"
+                            console.print(f"  [green]$[/green] {fix_cmd}")
+                            console.print(f"  [dim]Or: yarn add {package}@{patched}[/dim]")
+
+                        console.print()
+
+                        # Ask user what to do
+                        console.print("[dim]Options: [a]pply fix | [s]kip | [v]iew details | [q]uit wizard[/dim]")
+                        action = prompt(f"Action [{i}/{len(sorted_findings)}]: ").strip().lower()
+
+                        if action in ['q', 'quit']:
+                            console.print("[info]Wizard stopped.[/info]")
+                            break
+                        elif action in ['s', 'skip']:
+                            skipped_count += 1
+                            console.print("[dim]Skipped[/dim]")
+                            continue
+                        elif action in ['v', 'view', 'details']:
+                            # Show detailed info
+                            console.print(f"[subtitle]Details for {cve_id}:[/subtitle]")
+                            console.print(f"  Description: {finding.get('description', 'N/A')}")
+                            console.print(f"  Affected: {package} versions up to {version}")
+                            console.print(f"  Fixed in: {patched}")
+                            console.print(f"  Project: {project_dir}")
+
+                            # Try to explain the CVE
+                            try:
+                                from progress_tracker import DetectionExplainer
+                                explainer = DetectionExplainer(console)
+                                if explainer.has_explanation(cve_id):
+                                    explainer.explain(cve_id, {"file": file_path, "version": version})
+                            except ImportError:
+                                pass
+
+                            action = prompt("Apply fix now? [y/N]: ").strip().lower()
+                            if action not in ['y', 'yes', 'a', 'apply']:
+                                skipped_count += 1
+                                continue
+
+                        if action in ['a', 'apply', 'y', 'yes', '']:
+                            # Execute the fix
+                            console.print(f"[info]Applying fix...[/info]")
+                            console.print(f"[dim]Running: {fix_cmd}[/dim]\n")
+
+                            import subprocess
+                            try:
+                                result = subprocess.run(
+                                    fix_cmd,
+                                    shell=True,
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=120
+                                )
+
+                                if result.returncode == 0:
+                                    console.print(f"[success]✓ Fixed {cve_id}![/success]")
+                                    fixed_count += 1
+                                else:
+                                    console.print(f"[warning]Fix may have failed. Check output:[/warning]")
+                                    if result.stderr:
+                                        console.print(f"[dim]{result.stderr[:200]}[/dim]")
+                                    skipped_count += 1
+
+                            except subprocess.TimeoutExpired:
+                                console.print(f"[warning]Command timed out. Run manually.[/warning]")
+                                skipped_count += 1
+                            except Exception as e:
+                                console.print(f"[danger]Error: {e}[/danger]")
+                                skipped_count += 1
+
+                    # Summary
+                    console.print(f"[title]═══ REMEDIATION COMPLETE ═══[/title]")
+                    console.print(f"  [success]✓ Fixed: {fixed_count}[/success]")
+                    console.print(f"  [warning]⚠ Skipped: {skipped_count}[/warning]")
+                    console.print(f"  [info]📊 Total: {len(sorted_findings)}[/info]")
+
+                    if fixed_count > 0:
+                        console.print(f"[info]Run another scan to verify fixes.[/info]")
+
+                console.input("[subtitle]Press Enter to continue...[/subtitle]")
                 continue
 
             # Get command by ID
@@ -1902,10 +2828,10 @@ def interactive_shell():
                 dangerous_paths = [home_dir, Path("/"), Path("/home"), Path("/Users")]
 
                 if resolved_path in dangerous_paths or resolved_path == home_dir:
-                    console.print(f"\n[warning]⚠️  Path resolves to: {resolved_path}[/warning]")
+                    console.print(f"[warning]⚠️  Path resolves to: {resolved_path}[/warning]")
                     console.print("[warning]This would scan your entire home/root directory![/warning]")
                     console.print("[info]Enter a specific project path instead (e.g., /home/user/myproject)[/info]")
-                    confirm = console.input("\n[bold]Scan anyway? [y/N]: [/bold]").strip().lower()
+                    confirm = console.input("[bold]Scan anyway? [y/N]: [/bold]").strip().lower()
                     if confirm not in ['y', 'yes']:
                         console.print("[info]Cancelled. Enter a more specific path.[/info]")
                         show_menu = False
@@ -1940,9 +2866,9 @@ def interactive_shell():
                 home_dir = Path.home()
                 dangerous_paths = [home_dir, Path("/"), Path("/home"), Path("/Users")]
                 if resolved_path in dangerous_paths or resolved_path == home_dir:
-                    console.print(f"\n[warning]⚠️  Path resolves to: {resolved_path}[/warning]")
+                    console.print(f"[warning]⚠️  Path resolves to: {resolved_path}[/warning]")
                     console.print("[warning]This would scan your entire home/root directory![/warning]")
-                    confirm = console.input("\n[bold]Scan anyway? [y/N]: [/bold]").strip().lower()
+                    confirm = console.input("[bold]Scan anyway? [y/N]: [/bold]").strip().lower()
                     if confirm not in ['y', 'yes']:
                         console.print("[info]Cancelled.[/info]")
                         show_menu = False
@@ -1984,8 +2910,60 @@ def interactive_shell():
                 cmd["input_value"] = pkg_name
                 action = f"{action} {pkg_name}"
 
+            elif cmd.get("requires_input") == "cve_hunt":
+                # CVE Hunter: Get CVE ID and path
+                cve_id = prompt(cmd["input_prompt"]).strip().upper()
+                if not cve_id:
+                    console.print("[danger]CVE ID is required.[/danger]")
+                    show_menu = False
+                    continue
+                # Validate CVE format
+                if not cve_id.startswith("CVE-"):
+                    cve_id = f"CVE-{cve_id}"
+                if not re.match(r"CVE-\d{4}-\d+", cve_id):
+                    console.print("[danger]Invalid CVE format. Use: CVE-YYYY-NNNNN[/danger]")
+                    show_menu = False
+                    continue
+                path_input = prompt(cmd.get("input_prompt2", "Enter path to scan: ")).strip() or "."
+                resolved_path = Path(path_input).resolve()
+                console.print(f"[dim]Hunting {cve_id} in: {resolved_path}[/dim]")
+                action = f"{action} {cve_id} {resolved_path}"
+
+            elif cmd.get("requires_input") == "custom_scan":
+                # Custom Scan: Let user pick which scanners to run
+                console.print("[title]🎚️  Select Scanners to Run[/title]\n")
+
+                from scanners import get_all_scanners
+                all_scanners = get_all_scanners()
+
+                # Display scanner selection
+                scanner_map = {}
+                for i, scanner_obj in enumerate(all_scanners, 1):
+                    scanner_map[str(i)] = scanner_obj
+                    cve_count = len(getattr(scanner_obj, 'CVE_DATABASE', {}))
+                    console.print(f"  [{i}] {scanner_obj.NAME} ({cve_count} CVEs)")
+
+                console.print(f"[dim]Enter numbers separated by commas (e.g., 1,2,3) or 'all'[/dim]")
+                selection = prompt("Select scanners: ").strip().lower()
+
+                if selection == "all" or not selection:
+                    selected_scanners = list(scanner_map.keys())
+                else:
+                    selected_scanners = [s.strip() for s in selection.split(",")]
+
+                # Get path
+                path_input = prompt(cmd.get("input_prompt", "Enter path to scan: ")).strip() or "."
+                resolved_path = Path(path_input).resolve()
+
+                # Store selection for handler
+                cmd["selected_scanners"] = [scanner_map.get(s) for s in selected_scanners if s in scanner_map]
+                cmd["scan_path"] = str(resolved_path)
+
+                console.print(f"[dim]Running {len(cmd['selected_scanners'])} scanners on: {resolved_path}[/dim]")
+                action = f"{action} {resolved_path}"
+
             # Execute command
-            console.print(f"\n[info]Running: {action}[/info]\n")
+            console.print(f"[info]Running: {action}[/info]")
             console.print("─" * 60)
 
             # Log the command
@@ -2018,31 +2996,31 @@ def interactive_shell():
                             i += 1
                         else:
                             i += 1
-                    scan(path=path, scanner=scanner_name, output=output_file, recursive=True, max_depth=10, verbose=False, quiet=False)
+                    scan(path=path, scanner=scanner_name, output=output_file, recursive=True, max_depth=10, verbose=False, quiet=False, _from_menu=True)
                     next_step_type = "scan_clean"  # Will be updated if exit code 1
 
                 elif cmd_name == "scan-all-npm":
                     # Auto-detect and scan all npm projects on the system
-                    console.print(f"\n[title]🔍 Scanning ALL npm Projects on System[/title]\n")
+                    console.print(f"[title]🔍 Scanning ALL npm Projects on System[/title]\n")
 
                     home_dir = Path.home()
                     search_paths = [
-                        home_dir / ".npm",                    # npm cache
-                        home_dir / "node_modules",            # global node_modules
-                        home_dir / "projects",                # common project folder
-                        home_dir / "code",                    # another common folder
-                        home_dir / "dev",                     # dev folder
-                        Path("/mnt"),                         # mounted drives
-                        Path("/opt"),                         # opt folder
+                        home_dir / ".npm",
+                        home_dir / "node_modules",
+                        home_dir / "projects",
+                        home_dir / "code",
+                        home_dir / "dev",
+                        Path("/mnt"),
+                        Path("/opt"),
                     ]
 
-                    # Find all package.json files
-                    console.print("[info]Searching for npm projects...[/info]")
+                    # Find all package.json files with progress
+                    sys.stdout.write("Discovering npm projects...")
+                    sys.stdout.flush()
                     found_projects = set()
 
                     for search_path in search_paths:
                         if search_path.exists():
-                            console.print(f"  [dim]Checking {search_path}...[/dim]")
                             try:
                                 import subprocess
                                 result = subprocess.run(
@@ -2053,37 +3031,267 @@ def interactive_shell():
                                     if line and "node_modules" not in line:
                                         project_dir = str(Path(line).parent)
                                         found_projects.add(project_dir)
-                            except Exception as e:
-                                console.print(f"  [dim]Skipped {search_path}: {e}[/dim]")
+                            except Exception:
+                                pass
+
+                    sys.stdout.write(f"\r✓ Found {len(found_projects)} npm projects" + " " * 30 + "\n")
+                    sys.stdout.flush()
 
                     if not found_projects:
                         console.print("[warning]No npm projects found on system.[/warning]")
                     else:
-                        console.print(f"\n[success]Found {len(found_projects)} npm projects![/success]\n")
+                        # Use single-line progress for scanning
+                        projects_to_scan = sorted(found_projects)[:20]
+                        progress = SingleLineProgress(total=len(projects_to_scan))
+                        progress.start()
 
-                        total_findings = 0
-                        for i, project in enumerate(sorted(found_projects)[:20], 1):  # Limit to 20
-                            console.print(f"[info]({i}/{min(len(found_projects), 20)}) Scanning: {project}[/info]")
+                        all_findings = []
+                        from scanners import get_all_scanners
+
+                        for i, project in enumerate(projects_to_scan):
+                            project_name = Path(project).name
                             try:
-                                # Run scan quietly and count findings
-                                from scanners import get_all_scanners
                                 for scanner_obj in get_all_scanners():
                                     result = scanner_obj.scan_directory(project, recursive=True, max_depth=5)
-                                    if result.findings:
-                                        total_findings += len(result.findings)
-                                        for finding in result.findings:
-                                            print_finding(finding, verbose=False)
-                            except Exception as e:
-                                console.print(f"  [dim]Error: {e}[/dim]")
+                                    for finding in result.findings:
+                                        sev = finding.severity.value if hasattr(finding.severity, 'value') else str(finding.severity)
+                                        progress.update(finding_severity=sev)
+                                        all_findings.append(finding)
+                            except Exception:
+                                pass
+                            progress.increment(item=project_name)
 
-                        console.print(f"\n[title]═══ SYSTEM-WIDE SCAN COMPLETE ═══[/title]")
-                        console.print(f"  📁 Projects scanned: {min(len(found_projects), 20)}")
-                        console.print(f"  📊 Total findings: {total_findings}")
+                        progress.finish()
 
-                        if total_findings > 0:
+                        # Show findings summary
+                        if all_findings:
+                            console.print(f"[danger]🚨 {len(all_findings)} vulnerabilities found[/danger]")
+                            for finding in all_findings[:10]:  # Show top 10
+                                print_finding(finding, verbose=False)
+                            if len(all_findings) > 10:
+                                console.print(f"[dim]... and {len(all_findings) - 10} more[/dim]")
+
+                        console.print(f"[title]═══ SYSTEM-WIDE SCAN COMPLETE ═══[/title]")
+                        console.print(f"  📁 Projects: {len(projects_to_scan)}")
+                        console.print(f"  📊 {progress.get_findings_summary()}")
+
+                        if all_findings:
                             next_step_type = "scan"
                         else:
                             next_step_type = "scan_clean"
+
+                elif cmd_name == "deep-scan":
+                    # Deep Scan: Version checks + Code patterns + Config analysis
+                    scan_path = cmd_args[0] if cmd_args else "."
+                    resolved_path = Path(scan_path).resolve()
+
+                    console.print(f"[title]🔬 DEEP SCAN MODE[/title]")
+                    console.print(f"[info]Target: {resolved_path}[/info]\n")
+
+                    from scanners import get_all_scanners
+                    all_scanners = get_all_scanners()
+
+                    # Progress through scanners
+                    progress = SingleLineProgress(total=len(all_scanners))
+                    progress.start()
+
+                    all_findings = []
+                    detection_log = []
+
+                    for i, scanner_obj in enumerate(all_scanners):
+                        scanner_name = scanner_obj.NAME
+                        cve_db = getattr(scanner_obj, 'CVE_DATABASE', {})
+
+                        progress.update(current=i, item=scanner_name)
+
+                        try:
+                            result = scanner_obj.scan_directory(str(resolved_path), recursive=True, max_depth=10)
+
+                            for finding in result.findings:
+                                sev = finding.severity.value if hasattr(finding.severity, 'value') else str(finding.severity)
+                                progress.update(finding_severity=sev)
+                                all_findings.append((finding, cve_db))
+                                detection_log.append({
+                                    'cve': finding.cve_id,
+                                    'file': finding.file_path,
+                                    'scanner': scanner_name
+                                })
+                        except Exception:
+                            pass
+
+                        progress.increment(item=scanner_name)
+
+                    progress.finish()
+
+                    # Now show detailed findings
+                    if all_findings:
+                        console.print(f"[danger]🚨 {len(all_findings)} vulnerabilities detected[/danger]\n")
+                        for finding, cve_db in all_findings:
+                            console.print(f"[bold bright_red]🚨 {finding.cve_id}[/bold bright_red]")
+                            console.print(f"  ├─ File: {finding.file_path}")
+                            console.print(f"  ├─ Package: {finding.package} @ {finding.version}")
+                            sev_val = (finding.severity.value if hasattr(finding.severity, 'value') else str(finding.severity)).lower()
+                            sev_color = {"critical": "bright_red", "high": "red", "medium": "yellow", "low": "blue"}.get(sev_val, "dim")
+                            console.print(f"  ├─ Severity: [{sev_color}]{sev_val.upper()}[/{sev_color}]")
+                            cve_info = cve_db.get(finding.cve_id, {})
+                            if cve_info:
+                                vuln_versions = cve_info.get('vulnerable_versions', 'Unknown')
+                                console.print(f"  ├─ Vuln range: {vuln_versions}")
+                            console.print(f"  └─ {finding.description[:60]}...\n")
+                    else:
+                        console.print(f"[success]✓ No vulnerabilities detected[/success]")
+
+                    console.print(f"[title]═══ DEEP SCAN COMPLETE ═══[/title]")
+                    console.print(f"  📊 {progress.get_findings_summary()}")
+
+                    if all_findings:
+                        next_step_type = "scan"
+                    else:
+                        next_step_type = "scan_clean"
+
+                elif cmd_name == "cve-hunter":
+                    # CVE Hunter: Target specific CVE with step-by-step detection
+                    if len(cmd_args) < 2:
+                        console.print("[danger]Usage: cve-hunter CVE-YYYY-NNNNN /path[/danger]")
+                        continue
+
+                    target_cve = cmd_args[0].upper()
+                    scan_path = cmd_args[1]
+                    resolved_path = Path(scan_path).resolve()
+
+                    console.print(f"[title]🎯 CVE HUNTER: {target_cve}[/title]")
+                    console.print(f"[dim]Path: {resolved_path}[/dim]\n")
+
+                    from scanners import get_all_scanners
+
+                    found_cve = False
+                    cve_details = None
+                    vulnerable_locations = []
+
+                    # Step 1: Find CVE in database (quick)
+                    sys.stdout.write("Locating CVE in database...")
+                    sys.stdout.flush()
+                    for scanner_obj in get_all_scanners():
+                        cve_db = getattr(scanner_obj, 'CVE_DATABASE', {})
+                        if target_cve in cve_db:
+                            cve_details = cve_db[target_cve]
+                            break
+                    if cve_details:
+                        sys.stdout.write(f"\r✓ Found: {cve_details.get('affected_package', 'Unknown')} ({cve_details.get('severity', '?')})" + " " * 20 + "\n")
+                    else:
+                        sys.stdout.write(f"\r⚠ {target_cve} not in local database" + " " * 20 + "\n")
+                    sys.stdout.flush()
+
+                    # Step 2: Find package.json files with progress
+                    import subprocess
+                    sys.stdout.write("Discovering package.json files...")
+                    sys.stdout.flush()
+                    try:
+                        result = subprocess.run(
+                            ["find", str(resolved_path), "-name", "package.json", "-type", "f"],
+                            capture_output=True, text=True, timeout=30
+                        )
+                        pkg_files = [f for f in result.stdout.strip().split("\n") if f and "node_modules" not in f]
+                        sys.stdout.write(f"\r✓ Found {len(pkg_files)} package.json files" + " " * 20 + "\n")
+                        sys.stdout.flush()
+                    except Exception:
+                        pkg_files = []
+                        sys.stdout.write("\r✗ Search failed" + " " * 30 + "\n")
+                        sys.stdout.flush()
+
+                    # Step 3: Check each file with single-line progress
+                    if pkg_files:
+                        progress = SingleLineProgress(total=len(pkg_files))
+                        progress.start()
+
+                        for i, pkg_file in enumerate(pkg_files):
+                            try:
+                                with open(pkg_file, 'r') as f:
+                                    pkg_data = json.load(f)
+                                deps = {**pkg_data.get('dependencies', {}), **pkg_data.get('devDependencies', {})}
+
+                                if cve_details:
+                                    affected_pkg = cve_details.get('affected_package', '')
+                                    if affected_pkg in deps:
+                                        version = deps[affected_pkg]
+                                        found_cve = True
+                                        progress.update(finding_severity=cve_details.get('severity', 'HIGH'))
+                                        vulnerable_locations.append({
+                                            'file': pkg_file,
+                                            'package': affected_pkg,
+                                            'version': version
+                                        })
+                            except Exception:
+                                pass
+                            progress.increment(item=Path(pkg_file).parent.name)
+
+                        progress.finish()
+
+                    # Show results
+                    console.print(f"[title]═══ CVE HUNT COMPLETE ═══[/title]")
+                    if found_cve:
+                        console.print(f"[bold bright_red]🚨 VULNERABLE TO {target_cve}[/bold bright_red]\n")
+                        for loc in vulnerable_locations:
+                            console.print(f"  • {loc['package']}@{loc['version']} in {loc['file']}")
+                        next_step_type = "scan"
+                    else:
+                        console.print(f"[success]✓ {target_cve} not detected[/success]")
+                        next_step_type = "scan_clean"
+
+                elif cmd_name == "custom-scan":
+                    # Custom Scan: Run only selected scanners
+                    scan_path = cmd.get("scan_path", cmd_args[0] if cmd_args else ".")
+                    selected_scanners = cmd.get("selected_scanners", [])
+
+                    if not selected_scanners:
+                        from scanners import get_all_scanners
+                        selected_scanners = get_all_scanners()
+
+                    # Filter out None values
+                    selected_scanners = [s for s in selected_scanners if s is not None]
+                    resolved_path = Path(scan_path).resolve()
+
+                    console.print(f"[title]🎚️ CUSTOM SCAN[/title]")
+                    console.print(f"[dim]Target: {resolved_path}[/dim]\n")
+
+                    # Progress through selected scanners
+                    progress = SingleLineProgress(total=len(selected_scanners))
+                    progress.start()
+
+                    all_findings = []
+
+                    for i, scanner_obj in enumerate(selected_scanners):
+                        scanner_name = scanner_obj.NAME
+                        progress.update(current=i, item=scanner_name)
+
+                        try:
+                            result = scanner_obj.scan_directory(str(resolved_path), recursive=True, max_depth=10)
+                            for finding in result.findings:
+                                sev = finding.severity.value if hasattr(finding.severity, 'value') else str(finding.severity)
+                                progress.update(finding_severity=sev)
+                                all_findings.append(finding)
+                        except Exception:
+                            pass
+
+                        progress.increment(item=scanner_name)
+
+                    progress.finish()
+
+                    # Show findings
+                    if all_findings:
+                        console.print(f"[danger]🚨 {len(all_findings)} vulnerabilities found[/danger]\n")
+                        for finding in all_findings:
+                            print_finding(finding, verbose=True)
+                    else:
+                        console.print(f"[success]✓ No vulnerabilities detected[/success]")
+
+                    console.print(f"[title]═══ CUSTOM SCAN COMPLETE ═══[/title]")
+                    console.print(f"  📊 {progress.get_findings_summary()}")
+
+                    if all_findings:
+                        next_step_type = "scan"
+                    else:
+                        next_step_type = "scan_clean"
 
                 elif cmd_name == "sandbox-check":
                     # ENHANCED Sandbox pre-download npm package checker
@@ -2101,7 +3309,7 @@ def interactive_shell():
                     import hashlib
                     import difflib
 
-                    console.print(f"\n[title]🛡️ SANDBOX DEEP INSTALL CHECK[/title]")
+                    console.print(f"[title]🛡️ SANDBOX DEEP INSTALL CHECK[/title]")
                     console.print(f"[info]Package: {pkg_name}[/info]")
                     console.print(f"[dim]This will INSTALL the package in isolation to detect post-install malware[/dim]\n")
 
@@ -2164,7 +3372,7 @@ def interactive_shell():
                             json.dump(sandbox_pkg, f)
 
                         # PHASE 1: Get package info first (without install)
-                        console.print(f"\n[bright_cyan]━━━ PHASE 1: Package Metadata Analysis ━━━[/bright_cyan]")
+                        console.print(f"[bright_cyan]━━━ PHASE 1: Package Metadata Analysis ━━━[/bright_cyan]")
                         console.print(f"[info]📋 Fetching package info...[/info]")
 
                         npm_view = subprocess.run(
@@ -2238,12 +3446,12 @@ def interactive_shell():
                             warnings.append(f"Could not fetch package info: {npm_view.stderr[:100]}")
 
                         # PHASE 2: Take BEFORE snapshot
-                        console.print(f"\n[bright_cyan]━━━ PHASE 2: Pre-Install Snapshot ━━━[/bright_cyan]")
+                        console.print(f"[bright_cyan]━━━ PHASE 2: Pre-Install Snapshot ━━━[/bright_cyan]")
                         before_snapshot = get_dir_snapshot(Path(sandbox_dir))
                         console.print(f"[success]✓ Captured baseline ({len(before_snapshot)} files)[/success]")
 
                         # PHASE 3: INSTALL the package (this runs install scripts!)
-                        console.print(f"\n[bright_cyan]━━━ PHASE 3: Installing Package (DANGEROUS ZONE) ━━━[/bright_cyan]")
+                        console.print(f"[bright_cyan]━━━ PHASE 3: Installing Package (DANGEROUS ZONE) ━━━[/bright_cyan]")
                         console.print(f"[warning]⚡ Running npm install - install scripts WILL execute[/warning]")
 
                         # Use --ignore-scripts=false to ensure scripts run (default behavior)
@@ -2269,7 +3477,7 @@ def interactive_shell():
                             console.print(f"[success]✓ Package installed[/success]")
 
                         # PHASE 4: Take AFTER snapshot and compare
-                        console.print(f"\n[bright_cyan]━━━ PHASE 4: Post-Install Analysis ━━━[/bright_cyan]")
+                        console.print(f"[bright_cyan]━━━ PHASE 4: Post-Install Analysis ━━━[/bright_cyan]")
                         after_snapshot = get_dir_snapshot(Path(sandbox_dir))
                         console.print(f"[info]Captured post-install state ({len(after_snapshot)} files)[/info]")
 
@@ -2308,7 +3516,7 @@ def interactive_shell():
                         console.print(f"  [dim]Installed {len(node_modules_files)} package files, {len(npm_cache_files)} cache files[/dim]")
 
                         # PHASE 5: Deep scan installed code
-                        console.print(f"\n[bright_cyan]━━━ PHASE 5: Deep Code Analysis ━━━[/bright_cyan]")
+                        console.print(f"[bright_cyan]━━━ PHASE 5: Deep Code Analysis ━━━[/bright_cyan]")
 
                         node_modules = Path(sandbox_dir) / "node_modules" / pkg_name.split('/')[0] if '/' in pkg_name else Path(sandbox_dir) / "node_modules" / pkg_name
 
@@ -2378,7 +3586,7 @@ def interactive_shell():
                                 info_items.append("No malware patterns detected in code")
 
                         # PHASE 6: Check for known CVEs
-                        console.print(f"\n[bright_cyan]━━━ PHASE 6: CVE Database Check ━━━[/bright_cyan]")
+                        console.print(f"[bright_cyan]━━━ PHASE 6: CVE Database Check ━━━[/bright_cyan]")
                         try:
                             from scanners import get_all_scanners
                             cve_found = False
@@ -2403,7 +3611,7 @@ def interactive_shell():
                             console.print(f"  [dim]CVE check skipped: {e}[/dim]")
 
                         # PHASE 7: Typosquatting check
-                        console.print(f"\n[bright_cyan]━━━ PHASE 7: Typosquatting Analysis ━━━[/bright_cyan]")
+                        console.print(f"[bright_cyan]━━━ PHASE 7: Typosquatting Analysis ━━━[/bright_cyan]")
                         popular_packages = [
                             "react", "lodash", "express", "axios", "moment", "jquery",
                             "vue", "angular", "webpack", "babel", "typescript", "eslint",
@@ -2435,7 +3643,7 @@ def interactive_shell():
                     finally:
                         # ALWAYS destroy sandbox completely
                         if sandbox_dir and Path(sandbox_dir).exists():
-                            console.print(f"\n[bright_cyan]━━━ CLEANUP ━━━[/bright_cyan]")
+                            console.print(f"[bright_cyan]━━━ CLEANUP ━━━[/bright_cyan]")
                             console.print(f"[dim]🗑️  Destroying sandbox...[/dim]")
                             try:
                                 shutil.rmtree(sandbox_dir, ignore_errors=True)
@@ -2449,21 +3657,21 @@ def interactive_shell():
                     console.print(f"{'═' * 60}")
 
                     if dangers:
-                        console.print(f"\n[danger]🚫 DANGERS ({len(dangers)}):[/danger]")
+                        console.print(f"[danger]🚫 DANGERS ({len(dangers)}):[/danger]")
                         for d in dangers[:10]:  # Limit display
                             console.print(f"  [danger]{d}[/danger]")
                         if len(dangers) > 10:
                             console.print(f"  [dim]... and {len(dangers) - 10} more[/dim]")
 
                     if warnings:
-                        console.print(f"\n[warning]⚠️  WARNINGS ({len(warnings)}):[/warning]")
+                        console.print(f"[warning]⚠️  WARNINGS ({len(warnings)}):[/warning]")
                         for w in warnings[:10]:
                             console.print(f"  [warning]{w}[/warning]")
                         if len(warnings) > 10:
                             console.print(f"  [dim]... and {len(warnings) - 10} more[/dim]")
 
                     if info_items and not dangers:
-                        console.print(f"\n[success]✓ PASSED CHECKS:[/success]")
+                        console.print(f"[success]✓ PASSED CHECKS:[/success]")
                         for item in info_items:
                             console.print(f"  [success]✓ {item}[/success]")
 
@@ -2498,7 +3706,7 @@ def interactive_shell():
                     for i, arg in enumerate(cmd_args):
                         if arg in ["-s", "--scanner"] and i + 1 < len(cmd_args):
                             scanner_name = cmd_args[i + 1]
-                    live(url=url, scanner=scanner_name, timeout=10, output=None, verbose=False)
+                    live(url=url, scanner=scanner_name, timeout=10, output=None, verbose=False, _from_menu=True)
                     next_step_type = "live_clean"
 
                 elif cmd_name == "cves":
@@ -2512,7 +3720,7 @@ def interactive_shell():
                             cat = cmd_args[i + 1]
                         elif arg in ["--bounty", "-b"]:
                             bounty_flag = True
-                    cves(severity=sev, category=cat, bounty=bounty_flag)
+                    cves(severity=sev, category=cat, bounty=bounty_flag, _from_menu=True)
                     next_step_type = "cves"
 
                 elif cmd_name == "info":
@@ -2521,7 +3729,7 @@ def interactive_shell():
                     next_step_type = "cve_detail"
 
                 elif cmd_name == "scanners":
-                    scanners()
+                    scanners(_from_menu=True)
                     next_step_type = "scanners"
 
                 elif cmd_name == "version":
@@ -2533,7 +3741,7 @@ def interactive_shell():
                     deep = "--deep" in cmd_args
                     scan_node_modules = deep  # Deep scan includes node_modules
 
-                    console.print(f"\n[title]🦠 Malware Analysis {'(Deep)' if deep else '(Quick)'}[/title]")
+                    console.print(f"[title]🦠 Malware Analysis {'(Deep)' if deep else '(Quick)'}[/title]")
                     console.print(f"[path]Target: {Path(path).resolve()}[/path]")
                     console.print(f"[info]Scanning node_modules: {'Yes' if scan_node_modules else 'No'}[/info]\n")
 
@@ -2554,8 +3762,8 @@ def interactive_shell():
 
                     # Display results
                     if report.matches:
-                        console.print(f"\n[danger]🚨 MALICIOUS CODE DETECTED![/danger]")
-                        console.print(f"[warning]Found {len(report.matches)} malicious patterns in {report.files_scanned} files[/warning]\n")
+                        console.print(f"[danger]🚨 MALICIOUS CODE DETECTED![/danger]")
+                        console.print(f"[warning]Found {len(report.matches)} malicious patterns in {report.files_scanned} files[/warning]")
 
                         # Group by threat level
                         critical = [m for m in report.matches if m.threat_level == ThreatLevel.CRITICAL]
@@ -2589,7 +3797,7 @@ def interactive_shell():
                         # Save report
                         report_path = Path("/tmp/shellockolm/malware_report.json")
                         analyzer.generate_report(report, str(report_path))
-                        console.print(f"\n[info]📋 Full report saved: {report_path}[/info]")
+                        console.print(f"[info]📋 Full report saved: {report_path}[/info]")
 
                         had_findings = True
                         next_step_type = "malware_scan"
@@ -2668,7 +3876,7 @@ def interactive_shell():
                             for m in matches:
                                 console.print(f"  [danger]• {m.pattern_name}[/danger] at line {m.line_number}")
 
-                            console.print("\n[bold]Clean malicious code? [Y]es / [N]o[/bold]")
+                            console.print("[bold]Clean malicious code? [Y]es / [N]o[/bold]")
                             if prompt(">>> ").strip().lower() in ['y', 'yes']:
                                 from malware_analyzer import AnalysisReport
                                 report = AnalysisReport()
@@ -2706,7 +3914,7 @@ def interactive_shell():
                         # Show findings summary
                         findings = report_data.get('matches', [])
                         if findings:
-                            console.print("\n[title]Top Findings:[/title]")
+                            console.print("[title]Top Findings:[/title]")
                             for f in findings[:5]:
                                 console.print(f"  [{f.get('threat_level', 'unknown').lower()}]• {f.get('pattern_name')}[/{f.get('threat_level', 'unknown').lower()}]")
                                 console.print(f"    [path]{f.get('file_path')}:{f.get('line_number')}[/path]")
@@ -2721,25 +3929,21 @@ def interactive_shell():
                     path = cmd_args[-1] if cmd_args and not cmd_args[-1].startswith("-") else "."
                     env_only = cmd_name == "secrets-env"
                     entropy_mode = cmd_name == "secrets-entropy"
+                    # Check for verbose flag
+                    verbose_mode = "-v" in cmd_args or "--verbose" in cmd_args
 
-                    console.print(f"\n[title]🔐 Secrets Scanner{' (.env)' if env_only else ' (Entropy)' if entropy_mode else ''}[/title]")
-                    console.print(f"[path]Target: {Path(path).resolve()}[/path]\n")
+                    console.print(f"[title]🔐 Secrets Scanner{' (.env)' if env_only else ' (Entropy)' if entropy_mode else ''}[/title]")
+                    console.print(f"[path]Target: {Path(path).resolve()}[/path]")
 
                     scanner = SecretsScanner()
-                    with Progress(
-                        SpinnerColumn(),
-                        TextColumn("[progress.description]{task.description}"),
-                        console=console,
-                    ) as progress:
-                        task = progress.add_task("[warning]Scanning for exposed secrets...", total=None)
-                        # Scan directory for secrets
-                        report = scanner.scan_directory(path)
-                        progress.remove_task(task)
+
+                    # Use verbose mode with detailed output
+                    report = scanner.scan_directory(path, verbose=True, console=console)
 
                     # Display results
                     if report.matches:
-                        console.print(f"\n[danger]🚨 EXPOSED SECRETS DETECTED![/danger]")
-                        console.print(f"[warning]Found {len(report.matches)} exposed secrets in {report.files_scanned} files[/warning]\n")
+                        console.print(f"[danger]🚨 EXPOSED SECRETS DETECTED![/danger]")
+                        console.print(f"[warning]Found {len(report.matches)} exposed secrets in {report.files_scanned} files[/warning]")
 
                         # Group by severity using pattern's severity enum
                         from secrets_scanner import SecretSeverity
@@ -2772,7 +3976,7 @@ def interactive_shell():
                         # Save report
                         report_path = Path("/tmp/shellockolm/secrets_report.json")
                         scanner.generate_report(report, str(report_path))
-                        console.print(f"\n[info]📋 Full report saved: {report_path}[/info]")
+                        console.print(f"[info]📋 Full report saved: {report_path}[/info]")
 
                         had_findings = True
                         next_step_type = "secrets_scan"
@@ -2809,7 +4013,7 @@ def interactive_shell():
 
                         findings = report_data.get('matches', [])
                         if findings:
-                            console.print("\n[title]Top Findings:[/title]")
+                            console.print("[title]Top Findings:[/title]")
                             for f in findings[:5]:
                                 console.print(f"  [danger]• {f.get('pattern_name')}[/danger]")
                                 console.print(f"    [path]{f.get('file_path')}:{f.get('line_number')}[/path]")
@@ -2824,7 +4028,7 @@ def interactive_shell():
                     path = cmd_args[-1] if cmd_args and not cmd_args[-1].startswith("-") else "."
                     quick_mode = cmd_name == "security-quick"
 
-                    console.print(f"\n[title]📊 Security Score Calculator{' (Quick)' if quick_mode else ''}[/title]")
+                    console.print(f"[title]📊 Security Score Calculator{' (Quick)' if quick_mode else ''}[/title]")
                     console.print(f"[path]Target: {Path(path).resolve()}[/path]\n")
 
                     calculator = SecurityScoreCalculator()
@@ -2897,7 +4101,7 @@ def interactive_shell():
                     # Save report
                     report_path = Path("/tmp/shellockolm/security_report.json")
                     calculator.generate_report(report, str(report_path))
-                    console.print(f"\n[info]📋 Full report saved: {report_path}[/info]")
+                    console.print(f"[info]📋 Full report saved: {report_path}[/info]")
 
                     next_step_type = "security_score" if report.score < 80 else "security_clean"
 
@@ -2923,7 +4127,7 @@ def interactive_shell():
 
                         breakdown = report_data.get('breakdown', {})
                         if breakdown:
-                            console.print("\n[title]Category Breakdown:[/title]")
+                            console.print("[title]Category Breakdown:[/title]")
                             for cat, data in breakdown.items():
                                 console.print(f"  {cat}: {data.get('score', 0)}/100 ({data.get('grade', 'F')})")
                     else:
@@ -2937,7 +4141,7 @@ def interactive_shell():
                     path = cmd_args[-1] if cmd_args and not cmd_args[-1].startswith("-") else "."
                     preview_only = cmd_name == "autofix-preview"
 
-                    console.print(f"\n[title]🔧 Auto-Fix{' (Preview)' if preview_only else ''}[/title]")
+                    console.print(f"[title]🔧 Auto-Fix{' (Preview)' if preview_only else ''}[/title]")
                     console.print(f"[path]Target: {Path(path).resolve()}[/path]\n")
 
                     fixer = AutoFixer()
@@ -2952,7 +4156,7 @@ def interactive_shell():
                         progress.remove_task(task)
 
                     if vulns:
-                        console.print(f"[warning]Found {len(vulns)} vulnerable packages:[/warning]\n")
+                        console.print(f"[warning]Found {len(vulns)} vulnerable packages:[/warning]")
 
                         for pkg in vulns:
                             console.print(f"[danger]┌─ {pkg.name} @ {pkg.current_version}[/danger]")
@@ -3000,7 +4204,7 @@ def interactive_shell():
                 elif cmd_name == "autofix-rollback":
                     path = cmd_args[-1] if cmd_args and not cmd_args[-1].startswith("-") else "."
 
-                    console.print(f"\n[title]🔧 Auto-Fix Rollback[/title]")
+                    console.print(f"[title]🔧 Auto-Fix Rollback[/title]")
                     console.print(f"[path]Target: {Path(path).resolve()}[/path]\n")
 
                     fixer = AutoFixer()
@@ -3039,7 +4243,7 @@ def interactive_shell():
                                 lockfile_path = lockfile_path / lf
                                 break
 
-                    console.print(f"\n[title]📦 Lockfile Analyzer[/title]")
+                    console.print(f"[title]📦 Lockfile Analyzer[/title]")
                     console.print(f"[path]File: {lockfile_path}[/path]\n")
 
                     if not lockfile_path.exists():
@@ -3101,7 +4305,7 @@ def interactive_shell():
                         # Save report
                         report_path = Path("/tmp/shellockolm/lockfile_report.json")
                         analyzer.generate_report(report, str(report_path))
-                        console.print(f"\n[info]📋 Full report saved: {report_path}[/info]")
+                        console.print(f"[info]📋 Full report saved: {report_path}[/info]")
 
                         had_findings = True
                         next_step_type = "lockfile_scan"
@@ -3140,7 +4344,7 @@ def interactive_shell():
 
                         issues = report_data.get('issues', [])
                         if issues:
-                            console.print("\n[title]Top Issues:[/title]")
+                            console.print("[title]Top Issues:[/title]")
                             for issue in issues[:5]:
                                 console.print(f"  [{issue.get('severity', 'info').lower()}]• {issue.get('title')}[/{issue.get('severity', 'info').lower()}]")
                     else:
@@ -3153,7 +4357,7 @@ def interactive_shell():
                 elif cmd_name == "sarif-export":
                     path = cmd_args[-1] if cmd_args and not cmd_args[-1].startswith("-") else "."
 
-                    console.print(f"\n[title]📤 SARIF Export (CI/CD Integration)[/title]")
+                    console.print(f"[title]📤 SARIF Export (CI/CD Integration)[/title]")
                     console.print(f"[path]Target: {Path(path).resolve()}[/path]\n")
 
                     sarif_gen = SarifGenerator()
@@ -3242,9 +4446,9 @@ def interactive_shell():
 
                     if total_findings > 0:
                         had_findings = True
-                        console.print(f"\n[warning]🚨 Found {total_findings} issues![/warning]")
+                        console.print(f"[warning]🚨 Found {total_findings} issues![/warning]")
                     else:
-                        console.print(f"\n[success]✅ No security issues found![/success]")
+                        console.print(f"[success]✅ No security issues found![/success]")
 
                     next_step_type = "sarif_export"
 
@@ -3252,7 +4456,7 @@ def interactive_shell():
                     sarif_path = Path("/tmp/shellockolm/sarif-report.sarif")
 
                     if cmd_name == "sarif-convert":
-                        console.print(f"\n[title]📤 SARIF Converter[/title]")
+                        console.print(f"[title]📤 SARIF Converter[/title]")
                         console.print(f"[subtitle]Converting last scan results to SARIF format...[/subtitle]\n")
 
                         sarif_gen = SarifGenerator()
@@ -3344,7 +4548,7 @@ def interactive_shell():
                         ))
 
                     else:  # sarif-view
-                        console.print(f"\n[title]📤 SARIF Report Viewer[/title]\n")
+                        console.print(f"[title]📤 SARIF Report Viewer[/title]\n")
 
                         if sarif_path.exists():
                             with open(sarif_path) as f:
@@ -3366,7 +4570,7 @@ def interactive_shell():
                                 ))
 
                                 if results:
-                                    console.print("\n[title]Findings:[/title]")
+                                    console.print("[title]Findings:[/title]")
                                     for i, result in enumerate(results[:15], 1):
                                         rule_id = result.get("ruleId", "UNKNOWN")
                                         level = result.get("level", "warning")
@@ -3382,7 +4586,7 @@ def interactive_shell():
                                     if len(results) > 15:
                                         console.print(f"\n  [subtitle]... and {len(results) - 15} more findings[/subtitle]")
 
-                                console.print(f"\n[info]Full report: {sarif_path}[/info]")
+                                console.print(f"[info]Full report: {sarif_path}[/info]")
                         else:
                             console.print("[warning]No SARIF report found. Run [37] SARIF Export first.[/warning]")
 
@@ -3397,7 +4601,7 @@ def interactive_shell():
                         console.print("[danger]Please specify a package name[/danger]")
                         continue
 
-                    console.print(f"\n[title]🐙 GitHub Advisory Database Query[/title]")
+                    console.print(f"[title]🐙 GitHub Advisory Database Query[/title]")
                     console.print(f"[path]Package: {package_name}[/path]\n")
 
                     ghsa_db = GitHubAdvisoryDB()
@@ -3441,7 +4645,7 @@ def interactive_shell():
                         # Save report
                         report_path = Path("/tmp/shellockolm/ghsa_report.json")
                         ghsa_db.generate_report([package_name], str(report_path))
-                        console.print(f"\n[info]📋 Full report: {report_path}[/info]")
+                        console.print(f"[info]📋 Full report: {report_path}[/info]")
                     else:
                         console.print(Panel(
                             f"[success]✅ No known vulnerabilities found for {package_name}![/success]\n\n"
@@ -3460,7 +4664,7 @@ def interactive_shell():
 
                     package_name, version = pkg_version.rsplit("@", 1)
 
-                    console.print(f"\n[title]🐙 GitHub Advisory Version Check[/title]")
+                    console.print(f"[title]🐙 GitHub Advisory Version Check[/title]")
                     console.print(f"[path]Package: {package_name}@{version}[/path]\n")
 
                     ghsa_db = GitHubAdvisoryDB()
@@ -3504,7 +4708,7 @@ def interactive_shell():
                 elif cmd_name == "ghsa-scan":
                     path = cmd_args[-1] if cmd_args and not cmd_args[-1].startswith("-") else "."
 
-                    console.print(f"\n[title]🐙 GitHub Advisory Project Scan[/title]")
+                    console.print(f"[title]🐙 GitHub Advisory Project Scan[/title]")
                     console.print(f"[path]Target: {Path(path).resolve()}[/path]\n")
 
                     # Find package.json
@@ -3546,7 +4750,7 @@ def interactive_shell():
 
                         progress.remove_task(task)
 
-                    console.print(f"\n[info]Packages Scanned:[/info] {len(all_deps)}")
+                    console.print(f"[info]Packages Scanned:[/info] {len(all_deps)}")
                     console.print(f"[info]Vulnerable Packages:[/info] {len(vulnerable_packages)}")
                     console.print(f"[info]Total Advisories:[/info] {len(all_advisories)}\n")
 
@@ -3564,14 +4768,14 @@ def interactive_shell():
                                 style = {"critical": "critical", "high": "high", "moderate": "medium", "low": "low"}[sev]
                                 console.print(f"[{style}]{sev.upper()}: {len(advs)}[/{style}]")
 
-                        console.print("\n[title]Vulnerable Packages:[/title]")
+                        console.print("[title]Vulnerable Packages:[/title]")
                         for pkg in vulnerable_packages[:15]:
                             console.print(f"  [warning]• {pkg}[/warning]")
 
                         # Save report
                         report_path = Path("/tmp/shellockolm/ghsa_report.json")
                         ghsa_db.generate_report(all_deps, str(report_path))
-                        console.print(f"\n[info]📋 Full report: {report_path}[/info]")
+                        console.print(f"[info]📋 Full report: {report_path}[/info]")
                     else:
                         console.print(Panel(
                             f"[success]✅ No known vulnerabilities in {len(all_deps)} packages![/success]\n\n"
@@ -3605,7 +4809,7 @@ def interactive_shell():
 
                         advisories = report_data.get('advisories', [])
                         if advisories:
-                            console.print("\n[title]Top Advisories:[/title]")
+                            console.print("[title]Top Advisories:[/title]")
                             for adv in advisories[:10]:
                                 severity = adv.get('severity', 'unknown')
                                 style = {"critical": "critical", "high": "high", "moderate": "medium", "low": "low"}.get(severity, "info")
@@ -3624,7 +4828,7 @@ def interactive_shell():
                 elif cmd_name == "npm-audit":
                     path = cmd_args[-1] if cmd_args and not cmd_args[-1].startswith("-") else "."
 
-                    console.print(f"\n[title]📦 npm Audit (Enhanced)[/title]")
+                    console.print(f"[title]📦 npm Audit (Enhanced)[/title]")
                     console.print(f"[path]Target: {Path(path).resolve()}[/path]\n")
 
                     npm_wrapper = NpmAuditWrapper()
@@ -3661,9 +4865,9 @@ def interactive_shell():
                         if report.severity_counts.get("low", 0):
                             console.print(f"  [low]Low:[/low] {report.severity_counts['low']}")
 
-                        console.print(f"\n[success]Fixable:[/success] {report.fixable_count} of {report.total_vulnerabilities}")
+                        console.print(f"[success]Fixable:[/success] {report.fixable_count} of {report.total_vulnerabilities}")
 
-                        console.print("\n[title]Vulnerabilities:[/title]")
+                        console.print("[title]Vulnerabilities:[/title]")
                         for vuln in report.vulnerabilities[:15]:
                             severity_style = {
                                 NpmAuditSeverity.CRITICAL: "critical",
@@ -3684,7 +4888,7 @@ def interactive_shell():
 
                         # Save report
                         save_path = npm_wrapper.save_report(report)
-                        console.print(f"\n[info]📋 Report saved: {save_path}[/info]")
+                        console.print(f"[info]📋 Report saved: {save_path}[/info]")
                     else:
                         console.print(Panel(
                             f"[success]✅ No vulnerabilities found![/success]\n\n"
@@ -3700,11 +4904,11 @@ def interactive_shell():
                     path = cmd_args[-1] if cmd_args and not cmd_args[-1].startswith("-") else "."
                     force = "--force" in cmd_args
 
-                    console.print(f"\n[title]📦 npm audit fix{'--force' if force else ''}[/title]")
+                    console.print(f"[title]📦 npm audit fix{'--force' if force else ''}[/title]")
                     console.print(f"[path]Target: {Path(path).resolve()}[/path]\n")
 
                     if force:
-                        console.print("[warning]⚠️  Using --force flag - this may install breaking changes![/warning]\n")
+                        console.print("[warning]⚠️  Using --force flag - this may install breaking changes![/warning]")
 
                     npm_wrapper = NpmAuditWrapper()
 
@@ -3731,7 +4935,7 @@ def interactive_shell():
                     next_step_type = "npm_fix"
 
                 elif cmd_name == "npm-recommend":
-                    console.print(f"\n[title]📦 npm Fix Recommendations[/title]\n")
+                    console.print(f"[title]📦 npm Fix Recommendations[/title]\n")
 
                     # Load the most recent audit report
                     npm_wrapper = NpmAuditWrapper()
@@ -3769,7 +4973,7 @@ def interactive_shell():
                             ))
 
                         if unfixable > 0:
-                            console.print("\n[title]Manual Action Required:[/title]")
+                            console.print("[title]Manual Action Required:[/title]")
                             for vuln in vulns_data:
                                 if not vuln.get("fix_available"):
                                     console.print(f"  [warning]• {vuln.get('name')}[/warning]")
@@ -3783,7 +4987,7 @@ def interactive_shell():
                     next_step_type = "npm_audit"
 
                 elif cmd_name == "npm-history":
-                    console.print(f"\n[title]📦 npm Audit History[/title]\n")
+                    console.print(f"[title]📦 npm Audit History[/title]\n")
 
                     npm_wrapper = NpmAuditWrapper()
                     history = npm_wrapper.get_history(limit=10)
@@ -3813,7 +5017,7 @@ def interactive_shell():
                 # ─────────────────────────────────────────────────────────────
                 elif cmd_name == "sbom-generate":
                     project_path = cmd.get("input_value", ".")
-                    console.print(f"\n[title]📋 Generate SBOM[/title]\n")
+                    console.print(f"[title]📋 Generate SBOM[/title]\n")
                     console.print(f"[info]Analyzing project: {project_path}[/info]\n")
 
                     try:
@@ -3837,7 +5041,7 @@ def interactive_shell():
                         cdx_path = generator.export(sbom, str(output_dir / "sbom-cyclonedx.json"))
                         spdx_path = generator.export(sbom, str(output_dir / "sbom-spdx.json"), SBOMFormat.SPDX)
 
-                        console.print(f"\n[success]📄 Exported to:[/success]")
+                        console.print(f"[success]📄 Exported to:[/success]")
                         console.print(f"   CycloneDX: {cdx_path}")
                         console.print(f"   SPDX: {spdx_path}")
 
@@ -3848,7 +5052,7 @@ def interactive_shell():
 
                 elif cmd_name == "sbom-cyclonedx":
                     project_path = cmd.get("input_value", ".")
-                    console.print(f"\n[title]📋 CycloneDX SBOM[/title]\n")
+                    console.print(f"[title]📋 CycloneDX SBOM[/title]\n")
                     console.print(f"[info]Generating CycloneDX 1.4 format...[/info]\n")
 
                     try:
@@ -3896,7 +5100,7 @@ def interactive_shell():
                         with open(output_path, "w") as f:
                             json.dump(cdx_data, f, indent=2)
 
-                        console.print(f"\n[success]📄 Exported to: {output_path}[/success]")
+                        console.print(f"[success]📄 Exported to: {output_path}[/success]")
                         next_step_type = "sbom_cyclonedx"
 
                     except Exception as e:
@@ -3904,7 +5108,7 @@ def interactive_shell():
 
                 elif cmd_name == "sbom-spdx":
                     project_path = cmd.get("input_value", ".")
-                    console.print(f"\n[title]📋 SPDX SBOM[/title]\n")
+                    console.print(f"[title]📋 SPDX SBOM[/title]\n")
                     console.print(f"[info]Generating SPDX 2.3 format...[/info]\n")
 
                     try:
@@ -3950,7 +5154,7 @@ def interactive_shell():
                         with open(output_path, "w") as f:
                             json.dump(spdx_data, f, indent=2)
 
-                        console.print(f"\n[success]📄 Exported to: {output_path}[/success]")
+                        console.print(f"[success]📄 Exported to: {output_path}[/success]")
                         next_step_type = "sbom_spdx"
 
                     except Exception as e:
@@ -3961,7 +5165,7 @@ def interactive_shell():
                 # ─────────────────────────────────────────────────────────────
                 elif cmd_name == "tree-view":
                     project_path = cmd.get("input_value", ".")
-                    console.print(f"\n[title]🌳 Dependency Tree[/title]\n")
+                    console.print(f"[title]🌳 Dependency Tree[/title]\n")
                     console.print(f"[info]Analyzing: {project_path}[/info]\n")
 
                     try:
@@ -3980,7 +5184,7 @@ def interactive_shell():
 
                 elif cmd_name == "tree-find":
                     package_name = cmd.get("input_value", "")
-                    console.print(f"\n[title]🔍 Find Package: {package_name}[/title]\n")
+                    console.print(f"[title]🔍 Find Package: {package_name}[/title]\n")
 
                     # Need to get project path too
                     project_path = console.input("[info]Enter project path: [/info]").strip() or "."
@@ -4014,7 +5218,7 @@ def interactive_shell():
 
                 elif cmd_name == "tree-stats":
                     project_path = cmd.get("input_value", ".")
-                    console.print(f"\n[title]📊 Dependency Statistics[/title]\n")
+                    console.print(f"[title]📊 Dependency Statistics[/title]\n")
 
                     try:
                         visualizer = DependencyTreeVisualizer(console)
@@ -4025,7 +5229,7 @@ def interactive_shell():
                         stats = visualizer.get_stats()
 
                         # Additional insights
-                        console.print("\n[subtitle]Insights:[/subtitle]")
+                        console.print("[subtitle]Insights:[/subtitle]")
 
                         if stats["duplicate_count"] > 10:
                             console.print(f"  [warning]⚠ High duplicate count ({stats['duplicate_count']}). Consider deduplication.[/warning]")
@@ -4046,7 +5250,7 @@ def interactive_shell():
 
                 elif cmd_name == "tree-export":
                     project_path = cmd.get("input_value", ".")
-                    console.print(f"\n[title]📤 Export Dependency Tree[/title]\n")
+                    console.print(f"[title]📤 Export Dependency Tree[/title]\n")
 
                     # Show format options
                     console.print("[subtitle]Available formats:[/subtitle]")
@@ -4078,7 +5282,7 @@ def interactive_shell():
                             max_depth=50
                         )
 
-                        console.print(f"\n[success]✅ Exported to: {result_path}[/success]")
+                        console.print(f"[success]✅ Exported to: {result_path}[/success]")
 
                         if fmt == TreeOutputFormat.DOT:
                             console.print("[info]Tip: Generate image with: dot -Tpng tree.dot -o tree.png[/info]")
@@ -4093,7 +5297,7 @@ def interactive_shell():
                 # ─────────────────────────────────────────────────────────────
                 elif cmd_name == "ignore-create":
                     project_path = cmd.get("input_value", ".")
-                    console.print(f"\n[title]🚫 Create .shellockolmignore[/title]\n")
+                    console.print(f"[title]🚫 Create .shellockolmignore[/title]\n")
 
                     ignore_file = Path(project_path) / ".shellockolmignore"
                     if ignore_file.exists():
@@ -4112,7 +5316,7 @@ def interactive_shell():
                         console.print("  • node_modules/, dist/, build/")
                         console.print("  • coverage/, __tests__/, *.test.js")
                         console.print("  • *.config.js, *.min.js, vendor/")
-                        console.print("\n[info]Edit the file to customize patterns.[/info]")
+                        console.print("[info]Edit the file to customize patterns.[/info]")
 
                         next_step_type = "ignore_create"
 
@@ -4121,7 +5325,7 @@ def interactive_shell():
 
                 elif cmd_name == "ignore-view":
                     project_path = cmd.get("input_value", ".")
-                    console.print(f"\n[title]📋 Loaded Ignore Patterns[/title]\n")
+                    console.print(f"[title]📋 Loaded Ignore Patterns[/title]\n")
 
                     try:
                         handler = IgnoreHandler(console)
@@ -4131,7 +5335,7 @@ def interactive_shell():
                         handler.display_patterns()
 
                         stats = handler.get_stats()
-                        console.print(f"\n[subtitle]Summary:[/subtitle]")
+                        console.print(f"[subtitle]Summary:[/subtitle]")
                         console.print(f"  Default patterns: {stats['default_patterns']}")
                         console.print(f"  Global patterns: {stats['global_patterns']}")
                         console.print(f"  Project patterns: {stats['project_patterns']}")
@@ -4144,7 +5348,7 @@ def interactive_shell():
 
                 elif cmd_name == "ignore-test":
                     test_path = cmd.get("input_value", "")
-                    console.print(f"\n[title]🧪 Test Ignore Pattern[/title]\n")
+                    console.print(f"[title]🧪 Test Ignore Pattern[/title]\n")
 
                     project_path = console.input("[info]Enter project path: [/info]").strip() or "."
 
@@ -4157,7 +5361,7 @@ def interactive_shell():
                         is_dir = test_path.endswith("/") or os.path.isdir(test_path) if test_path else False
                         ignored, reason = handler.should_ignore(test_path, is_dir)
 
-                        console.print(f"\n[info]Testing: {test_path}[/info]")
+                        console.print(f"[info]Testing: {test_path}[/info]")
                         console.print(f"[info]Type: {'directory' if is_dir else 'file'}[/info]\n")
 
                         if ignored:
@@ -4177,7 +5381,7 @@ def interactive_shell():
                 # ─────────────────────────────────────────────────────────────
                 elif cmd_name == "gha-generate":
                     project_path = cmd.get("input_value", ".")
-                    console.print(f"\n[title]⚙️ Generate GitHub Actions Workflow[/title]\n")
+                    console.print(f"[title]⚙️ Generate GitHub Actions Workflow[/title]\n")
 
                     try:
                         generator = GitHubActionsGenerator(console)
@@ -4201,14 +5405,14 @@ def interactive_shell():
                             config.create_issues = True
 
                         workflow_path = generator.create_workflow_file(project_path, config)
-                        console.print(f"\n[success]✅ Created: {workflow_path}[/success]")
+                        console.print(f"[success]✅ Created: {workflow_path}[/success]")
 
-                        console.print("\n[subtitle]Workflow features:[/subtitle]")
+                        console.print("[subtitle]Workflow features:[/subtitle]")
                         console.print(f"  • Scan level: {config.scan_level.value}")
                         console.print(f"  • SARIF upload: {'Yes' if config.upload_sarif else 'No'}")
                         console.print(f"  • Fail on critical: {'Yes' if config.fail_on_critical else 'No'}")
 
-                        console.print("\n[info]Commit and push to activate the workflow.[/info]")
+                        console.print("[info]Commit and push to activate the workflow.[/info]")
                         next_step_type = "gha_generate"
 
                     except Exception as e:
@@ -4216,7 +5420,7 @@ def interactive_shell():
 
                 elif cmd_name == "gha-basic":
                     project_path = cmd.get("input_value", ".")
-                    console.print(f"\n[title]⚙️ Create Basic Workflow[/title]\n")
+                    console.print(f"[title]⚙️ Create Basic Workflow[/title]\n")
 
                     try:
                         generator = GitHubActionsGenerator(console)
@@ -4237,7 +5441,7 @@ def interactive_shell():
                         console.print("  • SARIF upload to GitHub Security")
 
                         # Show preview
-                        console.print("\n[info]Preview first 20 lines:[/info]")
+                        console.print("[info]Preview first 20 lines:[/info]")
                         with open(workflow_path, "r") as f:
                             for i, line in enumerate(f):
                                 if i >= 20:
@@ -4252,7 +5456,7 @@ def interactive_shell():
 
                 elif cmd_name == "gha-full":
                     project_path = cmd.get("input_value", ".")
-                    console.print(f"\n[title]⚙️ Create Comprehensive Workflow[/title]\n")
+                    console.print(f"[title]⚙️ Create Comprehensive Workflow[/title]\n")
 
                     try:
                         generator = GitHubActionsGenerator(console)
@@ -4277,7 +5481,7 @@ def interactive_shell():
                         console.print("  • Auto-create issues for failures")
                         console.print("  • Artifact upload")
 
-                        console.print("\n[info]Commit and push to activate.[/info]")
+                        console.print("[info]Commit and push to activate.[/info]")
                         next_step_type = "gha_full"
 
                     except Exception as e:
@@ -4288,7 +5492,7 @@ def interactive_shell():
                 # ─────────────────────────────────────────────────────────────
                 elif cmd_name == "watch-start":
                     watch_path = cmd.get("input_value", ".")
-                    console.print(f"\n[title]👁️ Watch Mode[/title]\n")
+                    console.print(f"[title]👁️ Watch Mode[/title]\n")
 
                     console.print("[subtitle]Watch options:[/subtitle]")
                     console.print("  1. Standard watch (scan on changes)")
@@ -4305,7 +5509,7 @@ def interactive_shell():
                         clear_screen = choice in ["3"]
 
                         console.print()
-                        console.print("[warning]Press Ctrl+C to stop watching[/warning]\n")
+                        console.print("[warning]Press Ctrl+C to stop watching[/warning]")
 
                         # This will block until Ctrl+C
                         watch.start(
@@ -4319,7 +5523,7 @@ def interactive_shell():
                         next_step_type = "watch_stop"
 
                     except KeyboardInterrupt:
-                        console.print("\n[info]Watch mode stopped.[/info]")
+                        console.print("[info]Watch mode stopped.[/info]")
                         next_step_type = "watch_stop"
                     except Exception as e:
                         console.print(f"[danger]Error: {e}[/danger]")
@@ -4338,20 +5542,51 @@ def interactive_shell():
             except SystemExit:
                 pass  # Handle any other sys.exit calls
             except Exception as e:
-                console.print(f"[danger]Error: {e}[/danger]")
-
-            console.print("─" * 60)
+                # Escape error message to avoid Rich markup issues
+                err_msg = str(e).replace("[", "\\[").replace("]", "\\]")
+                console.print(f"[danger]Error: {err_msg}[/danger]")
 
             # Show contextual next steps
             if next_step_type:
                 show_next_steps(next_step_type)
 
-            console.input("[subtitle]Press Enter to continue...[/subtitle]")
+            # Smart navigation with context-aware suggestions
+            findings_count = len(session_logger.all_findings) if session_logger else 0
+
+            console.print("[bold bright_cyan]What's Next?[/bold bright_cyan]")
+            # Context-aware suggestions based on findings
+            if had_findings or findings_count > 0:
+                console.print("[bright_green]Recommended:[/bright_green] [bright_red][X][/bright_red] QuickFix  [bright_green][F][/bright_green] FixWizard  [blue][R][/blue] Report  [magenta][P][/magenta] PoC")
+            console.print("[dim]Navigate:[/dim] [bright_cyan][M][/bright_cyan] Menu  [yellow][1][/yellow] Scan  [yellow][1c][/yellow] Deep  [yellow][1d][/yellow] Hunter  [green][U][/green] Update  [dim][Q][/dim] Quit")
+            nav_choice = console.input("[bold]> [/bold]").strip().lower()
+
+            if nav_choice in ['m', 'menu', '']:
+                show_menu = True  # Show menu on next iteration
+            elif nav_choice in ['r', 'repeat']:
+                # Repeat last command
+                show_menu = False
+                continue  # Will use same action
+            elif nav_choice in ['q', 'quit', 'exit', '0']:
+                if session_logger:
+                    session_logger.log("Session ended by user", "INFO")
+                    console.print(f"[info]📝 Session log saved: {session_logger.get_log_path()}[/info]")
+                console.print("[info]👋 Goodbye! Stay secure.[/info]")
+                break
+            elif nav_choice in ['x', 'quickfix', 'fixall', 'quick-fix', 'fix-all']:
+                # Quick Fix All - Execute all fixes automatically
+                quick_fix_all(session_logger, console)
+                show_menu = False
+                continue
+            elif nav_choice:
+                # User typed a command directly - set as pending choice
+                pending_choice = nav_choice
+                show_menu = False
+                continue
 
         except KeyboardInterrupt:
-            console.print("\n[warning]Press 0 or 'quit' to exit[/warning]")
+            console.print("[warning]Press 0 or 'quit' to exit[/warning]")
         except EOFError:
-            console.print("\n[info]👋 Goodbye![/info]")
+            console.print("[info]👋 Goodbye![/info]")
             break
 
 

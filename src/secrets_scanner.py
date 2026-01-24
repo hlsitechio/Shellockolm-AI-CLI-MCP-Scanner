@@ -584,6 +584,20 @@ class SecretsScanner:
     def __init__(self):
         self.patterns = SECRET_PATTERNS
 
+    def get_patterns_summary(self) -> Dict[str, List[str]]:
+        """Get summary of all patterns grouped by category"""
+        categories = {}
+        for pattern in self.patterns:
+            category = pattern.secret_type.value
+            if category not in categories:
+                categories[category] = []
+            categories[category].append(pattern.name)
+        return categories
+
+    def get_pattern_count(self) -> int:
+        """Get total number of patterns"""
+        return len(self.patterns)
+
     def calculate_entropy(self, text: str) -> float:
         """Calculate Shannon entropy of a string"""
         if not text:
@@ -724,14 +738,18 @@ class SecretsScanner:
 
         return matches
 
-    def scan_directory(self, path: str, recursive: bool = True, max_depth: int = 10) -> SecretsReport:
-        """Scan a directory for secrets"""
+    def scan_directory(self, path: str, recursive: bool = True, max_depth: int = 10,
+                       verbose: bool = False, console=None) -> SecretsReport:
+        """Scan a directory for secrets with optional verbose progress output"""
         import time
+        import sys
         start_time = time.time()
 
         target_path = Path(path).resolve()
         all_matches: List[SecretMatch] = []
         files_scanned = 0
+        total_files = 0
+        findings_count = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
 
         def should_skip(dir_name: str) -> bool:
             return dir_name in self.SKIP_DIRS
@@ -741,6 +759,66 @@ class SecretsScanner:
             if name in self.ALWAYS_SCAN or any(name.startswith(f) for f in self.ALWAYS_SCAN):
                 return True
             return file_path.suffix.lower() in self.SCAN_EXTENSIONS
+
+        # First pass: Count total files
+        def count_files(current_path: Path, depth: int = 0) -> int:
+            if depth > max_depth:
+                return 0
+            count = 0
+            try:
+                for item in current_path.iterdir():
+                    if item.is_file():
+                        if should_scan_file(item):
+                            count += 1
+                    elif item.is_dir() and recursive:
+                        if not should_skip(item.name):
+                            count += count_files(item, depth + 1)
+            except PermissionError:
+                pass
+            return count
+
+        # Show patterns summary if verbose
+        if verbose and console:
+            console.print(f"\n[bold bright_cyan]🔍 Secrets Scanner[/bold bright_cyan]")
+            console.print(f"[dim]Searching {len(self.patterns)} patterns across {len(set(p.secret_type.value for p in self.patterns))} categories[/dim]")
+            console.print(f"[dim]Categories: AWS, GitHub, Slack, Stripe, Private Keys, Database URLs, etc.[/dim]\n")
+
+            console.print("[dim]Counting files...[/dim]", end="")
+            total_files = count_files(target_path)
+            console.print(f"\r[green]✓[/green] {total_files} files to scan" + " " * 20)
+            console.print()
+
+        def update_progress(current_file: str = ""):
+            """Update progress on single line using sys.stdout for true in-place updates"""
+            if not verbose or total_files == 0:
+                return
+            pct = (files_scanned / total_files) * 100
+            bar_width = 30
+            filled = int(bar_width * pct / 100)
+            bar = "█" * filled + "░" * (bar_width - filled)
+
+            # Build findings summary (plain text for stdout)
+            findings_str = ""
+            if findings_count["CRITICAL"] > 0:
+                findings_str += f" {findings_count['CRITICAL']}C"
+            if findings_count["HIGH"] > 0:
+                findings_str += f" {findings_count['HIGH']}H"
+            if findings_count["MEDIUM"] > 0:
+                findings_str += f" {findings_count['MEDIUM']}M"
+
+            # Truncate current file for display
+            if current_file:
+                if len(current_file) > 25:
+                    current_file = "..." + current_file[-22:]
+                file_str = f" {current_file}"
+            else:
+                file_str = ""
+
+            # Use sys.stdout for true single-line updates
+            line = f"\r[{bar}] {pct:5.1f}% ({files_scanned}/{total_files}){findings_str}{file_str}"
+            # Pad to overwrite previous longer lines
+            sys.stdout.write(line.ljust(80))
+            sys.stdout.flush()
 
         def scan_recursive(current_path: Path, depth: int = 0):
             nonlocal files_scanned
@@ -754,11 +832,25 @@ class SecretsScanner:
                         if should_scan_file(item):
                             files_scanned += 1
 
+                            # Update progress every 10 files
+                            if verbose and files_scanned % 10 == 0:
+                                try:
+                                    rel_file = str(item.relative_to(target_path))
+                                except ValueError:
+                                    rel_file = item.name
+                                update_progress(rel_file)
+
                             # Special handling for .env files
                             if item.name.lower().startswith('.env'):
                                 matches = self.scan_env_file(item)
                             else:
                                 matches = self.scan_file(item)
+
+                            # Track findings by severity
+                            for match in matches:
+                                sev = match.pattern.severity.value
+                                if sev in findings_count:
+                                    findings_count[sev] += 1
 
                             all_matches.extend(matches)
 
@@ -770,6 +862,18 @@ class SecretsScanner:
                 pass
 
         scan_recursive(target_path)
+
+        # Final progress update
+        if verbose:
+            update_progress()
+            sys.stdout.write("\n")  # Move to new line after progress bar
+            sys.stdout.flush()
+            total_found = sum(findings_count.values())
+            if console:
+                if total_found > 0:
+                    console.print(f"[bold]Found {total_found} potential secrets[/bold]")
+                else:
+                    console.print(f"[green]✓ No secrets found[/green]")
 
         duration = time.time() - start_time
 
