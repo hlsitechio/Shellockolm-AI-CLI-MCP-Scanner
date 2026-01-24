@@ -1,0 +1,649 @@
+{
+  "metadata": {
+    "collection_date": "2026-01-23",
+    "scope": "npm ecosystem, Node.js runtime, React/Next.js, bundlers",
+    "severity_filter": "CRITICAL and HIGH (CVSS 7.0+)",
+    "total_cves": 30,
+    "active_exploitation": [
+      "CVE-2025-55182"
+    ]
+  },
+  "cves": [
+    {
+      "id": "CVE-2025-55182",
+      "severity": "CRITICAL",
+      "cvss": 10.0,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H",
+      "cwe": "CWE-502",
+      "packages": [
+        "react-server-dom-parcel",
+        "react-server-dom-turbopack",
+        "react-server-dom-webpack"
+      ],
+      "affected_versions": [
+        "19.0.0",
+        "19.1.0",
+        "19.1.1",
+        "19.2.0"
+      ],
+      "patched_versions": [
+        "19.0.1",
+        "19.1.2",
+        "19.2.1"
+      ],
+      "vulnerability_type": "Remote Code Execution",
+      "description": "Unsafe deserialization of payloads from HTTP requests to Server Function endpoints",
+      "exploitation_status": "Active exploitation by nation-state actors",
+      "cisa_kev": true,
+      "cisa_kev_date": "2025-12-05",
+      "public_poc": true,
+      "affected_frameworks": [
+        "Next.js",
+        "React Router",
+        "Waku",
+        "Parcel",
+        "Vite",
+        "Turbopack",
+        "Webpack"
+      ]
+    },
+    {
+      "id": "CVE-2025-55183",
+      "severity": "MEDIUM",
+      "cvss": 5.3,
+      "packages": [
+        "react-server-dom-parcel",
+        "react-server-dom-webpack",
+        "react-server-dom-turbopack"
+      ],
+      "affected_versions": [
+        "19.0.0-19.2.2"
+      ],
+      "patched_versions": [
+        "19.0.3",
+        "19.1.4",
+        "19.2.3"
+      ],
+      "vulnerability_type": "Source Code Exposure",
+      "description": "Server Functions can be manipulated to return compiled source code",
+      "public_poc": true
+    },
+    {
+      "id": "CVE-2025-55184",
+      "severity": "HIGH",
+      "cvss": 7.5,
+      "packages": [
+        "react-server-dom-parcel",
+        "react-server-dom-webpack",
+        "react-server-dom-turbopack"
+      ],
+      "affected_versions": [
+        "19.0.0",
+        "19.0.1",
+        "19.1.0",
+        "19.1.1",
+        "19.2.0",
+        "19.2.1"
+      ],
+      "patched_versions": [
+        "19.0.2",
+        "19.1.2",
+        "19.2.2"
+      ],
+      "vulnerability_type": "Denial of Service",
+      "description": "Malicious HTTP requests cause infinite loops and CPU exhaustion",
+      "notes": "Incomplete fix - see CVE-2025-67779"
+    },
+    {
+      "id": "CVE-2025-67779",
+      "severity": "HIGH",
+      "cvss": 7.5,
+      "packages": [
+        "react-server-dom-parcel",
+        "react-server-dom-webpack",
+        "react-server-dom-turbopack"
+      ],
+      "affected_versions": [
+        "19.0.2",
+        "19.1.3",
+        "19.2.2"
+      ],
+      "patched_versions": [
+        "19.0.3",
+        "19.1.4",
+        "19.2.3"
+      ],
+      "vulnerability_type": "Denial of Service",
+      "description": "Incomplete fix for CVE-2025-55184 DoS vulnerability"
+    },
+    {
+      "id": "CVE-2025-29927",
+      "severity": "CRITICAL",
+      "cvss": 9.1,
+      "packages": [
+        "next"
+      ],
+      "affected_versions": [
+        "11.1.4-13.5.6",
+        "14.0.0-14.2.24",
+        "15.0.0-15.2.2"
+      ],
+      "patched_versions": [
+        "13.5.7",
+        "14.2.25",
+        "15.2.3"
+      ],
+      "vulnerability_type": "Authorization Bypass",
+      "description": "x-middleware-subrequest header injection bypasses middleware authorization",
+      "notes": "Vercel deployments auto-protected, self-hosted vulnerable"
+    },
+    {
+      "id": "CVE-2026-21858",
+      "severity": "CRITICAL",
+      "cvss": 10.0,
+      "packages": [
+        "n8n"
+      ],
+      "affected_versions": [
+        "<1.121.0"
+      ],
+      "patched_versions": [
+        "1.121.0"
+      ],
+      "vulnerability_type": "Unauthenticated Remote Code Execution",
+      "description": "Content-Type confusion in Form Webhooks enables arbitrary file read, auth bypass, and RCE",
+      "nickname": "Ni8mare",
+      "public_poc": true,
+      "estimated_exposure": "~100,000 servers"
+    },
+    {
+      "id": "CVE-2025-68613",
+      "severity": "CRITICAL",
+      "cvss": 9.9,
+      "packages": [
+        "n8n-workflow"
+      ],
+      "affected_versions": [
+        "0.211.0-1.120.3",
+        "1.121.0",
+        "1.122.0-RC"
+      ],
+      "patched_versions": [
+        "1.120.4",
+        "1.121.1",
+        "1.122.0"
+      ],
+      "vulnerability_type": "Authenticated Remote Code Execution",
+      "description": "Expression injection via insufficient sandbox isolation in workflow evaluation",
+      "public_poc": true,
+      "requires_authentication": true
+    },
+    {
+      "id": "CVE-2025-68668",
+      "severity": "HIGH",
+      "packages": [
+        "@n8n/config"
+      ],
+      "vulnerability_type": "Remote Code Execution",
+      "description": "Insufficient isolation in Python Code Node using Pyodide"
+    },
+    {
+      "id": "CVE-2025-59465",
+      "severity": "HIGH",
+      "packages": [
+        "node"
+      ],
+      "affected_versions": [
+        "18.x",
+        "20.x",
+        "22.x",
+        "24.x",
+        "25.x"
+      ],
+      "patched_versions": [
+        "20.20.0",
+        "22.22.0",
+        "24.13.0",
+        "25.3.0"
+      ],
+      "vulnerability_type": "Denial of Service",
+      "description": "HTTP/2 server crashes with malformed HEADERS frame"
+    },
+    {
+      "id": "CVE-2025-59464",
+      "severity": "MEDIUM",
+      "packages": [
+        "node"
+      ],
+      "affected_versions": [
+        "20.x",
+        "22.x",
+        "24.x",
+        "25.x"
+      ],
+      "patched_versions": [
+        "20.20.0",
+        "22.22.0",
+        "24.13.0",
+        "25.3.0"
+      ],
+      "vulnerability_type": "Denial of Service",
+      "description": "Memory leak in TLS client certificate processing"
+    },
+    {
+      "id": "CVE-2025-59466",
+      "severity": "MEDIUM",
+      "packages": [
+        "node"
+      ],
+      "affected_versions": [
+        "20.x",
+        "22.x",
+        "24.x",
+        "25.x"
+      ],
+      "patched_versions": [
+        "20.20.0",
+        "22.22.0",
+        "24.13.0",
+        "25.3.0"
+      ],
+      "vulnerability_type": "Denial of Service",
+      "description": "Uncatchable error via async_hooks leads to process crashes",
+      "requires_async_hooks": true
+    },
+    {
+      "id": "CVE-2025-27210",
+      "severity": "HIGH",
+      "cvss": 7.0,
+      "packages": [
+        "node"
+      ],
+      "affected_versions": [
+        "20.x",
+        "22.x",
+        "24.x"
+      ],
+      "patched_versions": [
+        "July 2025 security release"
+      ],
+      "vulnerability_type": "Path Traversal",
+      "description": "Windows device names (CON, PRN, AUX) bypass path normalization",
+      "platform": "Windows only",
+      "incomplete_fix_for": "CVE-2025-23084"
+    },
+    {
+      "id": "CVE-2025-23084",
+      "severity": "MEDIUM",
+      "cvss": 5.6,
+      "cwe": "CWE-22",
+      "packages": [
+        "node"
+      ],
+      "affected_versions": [
+        "18.x",
+        "20.x",
+        "22.x",
+        "23.x"
+      ],
+      "vulnerability_type": "Path Traversal",
+      "description": "Improper handling of drive names on Windows",
+      "platform": "Windows only"
+    },
+    {
+      "id": "CVE-2024-21891",
+      "severity": "HIGH",
+      "cvss": 8.8,
+      "packages": [
+        "node"
+      ],
+      "affected_versions": [
+        "20.0.0-20.11.0",
+        "21.0.0-21.6.1"
+      ],
+      "patched_versions": [
+        "20.11.1",
+        "21.6.2"
+      ],
+      "vulnerability_type": "Permission Model Bypass",
+      "description": "Path normalization functions can be overwritten leading to filesystem permission bypass",
+      "experimental_feature": true
+    },
+    {
+      "id": "CVE-2025-55130",
+      "severity": "HIGH",
+      "packages": [
+        "node"
+      ],
+      "affected_versions": [
+        "20.x",
+        "22.x",
+        "24.x",
+        "25.x"
+      ],
+      "patched_versions": [
+        "20.20.0",
+        "22.22.0",
+        "24.13.0",
+        "25.3.0"
+      ],
+      "vulnerability_type": "Permission Model Bypass",
+      "description": "Crafted symlinks bypass --allow-fs-read and --allow-fs-write"
+    },
+    {
+      "id": "CVE-2026-21636",
+      "severity": "MEDIUM",
+      "packages": [
+        "node"
+      ],
+      "affected_versions": [
+        "20.x",
+        "22.x",
+        "24.x",
+        "25.x"
+      ],
+      "patched_versions": [
+        "20.20.0",
+        "22.22.0",
+        "24.13.0",
+        "25.3.0"
+      ],
+      "vulnerability_type": "Permission Model Bypass",
+      "description": "Unix Domain Socket connections bypass --allow-net restrictions"
+    },
+    {
+      "id": "CVE-2025-55132",
+      "severity": "LOW",
+      "packages": [
+        "node"
+      ],
+      "patched_versions": [
+        "20.20.0",
+        "22.22.0",
+        "24.13.0",
+        "25.3.0"
+      ],
+      "vulnerability_type": "Permission Model Bypass",
+      "description": "fs.futimes() bypasses read-only permission model"
+    },
+    {
+      "id": "CVE-2025-54313",
+      "severity": "HIGH",
+      "cvss": 7.5,
+      "packages": [
+        "eslint-config-prettier",
+        "eslint-plugin-prettier",
+        "synckit",
+        "@pkgr/core",
+        "napi-postinstall"
+      ],
+      "affected_versions": [
+        "8.10.1",
+        "9.1.1",
+        "10.1.6",
+        "10.1.7"
+      ],
+      "patched_versions": [
+        "8.10.2",
+        "9.1.2",
+        "10.1.8"
+      ],
+      "vulnerability_type": "Supply Chain Attack",
+      "description": "Maintainer account compromise via phishing, malicious DLL payload (Scavenger)",
+      "platform": "Windows only",
+      "downloads_per_week": "30,000,000+",
+      "attack_date": "2025-07-19"
+    },
+    {
+      "id": "CVE-2024-21534",
+      "severity": "CRITICAL",
+      "cvss": 9.8,
+      "packages": [
+        "jsonpath-plus"
+      ],
+      "affected_versions": [
+        "<10.2.0"
+      ],
+      "patched_versions": [
+        "10.2.0"
+      ],
+      "vulnerability_type": "Remote Code Execution",
+      "description": "Improper input sanitization and unsafe vm module usage",
+      "public_poc": true,
+      "notes": "Versions 10.0.0-10.1.0 had incomplete fixes"
+    },
+    {
+      "id": "CVE-2025-1302",
+      "severity": "CRITICAL",
+      "packages": [
+        "jsonpath-plus"
+      ],
+      "vulnerability_type": "Remote Code Execution",
+      "description": "Incomplete fix for CVE-2024-21534",
+      "patched_versions": [
+        "10.2.0"
+      ]
+    },
+    {
+      "id": "CVE-2024-21508",
+      "severity": "CRITICAL",
+      "cvss": 9.8,
+      "cwe": "CWE-94",
+      "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+      "packages": [
+        "mysql2"
+      ],
+      "affected_versions": [
+        "<3.9.4"
+      ],
+      "patched_versions": [
+        "3.9.4"
+      ],
+      "vulnerability_type": "Remote Code Execution",
+      "description": "Improper validation in readCodeFor function (supportBigNumbers, bigNumberStrings)"
+    },
+    {
+      "id": "CVE-2024-34344",
+      "severity": "HIGH",
+      "packages": [
+        "nuxt"
+      ],
+      "affected_versions": [
+        "<3.12.4"
+      ],
+      "patched_versions": [
+        "3.12.4"
+      ],
+      "vulnerability_type": "Remote Code Execution",
+      "description": "Insufficient validation in NuxtTestComponentWrapper path parameter",
+      "context": "Test mode exploitation via malicious web pages"
+    },
+    {
+      "id": "CVE-2024-45590",
+      "severity": "HIGH",
+      "cvss": 7.5,
+      "cwe": "CWE-405",
+      "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+      "packages": [
+        "body-parser"
+      ],
+      "affected_versions": [
+        "<1.20.3"
+      ],
+      "patched_versions": [
+        "1.20.3"
+      ],
+      "vulnerability_type": "Denial of Service",
+      "description": "DoS when URL encoding enabled via specially crafted payloads",
+      "published": "2024-09-10"
+    },
+    {
+      "id": "CVE-2025-48997",
+      "severity": "CRITICAL",
+      "packages": [
+        "multer"
+      ],
+      "affected_versions": [
+        "1.4.4-lts.1",
+        "<2.0.1"
+      ],
+      "patched_versions": [
+        "2.0.1"
+      ],
+      "vulnerability_type": "Denial of Service",
+      "description": "Empty field names in upload requests cause unhandled exceptions"
+    },
+    {
+      "id": "CVE-2025-47944",
+      "severity": "HIGH",
+      "packages": [
+        "multer"
+      ],
+      "affected_versions": [
+        "1.4.4-lts.1"
+      ],
+      "vulnerability_type": "Multiple Issues",
+      "affects": [
+        "@nestjs/platform-express"
+      ]
+    },
+    {
+      "id": "CVE-2024-13059",
+      "severity": "HIGH",
+      "packages": [
+        "AnythingLLM"
+      ],
+      "affected_versions": [
+        "<1.3.1"
+      ],
+      "patched_versions": [
+        "1.3.1"
+      ],
+      "vulnerability_type": "Path Traversal to RCE",
+      "description": "Improper handling of non-ASCII filenames in multer library",
+      "requires_authentication": true,
+      "required_role": "Manager or Admin"
+    },
+    {
+      "id": "CVE-2026-21440",
+      "severity": "CRITICAL",
+      "cvss": 9.2,
+      "packages": [
+        "AdonisJS bodyparser"
+      ],
+      "vulnerability_type": "Path Traversal",
+      "description": "Crafted filenames bypass sanitization in MultipartFile.move()"
+    }
+  ],
+  "supply_chain_campaigns": [
+    {
+      "name": "Shai-Hulud 2.0",
+      "date": "2025-11",
+      "scope": {
+        "repositories": 25000,
+        "users": 350
+      },
+      "type": "Self-replicating worm",
+      "impact": "Developer credential theft, mass compromise",
+      "cve": null
+    }
+  ],
+  "exploitation_timeline": [
+    {
+      "date": "2025-12-03",
+      "event": "CVE-2025-55182 public disclosure"
+    },
+    {
+      "date": "2025-12-05",
+      "event": "CVE-2025-55182 active exploitation detected"
+    },
+    {
+      "date": "2025-12-05",
+      "event": "CVE-2025-55182 added to CISA KEV"
+    },
+    {
+      "date": "2025-07-19",
+      "event": "eslint-config-prettier supply chain attack"
+    },
+    {
+      "date": "2025-11",
+      "event": "Shai-Hulud worm campaign active"
+    },
+    {
+      "date": "2026-01-13",
+      "event": "Node.js security release (8 CVEs)"
+    }
+  ],
+  "threat_actors": [
+    {
+      "name": "CL-STA-1015",
+      "affiliation": "PRC Ministry of State Security (suspected)",
+      "type": "Initial Access Broker",
+      "cves_exploited": [
+        "CVE-2025-55182"
+      ],
+      "payloads": [
+        "SNOWLIGHT",
+        "VShell"
+      ]
+    },
+    {
+      "type": "Cybercriminal",
+      "cves_exploited": [
+        "CVE-2025-55182"
+      ],
+      "payloads": [
+        "Coin miners",
+        "Credential harvesters"
+      ]
+    }
+  ],
+  "affected_technologies": {
+    "frameworks": [
+      "React",
+      "Next.js",
+      "Nuxt.js",
+      "React Router",
+      "Waku",
+      "Redwood"
+    ],
+    "bundlers": [
+      "Webpack",
+      "Turbopack",
+      "Parcel",
+      "Vite"
+    ],
+    "runtimes": [
+      "Node.js"
+    ],
+    "workflow_automation": [
+      "n8n"
+    ]
+  },
+  "patch_priority": {
+    "emergency": [
+      "CVE-2025-55182",
+      "CVE-2026-21858",
+      "CVE-2025-68613",
+      "CVE-2024-21534",
+      "CVE-2025-29927"
+    ],
+    "high": [
+      "CVE-2025-59465",
+      "CVE-2025-55130",
+      "CVE-2025-27210",
+      "CVE-2024-21508",
+      "CVE-2025-54313",
+      "CVE-2024-45590",
+      "CVE-2025-48997"
+    ],
+    "medium": [
+      "CVE-2024-34344",
+      "CVE-2024-13059",
+      "CVE-2025-55183",
+      "CVE-2025-59464",
+      "CVE-2025-59466",
+      "CVE-2026-21636"
+    ]
+  }
+}

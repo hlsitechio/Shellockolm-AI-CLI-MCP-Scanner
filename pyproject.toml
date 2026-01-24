@@ -43,10 +43,14 @@ classifiers = [
 ]
 
 dependencies = [
+    "typer[all]>=0.9.0",
+    "rich>=13.0.0",
+    "prompt_toolkit>=3.0.0",
     "mcp>=1.0.0",
     "pydantic>=2.0.0",
     "packaging>=23.0",
     "aiofiles>=23.0.0",
+    "requests>=2.28.0",
 ]
 
 [project.optional-dependencies]
@@ -66,8 +70,9 @@ Repository = "https://github.com/hlsitechio/shellockolm"
 Changelog = "https://github.com/hlsitechio/shellockolm/blob/main/CHANGELOG.md"
 
 [project.scripts]
-shellockolm = "scan_simple:main"
-shellockolm-scan = "scan_simple:main"
+shellockolm = "cli:main"
+shellockolm-scan = "cli:main"
+# Legacy commands (deprecated, kept for backwards compatibility)
 shellockolm-fix = "auto_fix:main"
 shellockolm-patch = "mass_patcher:main"
 shellockolm-malware = "malware_scanner:main"
