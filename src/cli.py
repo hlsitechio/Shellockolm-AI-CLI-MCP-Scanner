@@ -256,6 +256,7 @@ def print_banner(show_full: bool = True):
 [dim]React • Next.js • Node.js • n8n • npm • Supply Chain[/dim]
 
 [bright_green]✓ 29 CVEs  ✓ 6 Scanners  ✓ Malware  ✓ Secrets  ✓ Auto-Fix[/bright_green]
+[link=https://github.com/hlsitechio/shellockolm][bright_blue]🔗 github.com/hlsitechio/shellockolm[/bright_blue][/link]
 ────────────────────────────────────────────────────────────────────
 [bright_yellow]💡 Tip:[/bright_yellow] {tip}"""
 
