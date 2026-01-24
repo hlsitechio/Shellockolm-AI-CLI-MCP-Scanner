@@ -2073,7 +2073,8 @@ def interactive_shell():
                             next_step_type = "scan_clean"
 
                 elif cmd_name == "sandbox-check":
-                    # Sandbox pre-download npm package checker
+                    # ENHANCED Sandbox pre-download npm package checker
+                    # Actually INSTALLS the package to detect post-install malware
                     pkg_name = cmd_args[0] if cmd_args else cmd.get("input_value", "")
                     if not pkg_name:
                         console.print("[danger]Package name is required.[/danger]")
@@ -2084,159 +2085,383 @@ def interactive_shell():
                     import subprocess
                     import tarfile
                     import json
+                    import hashlib
+                    import difflib
 
-                    console.print(f"\n[title]🛡️ SANDBOX PRE-DOWNLOAD CHECK[/title]")
-                    console.print(f"[info]Package: {pkg_name}[/info]\n")
+                    console.print(f"\n[title]🛡️ SANDBOX DEEP INSTALL CHECK[/title]")
+                    console.print(f"[info]Package: {pkg_name}[/info]")
+                    console.print(f"[dim]This will INSTALL the package in isolation to detect post-install malware[/dim]\n")
 
                     sandbox_dir = None
                     is_safe = True
                     warnings = []
                     dangers = []
+                    info_items = []
+
+                    def get_dir_snapshot(path: Path) -> dict:
+                        """Get snapshot of all files with hashes"""
+                        snapshot = {}
+                        try:
+                            for f in path.rglob("*"):
+                                if f.is_file():
+                                    rel = str(f.relative_to(path))
+                                    try:
+                                        with open(f, 'rb') as fh:
+                                            snapshot[rel] = {
+                                                'hash': hashlib.md5(fh.read()).hexdigest(),
+                                                'size': f.stat().st_size
+                                            }
+                                    except:
+                                        snapshot[rel] = {'hash': 'unreadable', 'size': 0}
+                        except:
+                            pass
+                        return snapshot
+
+                    def compare_snapshots(before: dict, after: dict) -> tuple:
+                        """Compare before/after snapshots"""
+                        new_files = []
+                        modified_files = []
+                        deleted_files = []
+
+                        for f, info in after.items():
+                            if f not in before:
+                                new_files.append(f)
+                            elif before[f]['hash'] != info['hash']:
+                                modified_files.append(f)
+
+                        for f in before:
+                            if f not in after:
+                                deleted_files.append(f)
+
+                        return new_files, modified_files, deleted_files
 
                     try:
-                        # Create sandbox
+                        # Create isolated sandbox project
                         sandbox_dir = tempfile.mkdtemp(prefix="shellockolm_sandbox_")
                         console.print(f"[dim]📦 Created sandbox: {sandbox_dir}[/dim]")
 
-                        # Download package using npm pack
-                        console.print(f"[info]⬇️  Downloading {pkg_name} to sandbox...[/info]")
-                        result = subprocess.run(
-                            ["npm", "pack", pkg_name, "--pack-destination", sandbox_dir],
-                            capture_output=True, text=True, cwd=sandbox_dir, timeout=60
+                        # Create minimal package.json for the sandbox project
+                        sandbox_pkg = {
+                            "name": "shellockolm-sandbox",
+                            "version": "1.0.0",
+                            "private": True,
+                            "description": "Isolated sandbox for security analysis"
+                        }
+                        with open(Path(sandbox_dir) / "package.json", 'w') as f:
+                            json.dump(sandbox_pkg, f)
+
+                        # PHASE 1: Get package info first (without install)
+                        console.print(f"\n[bright_cyan]━━━ PHASE 1: Package Metadata Analysis ━━━[/bright_cyan]")
+                        console.print(f"[info]📋 Fetching package info...[/info]")
+
+                        npm_view = subprocess.run(
+                            ["npm", "view", pkg_name, "--json"],
+                            capture_output=True, text=True, timeout=30
                         )
 
-                        if result.returncode != 0:
-                            console.print(f"[danger]❌ Failed to download package: {result.stderr}[/danger]")
-                            dangers.append(f"Package download failed - may not exist or network error")
-                            is_safe = False
+                        pkg_data = {}
+                        if npm_view.returncode == 0:
+                            try:
+                                pkg_data = json.loads(npm_view.stdout)
+                                pkg_version = pkg_data.get('version', 'unknown')
+                                pkg_desc = pkg_data.get('description', 'N/A')[:60]
+                                maintainers = pkg_data.get('maintainers', [])
+                                last_publish = pkg_data.get('time', {}).get(pkg_version, 'unknown')
+
+                                console.print(f"  [bright_white]Name:[/bright_white] {pkg_data.get('name', pkg_name)}")
+                                console.print(f"  [bright_white]Version:[/bright_white] {pkg_version}")
+                                console.print(f"  [bright_white]Description:[/bright_white] {pkg_desc}...")
+                                console.print(f"  [bright_white]Last Published:[/bright_white] {last_publish[:10] if last_publish != 'unknown' else 'unknown'}")
+
+                                # Check for install scripts in metadata
+                                scripts = pkg_data.get('scripts', {})
+                                install_scripts = []
+                                for script_name in ['preinstall', 'install', 'postinstall', 'prepare']:
+                                    if script_name in scripts:
+                                        install_scripts.append(script_name)
+                                        script_content = scripts[script_name]
+
+                                        # Analyze script content
+                                        danger_patterns = [
+                                            ('curl', 'Downloads external content'),
+                                            ('wget', 'Downloads external content'),
+                                            ('eval', 'Dynamic code execution'),
+                                            ('exec', 'Command execution'),
+                                            ('child_process', 'Spawns processes'),
+                                            ('rm -rf', 'Destructive file operation'),
+                                            ('base64', 'Encoded payload'),
+                                            ('/dev/tcp', 'Network backdoor'),
+                                            ('powershell', 'PowerShell execution'),
+                                            ('cmd.exe', 'Windows command execution'),
+                                            ('.bat', 'Batch script execution'),
+                                            ('nc ', 'Netcat - reverse shell'),
+                                            ('netcat', 'Netcat - reverse shell'),
+                                            ('/bin/sh', 'Shell execution'),
+                                            ('/bin/bash', 'Bash execution'),
+                                            ('socket', 'Network socket'),
+                                            ('XMLHttpRequest', 'HTTP request'),
+                                            ('fetch(', 'HTTP fetch'),
+                                            ('https://', 'External URL'),
+                                            ('http://', 'External URL (insecure)'),
+                                        ]
+
+                                        for pattern, desc in danger_patterns:
+                                            if pattern.lower() in script_content.lower():
+                                                dangers.append(f"🚨 {script_name} script: {desc} ({pattern})")
+                                                is_safe = False
+
+                                if install_scripts:
+                                    console.print(f"  [bright_yellow]⚠️ Has install scripts:[/bright_yellow] {', '.join(install_scripts)}")
+                                    for sn in install_scripts:
+                                        sc = scripts.get(sn, '')[:100]
+                                        console.print(f"    [dim]{sn}: {sc}...[/dim]")
+                                else:
+                                    console.print(f"  [bright_green]✓ No install scripts[/bright_green]")
+                                    info_items.append("No install scripts detected")
+
+                            except json.JSONDecodeError:
+                                warnings.append("Could not parse package metadata")
                         else:
-                            # Find the downloaded tarball
-                            tarballs = list(Path(sandbox_dir).glob("*.tgz"))
-                            if not tarballs:
-                                console.print("[danger]❌ No package tarball found[/danger]")
-                                is_safe = False
+                            warnings.append(f"Could not fetch package info: {npm_view.stderr[:100]}")
+
+                        # PHASE 2: Take BEFORE snapshot
+                        console.print(f"\n[bright_cyan]━━━ PHASE 2: Pre-Install Snapshot ━━━[/bright_cyan]")
+                        before_snapshot = get_dir_snapshot(Path(sandbox_dir))
+                        console.print(f"[success]✓ Captured baseline ({len(before_snapshot)} files)[/success]")
+
+                        # PHASE 3: INSTALL the package (this runs install scripts!)
+                        console.print(f"\n[bright_cyan]━━━ PHASE 3: Installing Package (DANGEROUS ZONE) ━━━[/bright_cyan]")
+                        console.print(f"[warning]⚡ Running npm install - install scripts WILL execute[/warning]")
+
+                        # Use --ignore-scripts=false to ensure scripts run (default behavior)
+                        # Set HOME to sandbox to prevent credential theft
+                        install_env = os.environ.copy()
+                        install_env['HOME'] = sandbox_dir
+                        install_env['NPM_CONFIG_CACHE'] = str(Path(sandbox_dir) / '.npm-cache')
+
+                        install_result = subprocess.run(
+                            ["npm", "install", pkg_name, "--no-save", "--prefix", sandbox_dir],
+                            capture_output=True, text=True, cwd=sandbox_dir,
+                            timeout=120, env=install_env
+                        )
+
+                        if install_result.returncode != 0:
+                            console.print(f"[danger]❌ Install failed: {install_result.stderr[:200]}[/danger]")
+                            # Check if failure was due to malicious script
+                            if 'ELIFECYCLE' in install_result.stderr:
+                                dangers.append("Install script failed - possibly malicious or broken")
                             else:
-                                tarball_path = tarballs[0]
-                                console.print(f"[success]✓ Downloaded: {tarball_path.name}[/success]")
+                                warnings.append(f"Install failed: {install_result.stderr[:100]}")
+                        else:
+                            console.print(f"[success]✓ Package installed[/success]")
 
-                                # Extract tarball
-                                extract_dir = Path(sandbox_dir) / "extracted"
-                                extract_dir.mkdir()
-                                with tarfile.open(tarball_path, "r:gz") as tar:
-                                    tar.extractall(extract_dir)
-                                console.print(f"[success]✓ Extracted package[/success]")
+                        # PHASE 4: Take AFTER snapshot and compare
+                        console.print(f"\n[bright_cyan]━━━ PHASE 4: Post-Install Analysis ━━━[/bright_cyan]")
+                        after_snapshot = get_dir_snapshot(Path(sandbox_dir))
+                        console.print(f"[info]Captured post-install state ({len(after_snapshot)} files)[/info]")
 
-                                # Analyze package.json
-                                pkg_json_path = extract_dir / "package" / "package.json"
-                                if pkg_json_path.exists():
-                                    with open(pkg_json_path) as f:
-                                        pkg_data = json.load(f)
+                        new_files, modified_files, deleted_files = compare_snapshots(before_snapshot, after_snapshot)
 
-                                    console.print(f"\n[subtitle]📋 Package Info:[/subtitle]")
-                                    console.print(f"  Name: {pkg_data.get('name', 'unknown')}")
-                                    console.print(f"  Version: {pkg_data.get('version', 'unknown')}")
-                                    console.print(f"  Description: {pkg_data.get('description', 'N/A')[:60]}...")
+                        # Filter to focus on interesting files (not in node_modules expected locations)
+                        suspicious_new = []
+                        for f in new_files:
+                            # Skip expected node_modules files
+                            if 'node_modules/' in f:
+                                continue
+                            # Flag files created outside node_modules
+                            suspicious_new.append(f)
 
-                                    # Check for suspicious scripts
-                                    scripts = pkg_data.get("scripts", {})
-                                    suspicious_scripts = ["preinstall", "postinstall", "preuninstall", "postuninstall"]
-                                    for script in suspicious_scripts:
-                                        if script in scripts:
-                                            script_content = scripts[script]
-                                            warnings.append(f"Has {script} script: {script_content[:50]}...")
-                                            # Check for dangerous patterns
-                                            danger_patterns = ["curl", "wget", "eval", "exec", "child_process", "rm -rf", "base64", "/dev/tcp"]
-                                            for pattern in danger_patterns:
-                                                if pattern in script_content.lower():
-                                                    dangers.append(f"🚨 {script} contains dangerous pattern: {pattern}")
-                                                    is_safe = False
+                        if suspicious_new:
+                            console.print(f"[danger]🚨 Files created OUTSIDE node_modules:[/danger]")
+                            for sf in suspicious_new[:10]:
+                                console.print(f"  [danger]+ {sf}[/danger]")
+                                dangers.append(f"Unexpected file created: {sf}")
+                                is_safe = False
 
-                                # Run malware analysis
-                                console.print(f"\n[info]🔍 Running malware analysis...[/info]")
+                        # Count installed files
+                        node_modules_files = [f for f in new_files if 'node_modules/' in f]
+                        console.print(f"  [dim]Installed {len(node_modules_files)} files in node_modules[/dim]")
+
+                        # PHASE 5: Deep scan installed code
+                        console.print(f"\n[bright_cyan]━━━ PHASE 5: Deep Code Analysis ━━━[/bright_cyan]")
+
+                        node_modules = Path(sandbox_dir) / "node_modules" / pkg_name.split('/')[0] if '/' in pkg_name else Path(sandbox_dir) / "node_modules" / pkg_name
+
+                        if node_modules.exists():
+                            # Scan for malicious patterns in installed code
+                            console.print(f"[info]🔍 Scanning installed code for malware patterns...[/info]")
+
+                            malware_patterns = [
+                                (r'eval\s*\(', 'eval() - dynamic code execution'),
+                                (r'Function\s*\(', 'Function constructor - dynamic code'),
+                                (r'child_process', 'child_process - command execution'),
+                                (r'\.exec\s*\(', 'exec() - command execution'),
+                                (r'\.spawn\s*\(', 'spawn() - process spawning'),
+                                (r'require\s*\(\s*[\'"]fs[\'"]\s*\)', 'filesystem access'),
+                                (r'require\s*\(\s*[\'"]net[\'"]\s*\)', 'network access'),
+                                (r'require\s*\(\s*[\'"]http[\'"]\s*\)', 'HTTP client'),
+                                (r'require\s*\(\s*[\'"]https[\'"]\s*\)', 'HTTPS client'),
+                                (r'process\.env', 'environment variable access'),
+                                (r'Buffer\.from\([^)]+,\s*[\'"]base64[\'"]', 'base64 decoding'),
+                                (r'atob\s*\(', 'base64 decoding (atob)'),
+                                (r'\\x[0-9a-fA-F]{2}', 'hex-encoded strings'),
+                                (r'\\u[0-9a-fA-F]{4}', 'unicode-encoded strings'),
+                                (r'cryptocurrency|bitcoin|monero|wallet', 'cryptocurrency references'),
+                                (r'keylog|keystroke', 'keylogger indicators'),
+                                (r'screenshot|screen.capture', 'screen capture'),
+                                (r'credential|password.*steal', 'credential theft'),
+                                (r'reverse.shell|bind.shell', 'shell backdoor'),
+                            ]
+
+                            import re
+                            files_scanned = 0
+                            malware_hits = []
+
+                            for js_file in node_modules.rglob("*.js"):
+                                files_scanned += 1
                                 try:
-                                    from malware_analyzer import MalwareAnalyzer
-                                    analyzer = MalwareAnalyzer()
-                                    malware_result = analyzer.scan_directory(str(extract_dir), scan_node_modules=True)
+                                    content = js_file.read_text(errors='ignore')
+                                    for pattern, desc in malware_patterns:
+                                        if re.search(pattern, content, re.IGNORECASE):
+                                            rel_path = str(js_file.relative_to(node_modules))
+                                            malware_hits.append((rel_path, desc))
+                                except:
+                                    pass
 
-                                    if malware_result.get("malicious_files"):
+                            console.print(f"  [dim]Scanned {files_scanned} JavaScript files[/dim]")
+
+                            # Group and report malware hits
+                            if malware_hits:
+                                # Count by type
+                                hit_types = {}
+                                for _, desc in malware_hits:
+                                    hit_types[desc] = hit_types.get(desc, 0) + 1
+
+                                # Dangerous patterns
+                                dangerous_types = ['eval', 'child_process', 'exec', 'spawn', 'reverse', 'backdoor', 'keylog', 'credential']
+                                for hit_type, count in hit_types.items():
+                                    is_dangerous = any(d in hit_type.lower() for d in dangerous_types)
+                                    if is_dangerous:
+                                        dangers.append(f"🚨 {hit_type}: {count} occurrences")
                                         is_safe = False
-                                        for mf in malware_result["malicious_files"][:5]:
-                                            dangers.append(f"🦠 Malicious code in: {mf.get('file', 'unknown')}")
-                                    if malware_result.get("suspicious_files"):
-                                        for sf in malware_result["suspicious_files"][:5]:
-                                            warnings.append(f"⚠️ Suspicious: {sf.get('file', 'unknown')}")
-                                except Exception as e:
-                                    console.print(f"[dim]Malware scan skipped: {e}[/dim]")
+                                    else:
+                                        # Common patterns like fs/http are warnings not dangers
+                                        warnings.append(f"⚠️ {hit_type}: {count} occurrences")
 
-                                # Run CVE check
-                                console.print(f"[info]🔍 Checking for known CVEs...[/info]")
+                            else:
+                                console.print(f"  [bright_green]✓ No obvious malware patterns[/bright_green]")
+                                info_items.append("No malware patterns detected in code")
+
+                        # PHASE 6: Check for known CVEs
+                        console.print(f"\n[bright_cyan]━━━ PHASE 6: CVE Database Check ━━━[/bright_cyan]")
+                        try:
+                            from scanners import get_all_scanners
+                            cve_found = False
+                            for scanner_obj in get_all_scanners():
                                 try:
-                                    from scanners import get_all_scanners
-                                    for scanner_obj in get_all_scanners():
-                                        result = scanner_obj.scan_directory(str(extract_dir), recursive=True, max_depth=3)
-                                        if result.findings:
-                                            for finding in result.findings:
-                                                sev = finding.severity.value if hasattr(finding.severity, 'value') else str(finding.severity)
-                                                if sev.upper() in ["CRITICAL", "HIGH"]:
-                                                    is_safe = False
-                                                    dangers.append(f"🔴 {finding.cve_id}: {finding.title}")
-                                                else:
-                                                    warnings.append(f"🟡 {finding.cve_id}: {finding.title}")
-                                except Exception as e:
-                                    console.print(f"[dim]CVE check skipped: {e}[/dim]")
+                                    scan_result = scanner_obj.scan_directory(str(Path(sandbox_dir) / "node_modules"), recursive=True, max_depth=3)
+                                    if scan_result and scan_result.findings:
+                                        cve_found = True
+                                        for finding in scan_result.findings:
+                                            sev = finding.severity.value if hasattr(finding.severity, 'value') else str(finding.severity)
+                                            if sev.upper() in ["CRITICAL", "HIGH"]:
+                                                is_safe = False
+                                                dangers.append(f"🔴 {finding.cve_id}: {finding.title}")
+                                            else:
+                                                warnings.append(f"🟡 {finding.cve_id}: {finding.title}")
+                                except:
+                                    pass
+                            if not cve_found:
+                                console.print(f"  [bright_green]✓ No known CVEs found[/bright_green]")
+                                info_items.append("No known CVEs")
+                        except Exception as e:
+                            console.print(f"  [dim]CVE check skipped: {e}[/dim]")
 
-                                # Check for typosquatting (common package names)
-                                common_packages = ["react", "lodash", "express", "axios", "moment", "jquery", "vue", "angular", "webpack", "babel"]
-                                for common in common_packages:
-                                    if common in pkg_name.lower() and pkg_name.lower() != common:
-                                        # Possible typosquat
-                                        import difflib
-                                        similarity = difflib.SequenceMatcher(None, common, pkg_name.lower()).ratio()
-                                        if similarity > 0.7:
-                                            warnings.append(f"⚠️ Name similar to popular package '{common}' - possible typosquat?")
+                        # PHASE 7: Typosquatting check
+                        console.print(f"\n[bright_cyan]━━━ PHASE 7: Typosquatting Analysis ━━━[/bright_cyan]")
+                        popular_packages = [
+                            "react", "lodash", "express", "axios", "moment", "jquery",
+                            "vue", "angular", "webpack", "babel", "typescript", "eslint",
+                            "prettier", "jest", "mocha", "chai", "underscore", "async",
+                            "request", "bluebird", "chalk", "commander", "inquirer",
+                            "debug", "uuid", "dotenv", "cors", "body-parser", "mongoose",
+                            "sequelize", "redux", "next", "gatsby", "nuxt", "svelte"
+                        ]
+
+                        pkg_lower = pkg_name.lower().split('/')[-1]  # Handle scoped packages
+                        for popular in popular_packages:
+                            if pkg_lower != popular:
+                                similarity = difflib.SequenceMatcher(None, popular, pkg_lower).ratio()
+                                if similarity > 0.75 and similarity < 1.0:
+                                    warnings.append(f"⚠️ Similar to '{popular}' ({similarity:.0%}) - typosquat risk?")
+                                    console.print(f"  [warning]Name '{pkg_lower}' is {similarity:.0%} similar to '{popular}'[/warning]")
+
+                        if not any('typosquat' in w.lower() for w in warnings):
+                            console.print(f"  [bright_green]✓ No typosquatting detected[/bright_green]")
 
                     except subprocess.TimeoutExpired:
-                        console.print("[danger]❌ Download timed out[/danger]")
-                        dangers.append("Download timed out - network issue or very large package")
+                        console.print("[danger]❌ Install timed out (>120s)[/danger]")
+                        dangers.append("Install timed out - suspicious long-running scripts")
                         is_safe = False
                     except Exception as e:
                         console.print(f"[danger]❌ Error: {e}[/danger]")
                         dangers.append(f"Analysis error: {str(e)}")
                         is_safe = False
                     finally:
-                        # ALWAYS clean up sandbox
+                        # ALWAYS destroy sandbox completely
                         if sandbox_dir and Path(sandbox_dir).exists():
-                            console.print(f"\n[dim]🗑️  Destroying sandbox...[/dim]")
-                            shutil.rmtree(sandbox_dir, ignore_errors=True)
-                            console.print(f"[success]✓ Sandbox destroyed[/success]")
+                            console.print(f"\n[bright_cyan]━━━ CLEANUP ━━━[/bright_cyan]")
+                            console.print(f"[dim]🗑️  Destroying sandbox...[/dim]")
+                            try:
+                                shutil.rmtree(sandbox_dir, ignore_errors=True)
+                                console.print(f"[success]✓ Sandbox destroyed - no traces remain[/success]")
+                            except:
+                                console.print(f"[warning]Cleanup may be incomplete - manually remove: {sandbox_dir}[/warning]")
 
-                    # Final verdict
-                    console.print(f"\n{'═' * 50}")
+                    # FINAL VERDICT
+                    console.print(f"\n{'═' * 60}")
+                    console.print(f"[title]📊 ANALYSIS SUMMARY[/title]")
+                    console.print(f"{'═' * 60}")
+
                     if dangers:
-                        console.print(f"\n[danger]🚫 DANGERS FOUND:[/danger]")
-                        for d in dangers:
+                        console.print(f"\n[danger]🚫 DANGERS ({len(dangers)}):[/danger]")
+                        for d in dangers[:10]:  # Limit display
                             console.print(f"  [danger]{d}[/danger]")
+                        if len(dangers) > 10:
+                            console.print(f"  [dim]... and {len(dangers) - 10} more[/dim]")
 
                     if warnings:
-                        console.print(f"\n[warning]⚠️  WARNINGS:[/warning]")
-                        for w in warnings:
+                        console.print(f"\n[warning]⚠️  WARNINGS ({len(warnings)}):[/warning]")
+                        for w in warnings[:10]:
                             console.print(f"  [warning]{w}[/warning]")
+                        if len(warnings) > 10:
+                            console.print(f"  [dim]... and {len(warnings) - 10} more[/dim]")
 
-                    console.print(f"\n{'═' * 50}")
+                    if info_items and not dangers:
+                        console.print(f"\n[success]✓ PASSED CHECKS:[/success]")
+                        for item in info_items:
+                            console.print(f"  [success]✓ {item}[/success]")
+
+                    console.print(f"\n{'═' * 60}")
+
                     if is_safe and not dangers:
                         console.print(Panel(
-                            f"[success]✅ SAFE TO DOWNLOAD[/success]\n\n"
-                            f"Package '{pkg_name}' passed security checks.\n"
-                            f"You can install with: [bright_white]npm install {pkg_name}[/bright_white]",
+                            f"[success]✅ APPEARS SAFE TO DOWNLOAD[/success]\n\n"
+                            f"Package '{pkg_name}' passed security analysis.\n"
+                            f"[dim]Note: No automated scan is 100% - review code if handling sensitive data[/dim]\n\n"
+                            f"Install with: [bright_white]npm install {pkg_name}[/bright_white]",
                             title="🛡️ VERDICT",
                             border_style="bright_green"
                         ))
                         next_step_type = "sandbox_safe"
                     else:
                         console.print(Panel(
-                            f"[danger]🚫 DO NOT DOWNLOAD[/danger]\n\n"
-                            f"Package '{pkg_name}' has security issues!\n"
-                            f"Found {len(dangers)} danger(s) and {len(warnings)} warning(s).",
+                            f"[danger]🚫 DO NOT INSTALL[/danger]\n\n"
+                            f"Package '{pkg_name}' has [bright_red]{len(dangers)}[/bright_red] security issue(s)!\n\n"
+                            f"[bright_yellow]Recommendations:[/bright_yellow]\n"
+                            f"• Search for alternative packages\n"
+                            f"• Report to npm if malicious\n"
+                            f"• Check package on snyk.io or socket.dev",
                             title="🛡️ VERDICT",
                             border_style="bright_red"
                         ))
