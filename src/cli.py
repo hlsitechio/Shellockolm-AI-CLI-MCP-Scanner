@@ -2262,25 +2262,37 @@ def interactive_shell():
 
                         new_files, modified_files, deleted_files = compare_snapshots(before_snapshot, after_snapshot)
 
-                        # Filter to focus on interesting files (not in node_modules expected locations)
+                        # Expected file patterns (not suspicious)
+                        expected_patterns = [
+                            'node_modules/',      # Package files
+                            '.npm-cache/',        # npm cache (we set NPM_CONFIG_CACHE)
+                            'package-lock.json',  # Lock file created by npm
+                            'package.json',       # May be modified by npm
+                        ]
+
+                        # Filter for truly suspicious files
                         suspicious_new = []
                         for f in new_files:
-                            # Skip expected node_modules files
-                            if 'node_modules/' in f:
+                            # Skip expected files
+                            is_expected = any(pattern in f for pattern in expected_patterns)
+                            if is_expected:
                                 continue
-                            # Flag files created outside node_modules
+                            # Flag files created in unexpected locations
                             suspicious_new.append(f)
 
                         if suspicious_new:
-                            console.print(f"[danger]🚨 Files created OUTSIDE node_modules:[/danger]")
+                            console.print(f"[danger]🚨 Suspicious files created OUTSIDE expected locations:[/danger]")
                             for sf in suspicious_new[:10]:
                                 console.print(f"  [danger]+ {sf}[/danger]")
-                                dangers.append(f"Unexpected file created: {sf}")
+                                dangers.append(f"Suspicious file created: {sf}")
                                 is_safe = False
+                        else:
+                            console.print(f"  [bright_green]✓ No suspicious files created outside node_modules[/bright_green]")
 
                         # Count installed files
                         node_modules_files = [f for f in new_files if 'node_modules/' in f]
-                        console.print(f"  [dim]Installed {len(node_modules_files)} files in node_modules[/dim]")
+                        npm_cache_files = [f for f in new_files if '.npm-cache/' in f]
+                        console.print(f"  [dim]Installed {len(node_modules_files)} package files, {len(npm_cache_files)} cache files[/dim]")
 
                         # PHASE 5: Deep scan installed code
                         console.print(f"\n[bright_cyan]━━━ PHASE 5: Deep Code Analysis ━━━[/bright_cyan]")
