@@ -55,17 +55,21 @@ python src/cli.py shell
 
 Opens a full-featured menu with 60+ commands:
 
-| SCAN | LIVE | CVE | MALWARE |
-|------|------|-----|---------|
-| `1` Full Scan | `8` Probe | `11` List All | `17` Deep |
-| `1a` ALL npm | `9` Next.js | `12` Critical | `18` Quick |
-| `1b` Pre-Check | `10` n8n | `13` Bounty | `19` Quarantine |
-| `1c` Deep Scan | | `14` Details | `20` Remove |
-| `1d` CVE Hunter | | `15` By Pkg | `21` Cleanup |
-| `1e` Custom | | `16` Export | `22` Report |
-| `2` React | | | |
-| `3` Next.js | | | |
-| `4` npm Pkgs | | | |
+| SCAN | CVE | MALWARE | SECRETS | REMEDIATION |
+|------|-----|---------|---------|-------------|
+| `1` Full | `11` List | `17` Deep | `23` Scan | `27` Risk Score |
+| `1a` ALL npm | `12` Critical | `18` Quick | `24` .env | `30` Auto-fix |
+| `1b` Pre-Check | `13` Bounty | `19` Quarantine | `25` Entropy | `31` Preview |
+| `1c` Deep | `14` Details | `20` Remove | `26` Report | `32` Rollback |
+| `1d` CVE Hunter | `15` By Pkg | `22` Report | | `X` QuickFix |
+| `1e` Custom | `16` Export | | | `F` FixWizard |
+
+| LIVE | DEPS | GITHUB | SBOM | CI/CD |
+|------|------|--------|------|-------|
+| `8` Probe All | `33` Lockfile | `40` Query GHSA | `48` Generate | `58` Workflow |
+| `9` Next.js | `34` Duplicates | `41` Check Pkg | `49` CycloneDX | `59` Basic |
+| `10` n8n | `35` Typosquat | `44` npm Audit | `50` SPDX | `60` Full |
+| | `36` Report | `45` Auto-fix | `37` SARIF | `61` Watch |
 
 ### CLI Commands
 
@@ -153,140 +157,54 @@ Export results for:
 
 ---
 
-## Menu Reference
+## Full Command Reference
 
-### Scanning
-| Command | Description |
-|---------|-------------|
-| `1` | Full scan (all scanners) |
-| `1a` | Scan ALL npm packages system-wide |
-| `1b` | Pre-install check (sandbox test) |
-| `1c` | Deep scan with verbose detection |
-| `1d` | Hunt for specific CVE |
-| `1e` | Custom scanner selection |
-| `2` | React scanner only |
-| `3` | Next.js scanner only |
-| `4` | npm packages only |
-| `5` | Node.js scanner only |
-| `6` | n8n scanner only |
-| `7` | Supply chain scanner |
+<details>
+<summary><b>Click to expand all 60+ commands</b></summary>
 
-### Live Probing
-| Command | Description |
-|---------|-------------|
-| `8` | Probe all endpoints |
-| `9` | Next.js live probe |
-| `10` | n8n live probe |
+### Scanning (`1-7`)
+`1` Full scan | `1a` ALL npm | `1b` Pre-check | `1c` Deep | `1d` CVE Hunter | `1e` Custom | `2` React | `3` Next.js | `4` npm | `5` Node.js | `6` n8n | `7` Supply chain
 
-### CVE Database
-| Command | Description |
-|---------|-------------|
-| `11` | List all CVEs |
-| `12` | Show critical only |
-| `13` | Bug bounty relevant |
-| `14` | CVE details |
-| `15` | CVEs by package |
-| `16` | Export database |
+### Live Probing (`8-10`)
+`8` Probe all | `9` Next.js | `10` n8n
 
-### Malware
-| Command | Description |
-|---------|-------------|
-| `17` | Deep malware scan |
-| `18` | Quick malware scan |
-| `19` | Quarantine threats |
-| `20` | Remove malware |
-| `21` | Cleanup quarantine |
-| `22` | Malware report |
+### CVE Database (`11-16`)
+`11` List all | `12` Critical only | `13` Bounty | `14` Details | `15` By package | `16` Export
 
-### Secrets
-| Command | Description |
-|---------|-------------|
-| `23` | Full secrets scan |
-| `24` | Scan .env files |
-| `25` | Entropy analysis |
-| `26` | Secrets report |
+### Malware (`17-22`)
+`17` Deep scan | `18` Quick scan | `19` Quarantine | `20` Remove | `21` Cleanup | `22` Report
 
-### Remediation
-| Command | Description |
-|---------|-------------|
-| `27` | Risk score analysis |
-| `28` | Quick score |
-| `29` | Fix report |
-| `30` | Auto-fix all |
-| `31` | Preview fixes |
-| `32` | Rollback changes |
+### Secrets (`23-26`)
+`23` Full scan | `24` .env files | `25` Entropy | `26` Report
 
-### Dependencies
-| Command | Description |
-|---------|-------------|
-| `33` | Lockfile analysis |
-| `34` | Find duplicates |
-| `35` | Typosquat check |
-| `36` | Dependency report |
+### Remediation (`27-32`)
+`27` Risk score | `28` Quick score | `29` Fix report | `30` Auto-fix | `31` Preview | `32` Rollback
 
-### SARIF
-| Command | Description |
-|---------|-------------|
-| `37` | Export SARIF |
-| `38` | View SARIF |
-| `39` | Convert to SARIF |
+### Dependencies (`33-36`)
+`33` Lockfile | `34` Duplicates | `35` Typosquat | `36` Report
 
-### GitHub Advisory
-| Command | Description |
-|---------|-------------|
-| `40` | Query GHSA |
-| `41` | Check package |
-| `42` | Scan project |
-| `43` | Advisory report |
+### SARIF (`37-39`)
+`37` Export | `38` View | `39` Convert
 
-### npm Audit
-| Command | Description |
-|---------|-------------|
-| `44` | Run audit |
-| `45` | Auto-fix audit |
-| `46` | Recommendations |
-| `47` | Audit history |
+### GitHub Advisory (`40-43`)
+`40` Query GHSA | `41` Check pkg | `42` Scan | `43` Report
 
-### SBOM
-| Command | Description |
-|---------|-------------|
-| `48` | Generate SBOM |
-| `49` | CycloneDX format |
-| `50` | SPDX format |
+### npm Audit (`44-47`)
+`44` Audit | `45` Auto-fix | `46` Recommendations | `47` History
 
-### Dependency Tree
-| Command | Description |
-|---------|-------------|
-| `51` | View tree |
-| `52` | Find package |
-| `53` | Tree stats |
-| `54` | Export tree |
+### SBOM (`48-50`)
+`48` Generate | `49` CycloneDX | `50` SPDX
 
-### Ignore Rules
-| Command | Description |
-|---------|-------------|
-| `55` | Create rules |
-| `56` | View rules |
-| `57` | Test path |
+### Dependency Tree (`51-54`)
+`51` View | `52` Find pkg | `53` Stats | `54` Export
 
-### CI/CD
-| Command | Description |
-|---------|-------------|
-| `58` | Generate workflow |
-| `59` | Basic config |
-| `60` | Full CI/CD |
-| `61` | Watch mode |
+### Ignore & CI/CD (`55-61`)
+`55` Create rules | `56` View rules | `57` Test | `58` Workflow | `59` Basic | `60` Full CI/CD | `61` Watch
 
 ### Quick Actions
-| Key | Action |
-|-----|--------|
-| `X` | QuickFix all vulnerabilities |
-| `F` | FixWizard (interactive) |
-| `R` | Generate report |
-| `P` | Fetch PoC |
-| `U` | Update CVE database |
-| `M` | Back to menu |
-| `Q` | Quit |
+`X` QuickFix | `F` FixWizard | `R` Report | `P` PoC | `U` Update | `M` Menu | `Q` Quit
+
+</details>
 
 ---
 
