@@ -1428,8 +1428,12 @@ def show_main_menu():
     """Display the main menu using 4-column table layout"""
 
     console.print()
+    # Build header content with session info if available
+    header_content = "[bold bright_white]SHELLOCKOLM - npm/Node.js Security Scanner[/bold bright_white]"
+    if session_logger:
+        header_content += f"\n[dim]📝 Session: {session_logger.session_id} | Log: /tmp/shellockolm/sessions/[/dim]"
     console.print(Panel(
-        "[bold bright_white]SHELLOCKOLM - npm/Node.js Security Scanner[/bold bright_white]",
+        header_content,
         border_style="bright_cyan",
         padding=(0, 2)
     ))
@@ -1778,8 +1782,6 @@ def interactive_shell():
     # Clear screen and show full banner
     console.clear()
     print_banner(show_full=True)
-    console.print(f"[dim]📝 Session: {session_logger.session_id} | Log: /tmp/shellockolm/sessions/[/dim]")
-    console.print()
 
     session_logger.log("Session started - Interactive mode", "INFO")
 
