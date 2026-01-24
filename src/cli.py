@@ -1867,7 +1867,29 @@ def interactive_shell():
             action = cmd["action"]
 
             if cmd.get("requires_input") == "path":
-                path = prompt(cmd["input_prompt"]).strip() or "."
+                path_input = prompt(cmd["input_prompt"]).strip() or "."
+                # Resolve the path to show user what will actually be scanned
+                resolved_path = Path(path_input).resolve()
+
+                # Check for dangerous paths (home, root, or very large dirs)
+                home_dir = Path.home()
+                dangerous_paths = [home_dir, Path("/"), Path("/home"), Path("/Users")]
+
+                if resolved_path in dangerous_paths or resolved_path == home_dir:
+                    console.print(f"\n[warning]⚠️  Path resolves to: {resolved_path}[/warning]")
+                    console.print("[warning]This would scan your entire home/root directory![/warning]")
+                    console.print("[info]Enter a specific project path instead (e.g., /home/user/myproject)[/info]")
+                    confirm = console.input("\n[bold]Scan anyway? [y/N]: [/bold]").strip().lower()
+                    if confirm not in ['y', 'yes']:
+                        console.print("[info]Cancelled. Enter a more specific path.[/info]")
+                        show_menu = False
+                        continue
+                else:
+                    # Show resolved path for clarity
+                    console.print(f"[dim]Resolved: {resolved_path}[/dim]")
+
+                # Use the resolved path
+                path = str(resolved_path)
                 action = f"{action} {path}"
 
             elif cmd.get("requires_input") == "url":
@@ -1887,9 +1909,22 @@ def interactive_shell():
                 action = f"{action} {cve_id}"
 
             elif cmd.get("requires_input") == "path_and_output":
-                path = prompt(cmd["input_prompt"]).strip() or "."
+                path_input = prompt(cmd["input_prompt"]).strip() or "."
+                resolved_path = Path(path_input).resolve()
+                home_dir = Path.home()
+                dangerous_paths = [home_dir, Path("/"), Path("/home"), Path("/Users")]
+                if resolved_path in dangerous_paths or resolved_path == home_dir:
+                    console.print(f"\n[warning]⚠️  Path resolves to: {resolved_path}[/warning]")
+                    console.print("[warning]This would scan your entire home/root directory![/warning]")
+                    confirm = console.input("\n[bold]Scan anyway? [y/N]: [/bold]").strip().lower()
+                    if confirm not in ['y', 'yes']:
+                        console.print("[info]Cancelled.[/info]")
+                        show_menu = False
+                        continue
+                else:
+                    console.print(f"[dim]Resolved: {resolved_path}[/dim]")
                 output = prompt(cmd["input_prompt2"]).strip() or "report.json"
-                action = f"scan {path} -o {output}"
+                action = f"scan {resolved_path} -o {output}"
 
             elif cmd.get("requires_input") == "file_path":
                 file_path = prompt(cmd["input_prompt"]).strip()
