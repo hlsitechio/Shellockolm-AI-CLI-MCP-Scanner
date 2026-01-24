@@ -55,21 +55,17 @@ python src/cli.py shell
 
 Opens a full-featured menu with 60+ commands:
 
-```
-╭─────────────────────────────────────────────────────────────────╮
-│ SCAN           │ LIVE          │ CVE           │ MALWARE       │
-├─────────────────────────────────────────────────────────────────┤
-│ [ 1] Full Scan │ [ 8] Probe    │ [11] List All │ [17] Deep     │
-│ [1a] ALL npm   │ [ 9] Next.js  │ [12] Critical │ [18] Quick    │
-│ [1b] Pre-Check │ [10] n8n      │ [13] Bounty   │ [19] Quarantine│
-│ [1c] Deep Scan │               │ [14] Details  │ [20] Remove   │
-│ [1d] CVE Hunter│               │ [15] By Pkg   │ [21] Cleanup  │
-│ [1e] Custom    │               │ [16] Export   │ [22] Report   │
-│ [ 2] React     │               │               │               │
-│ [ 3] Next.js   │               │               │               │
-│ [ 4] npm Pkgs  │               │               │               │
-╰─────────────────────────────────────────────────────────────────╯
-```
+| SCAN | LIVE | CVE | MALWARE |
+|------|------|-----|---------|
+| `1` Full Scan | `8` Probe | `11` List All | `17` Deep |
+| `1a` ALL npm | `9` Next.js | `12` Critical | `18` Quick |
+| `1b` Pre-Check | `10` n8n | `13` Bounty | `19` Quarantine |
+| `1c` Deep Scan | | `14` Details | `20` Remove |
+| `1d` CVE Hunter | | `15` By Pkg | `21` Cleanup |
+| `1e` Custom | | `16` Export | `22` Report |
+| `2` React | | | |
+| `3` Next.js | | | |
+| `4` npm Pkgs | | | |
 
 ### CLI Commands
 
