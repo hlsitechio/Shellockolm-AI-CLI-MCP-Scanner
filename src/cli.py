@@ -20,6 +20,8 @@ from typing import Optional, List
 from datetime import datetime
 from io import StringIO
 
+import compat  # noqa: F401 — Windows UTF-8 stdout fix (must be early)
+
 try:
     import typer
 except ImportError:
@@ -112,7 +114,10 @@ class SingleLineProgress:
         pct = min(100, (self.current / self.total) * 100)
         bar_width = 25
         filled = int(bar_width * pct / 100)
-        bar = "█" * filled + "░" * (bar_width - filled)
+        if sys.platform == "win32":
+            bar = "#" * filled + "-" * (bar_width - filled)
+        else:
+            bar = "\u2588" * filled + "\u2591" * (bar_width - filled)
 
         # Build findings string
         findings_str = ""
@@ -358,9 +363,9 @@ def print_banner(show_full: bool = True):
 [dim]{date_str} • {time_str}[/dim]
 
 [bright_cyan]AI MCP Tool & Python CVE Scanner[/bright_cyan]
-[dim]React • Next.js • Node.js • n8n • npm • Supply Chain[/dim]
+[dim]React • Next.js • Node.js • n8n • npm • Supply Chain • Clawdbot[/dim]
 
-[bright_green]✓ 29 CVEs  ✓ 6 Scanners  ✓ Malware  ✓ Secrets  ✓ Auto-Fix[/bright_green]
+[bright_green]✓ 32 CVEs  ✓ 7 Scanners  ✓ Malware  ✓ Secrets  ✓ Auto-Fix[/bright_green]
 [link=https://github.com/hlsitechio/shellockolm][bright_blue]🔗 github.com/hlsitechio/shellockolm[/bright_blue][/link]
 ────────────────────────────────────────────────────────────────────
 [bright_yellow]💡 Tip:[/bright_yellow] {tip}{session_line}"""
@@ -993,7 +998,7 @@ MENU_CATEGORIES = {
             {
                 "id": "1",
                 "name": "Full Scan",
-                "description": "Run ALL 6 scanners on a directory to detect 29 CVEs across React, Next.js, Node.js, npm packages, n8n, and supply chain attacks.",
+                "description": "Run ALL 7 scanners on a directory to detect 32 CVEs across React, Next.js, Node.js, npm packages, n8n, supply chain, and Clawdbot/Moltbot.",
                 "action": "scan",
                 "requires_input": "path",
                 "input_prompt": "Enter path to scan (or . for current dir): ",
@@ -1123,7 +1128,7 @@ MENU_CATEGORIES = {
             {
                 "id": "11",
                 "name": "List All CVEs",
-                "description": "Display all 28 tracked CVEs with severity, CVSS scores, affected packages, and titles.",
+                "description": "Display all 32 tracked CVEs with severity, CVSS scores, affected packages, and titles.",
                 "action": "cves",
                 "requires_input": None,
             },
@@ -1152,7 +1157,7 @@ MENU_CATEGORIES = {
             {
                 "id": "15",
                 "name": "List Scanners",
-                "description": "Show all 6 available scanners with their descriptions, CVE coverage, and live scan capability.",
+                "description": "Show all 7 available scanners with their descriptions, CVE coverage, and live scan capability.",
                 "action": "scanners",
                 "requires_input": None,
             },
@@ -1584,6 +1589,54 @@ MENU_CATEGORIES = {
             },
         ]
     },
+    "clawdbot": {
+        "title": "🤖 CLAWDBOT / MOLTBOT",
+        "commands": [
+            {
+                "id": "70",
+                "name": "Full Clawdbot Scan",
+                "description": "Run ALL Clawdbot/Moltbot checks: credential files, OAuth piggybacking, installations, network exposure, mDNS broadcasting, package dependencies.",
+                "action": "scan -s clawdbot",
+                "requires_input": "path",
+                "input_prompt": "Enter path to scan (or ~ for home): ",
+            },
+            {
+                "id": "71",
+                "name": "Home Credential Audit",
+                "description": "Quick scan of ~/.claude/, ~/.clawdbot/, ~/.moltbot/ for exposed OAuth tokens, plaintext credentials, and insecure file permissions.",
+                "action": "clawdbot-home",
+                "requires_input": None,
+            },
+            {
+                "id": "72",
+                "name": "OAuth Token Check",
+                "description": "Check if Claude Code OAuth tokens in ~/.claude/.credentials.json are being piggybacked by Clawdbot/Moltbot gateway.",
+                "action": "clawdbot-oauth",
+                "requires_input": None,
+            },
+            {
+                "id": "73",
+                "name": "Network Exposure",
+                "description": "Check for exposed Clawdbot gateway (port 18789), mDNS broadcasting (port 5353), and reverse proxy configs leaking credentials.",
+                "action": "clawdbot-network",
+                "requires_input": None,
+            },
+            {
+                "id": "74",
+                "name": "Detect Installation",
+                "description": "Find Clawdbot/Moltbot installations: npm global packages, system binaries, cloned repos, running processes, MCP server configs.",
+                "action": "clawdbot-detect",
+                "requires_input": None,
+            },
+            {
+                "id": "75",
+                "name": "Remediation Guide",
+                "description": "Show step-by-step guide to secure or remove Clawdbot/Moltbot: revoke tokens, fix permissions, block ports, uninstall.",
+                "action": "clawdbot-remediate",
+                "requires_input": None,
+            },
+        ]
+    },
 }
 
 
@@ -1618,6 +1671,16 @@ def show_main_menu():
     t2.add_row("[green][10][/green] n8n", "[white][35][/white] Typosquat", "[cyan][44][/cyan] npm Audit", "[magenta][50][/magenta] SPDX", "[blue][60][/blue] Full")
     t2.add_row("", "[white][36][/white] Report", "[cyan][45][/cyan] Auto Fix", "[yellow][37][/yellow] SARIF", "[blue][61][/blue] Watch")
     console.print(t2)
+
+    # Row 3: CLAWDBOT / MOLTBOT (dedicated AI gateway credential protection)
+    t3 = Table(box=box.ROUNDED, border_style="bright_red", show_header=True, padding=(0, 1))
+    t3.add_column("[bright_red]CLAWDBOT / MOLTBOT[/bright_red]", width=24)
+    t3.add_column("[bright_red]CREDENTIAL CHECKS[/bright_red]", width=24)
+    t3.add_column("[bright_red]NETWORK / INSTALL[/bright_red]", width=24)
+    t3.add_row("[bright_red][70][/bright_red] Full Scan", "[bright_red][71][/bright_red] Home Cred Audit", "[bright_red][73][/bright_red] Network Exposure")
+    t3.add_row("", "[bright_red][72][/bright_red] OAuth Token Check", "[bright_red][74][/bright_red] Detect Install")
+    t3.add_row("", "", "[bright_red][75][/bright_red] Remediation Guide")
+    console.print(t3)
     console.print()
 
 
@@ -1867,6 +1930,13 @@ def show_next_steps(cmd_type: str, context: dict = None):
             ("[1]", "Run one-time scan"),
             ("[61]", "Start watch mode again"),
             ("[58]", "Generate CI/CD workflow"),
+        ],
+        "clawdbot": [
+            ("[70]", "Run full Clawdbot scan"),
+            ("[71]", "Audit home credentials"),
+            ("[72]", "Check OAuth token piggybacking"),
+            ("[73]", "Check network exposure"),
+            ("[75]", "View remediation guide"),
         ],
     }
 
@@ -2171,8 +2241,8 @@ def interactive_shell():
                     "[title]Shellockolm v2.0[/title]\n\n"
                     "Security Detective for React, Next.js, Node.js & npm\n\n"
                     "[highlight]Coverage:[/highlight]\n"
-                    "  • 28 CVEs tracked (2024-2026)\n"
-                    "  • 6 specialized scanners\n"
+                    "  • 32 CVEs tracked (2024-2026)\n"
+                    "  • 7 specialized scanners\n"
                     "  • Live URL probing\n"
                     "  • Supply chain attack detection\n\n"
                     "[highlight]Bug Bounty Ready:[/highlight]\n"
@@ -4031,14 +4101,24 @@ def interactive_shell():
                     }
                     summary = grade_summaries.get(grade_value, "Review needed")
 
-                    grade_art = f"""
+                    if sys.platform == "win32":
+                        grade_art = f"""
 [{grade_color}]
-   ██████╗ ██████╗  █████╗ ██████╗ ███████╗
-  ██╔════╝ ██╔══██╗██╔══██╗██╔══██╗██╔════╝
-  ██║  ███╗██████╔╝███████║██║  ██║█████╗
-  ██║   ██║██╔══██╗██╔══██║██║  ██║██╔══╝
-  ╚██████╔╝██║  ██║██║  ██║██████╔╝███████╗
-   ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚══════╝
+    ####  #####   ###  ####  #####
+   #      #   #  #   # #   # #
+   # ###  ####   ##### #   # ####
+   #   #  #  #   #   # #   # #
+    ####  #   #  #   # ####  #####
+                    {grade_value}"""
+                    else:
+                        grade_art = f"""
+[{grade_color}]
+   \u2588\u2588\u2588\u2588\u2588\u2588\u2557 \u2588\u2588\u2588\u2588\u2588\u2588\u2557  \u2588\u2588\u2588\u2588\u2588\u2557 \u2588\u2588\u2588\u2588\u2588\u2588\u2557 \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557
+  \u2588\u2588\u2554\u2550\u2550\u2550\u2550\u255d \u2588\u2588\u2554\u2550\u2550\u2588\u2588\u2557\u2588\u2588\u2554\u2550\u2550\u2588\u2588\u2557\u2588\u2588\u2554\u2550\u2550\u2588\u2588\u2557\u2588\u2588\u2554\u2550\u2550\u2550\u2550\u255d
+  \u2588\u2588\u2551  \u2588\u2588\u2588\u2557\u2588\u2588\u2588\u2588\u2588\u2588\u2554\u255d\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2551\u2588\u2588\u2551  \u2588\u2588\u2551\u2588\u2588\u2588\u2588\u2588\u2557
+  \u2588\u2588\u2551   \u2588\u2588\u2551\u2588\u2588\u2554\u2550\u2550\u2588\u2588\u2557\u2588\u2588\u2554\u2550\u2550\u2588\u2588\u2551\u2588\u2588\u2551  \u2588\u2588\u2551\u2588\u2588\u2554\u2550\u2550\u255d
+  \u255a\u2588\u2588\u2588\u2588\u2588\u2588\u2554\u255d\u2588\u2588\u2551  \u2588\u2588\u2551\u2588\u2588\u2551  \u2588\u2588\u2551\u2588\u2588\u2588\u2588\u2588\u2588\u2554\u255d\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557
+   \u255a\u2550\u2550\u2550\u2550\u2550\u255d \u255a\u2550\u255d  \u255a\u2550\u255d\u255a\u2550\u255d  \u255a\u2550\u255d\u255a\u2550\u2550\u2550\u2550\u2550\u255d \u255a\u2550\u2550\u2550\u2550\u2550\u2550\u255d
                     {grade_value}
 [/{grade_color}]"""
                     console.print(grade_art)
@@ -5497,6 +5577,266 @@ def interactive_shell():
                         next_step_type = "watch_stop"
                     except Exception as e:
                         console.print(f"[danger]Error: {e}[/danger]")
+
+                # ─────────────────────────────────────────────────────────────
+                # CLAWDBOT / MOLTBOT COMMANDS
+                # ─────────────────────────────────────────────────────────────
+                elif cmd_name == "clawdbot-home":
+                    # Quick credential audit of home directory
+                    console.print("[title]🤖 Clawdbot Home Credential Audit[/title]\n")
+                    console.print("[dim]Scanning home directory for exposed credentials...[/dim]\n")
+                    home_path = str(Path.home())
+                    scan(path=home_path, scanner="clawdbot", output=None, recursive=False, max_depth=1, verbose=False, quiet=False, _from_menu=True)
+                    next_step_type = "clawdbot"
+
+                elif cmd_name == "clawdbot-oauth":
+                    # Check OAuth token piggybacking
+                    console.print("[title]🤖 Clawdbot OAuth Token Check[/title]\n")
+                    from pathlib import Path as P
+                    cred_file = P.home() / ".claude" / ".credentials.json"
+                    clawdbot_dir = P.home() / ".clawdbot"
+                    moltbot_dir = P.home() / ".moltbot"
+                    claude_json = P.home() / ".claude.json"
+
+                    console.print("[subtitle]Step 1: Claude OAuth Credentials[/subtitle]")
+                    if cred_file.exists():
+                        import stat
+                        st = cred_file.stat()
+                        perms = stat.filemode(st.st_mode)
+                        world_readable = st.st_mode & stat.S_IROTH
+                        size = st.st_size
+
+                        if world_readable:
+                            console.print(f"  [bright_red]🚨 CRITICAL: {cred_file} is WORLD-READABLE ({perms})[/bright_red]")
+                            console.print(f"  [bright_red]   Any process on this system can read your OAuth tokens![/bright_red]")
+                            console.print(f"  [yellow]   Fix: chmod 600 {cred_file}[/yellow]")
+                        else:
+                            console.print(f"  [bright_green]✓ {cred_file} permissions OK ({perms})[/bright_green]")
+
+                        # Check for token content
+                        try:
+                            content = cred_file.read_text()
+                            if "oauth" in content.lower() or "token" in content.lower() or "Bearer" in content:
+                                console.print(f"  [warning]⚠ Contains OAuth/Bearer tokens ({size} bytes)[/warning]")
+                            else:
+                                console.print(f"  [dim]  File exists ({size} bytes), no obvious tokens[/dim]")
+                        except Exception:
+                            console.print(f"  [dim]  Cannot read file contents[/dim]")
+                    else:
+                        console.print(f"  [bright_green]✓ {cred_file} does not exist (no tokens to steal)[/bright_green]")
+
+                    console.print()
+                    console.print("[subtitle]Step 2: Clawdbot/Moltbot Config Directories[/subtitle]")
+                    for check_dir, label in [(clawdbot_dir, "Clawdbot"), (moltbot_dir, "Moltbot")]:
+                        if check_dir.exists():
+                            console.print(f"  [bright_red]🚨 {label} config found: {check_dir}[/bright_red]")
+                            # List files in the directory
+                            try:
+                                files = list(check_dir.iterdir())
+                                for f in files:
+                                    console.print(f"  [warning]   └─ {f.name} ({f.stat().st_size} bytes)[/warning]")
+                            except Exception:
+                                pass
+                            console.print(f"  [yellow]   This tool piggybacks YOUR Claude OAuth tokens![/yellow]")
+                        else:
+                            console.print(f"  [bright_green]✓ {check_dir} not found[/bright_green]")
+
+                    console.print()
+                    console.print("[subtitle]Step 3: MCP Server References[/subtitle]")
+                    if claude_json.exists():
+                        try:
+                            import json
+                            config = json.loads(claude_json.read_text())
+                            mcp_servers = config.get("mcpServers", {})
+                            clawdbot_refs = [k for k in mcp_servers if "clawdbot" in k.lower() or "moltbot" in k.lower() or "clawd" in k.lower()]
+                            if clawdbot_refs:
+                                console.print(f"  [warning]⚠ MCP servers referencing Clawdbot: {', '.join(clawdbot_refs)}[/warning]")
+                            else:
+                                console.print(f"  [bright_green]✓ No Clawdbot MCP server references in {claude_json}[/bright_green]")
+                        except Exception as e:
+                            console.print(f"  [dim]Cannot parse {claude_json}: {e}[/dim]")
+                    else:
+                        console.print(f"  [bright_green]✓ {claude_json} not found[/bright_green]")
+
+                    console.print()
+                    next_step_type = "clawdbot"
+
+                elif cmd_name == "clawdbot-network":
+                    # Check network exposure
+                    console.print("[title]🤖 Clawdbot Network Exposure Check[/title]\n")
+                    import socket
+
+                    checks = [
+                        (18789, "Clawdbot Gateway", "CRITICAL - Gateway exposed! Firewall this port immediately."),
+                        (5353, "mDNS Service Discovery", "WARNING - May broadcast credential paths to the network."),
+                    ]
+
+                    console.print("[subtitle]Port Exposure Check[/subtitle]")
+                    for port, name, alert_msg in checks:
+                        try:
+                            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                            sock.settimeout(1)
+                            result = sock.connect_ex(('127.0.0.1', port))
+                            sock.close()
+                            if result == 0:
+                                console.print(f"  [bright_red]🚨 Port {port} ({name}) is LISTENING[/bright_red]")
+                                console.print(f"  [bright_red]   {alert_msg}[/bright_red]")
+                            else:
+                                console.print(f"  [bright_green]✓ Port {port} ({name}) - closed[/bright_green]")
+                        except Exception:
+                            console.print(f"  [bright_green]✓ Port {port} ({name}) - not reachable[/bright_green]")
+
+                    console.print()
+                    console.print("[subtitle]Reverse Proxy Config Check[/subtitle]")
+                    proxy_configs = [
+                        Path("/etc/nginx/sites-enabled/"),
+                        Path("/etc/nginx/conf.d/"),
+                        Path("/etc/caddy/"),
+                    ]
+                    found_proxy = False
+                    for config_dir in proxy_configs:
+                        if config_dir.exists():
+                            try:
+                                for conf_file in config_dir.iterdir():
+                                    if conf_file.is_file():
+                                        content = conf_file.read_text()
+                                        if "18789" in content or "clawdbot" in content.lower():
+                                            console.print(f"  [warning]⚠ Clawdbot reference in {conf_file}[/warning]")
+                                            found_proxy = True
+                            except Exception:
+                                pass
+                    if not found_proxy:
+                        console.print(f"  [bright_green]✓ No reverse proxy configs expose Clawdbot[/bright_green]")
+
+                    console.print()
+                    console.print("[subtitle]Process Check[/subtitle]")
+                    try:
+                        import subprocess
+                        result = subprocess.run(["pgrep", "-fa", "clawdbot|moltbot"], capture_output=True, text=True, timeout=5)
+                        if result.stdout.strip():
+                            for line in result.stdout.strip().split('\n'):
+                                console.print(f"  [bright_red]🚨 Running process: {line}[/bright_red]")
+                        else:
+                            console.print(f"  [bright_green]✓ No Clawdbot/Moltbot processes running[/bright_green]")
+                    except Exception:
+                        console.print(f"  [dim]Cannot check processes[/dim]")
+
+                    console.print()
+                    next_step_type = "clawdbot"
+
+                elif cmd_name == "clawdbot-detect":
+                    # Detect installations
+                    console.print("[title]🤖 Clawdbot Installation Detection[/title]\n")
+                    from pathlib import Path as P
+                    home = P.home()
+
+                    install_checks = [
+                        (home / ".npm-global/lib/node_modules/clawdbot", "npm global (clawdbot)"),
+                        (home / ".npm-global/lib/node_modules/moltbot", "npm global (moltbot)"),
+                        (P("/usr/bin/clawdbot"), "System binary (/usr/bin)"),
+                        (P("/usr/local/bin/clawdbot"), "System binary (/usr/local/bin)"),
+                        (home / "node_modules/.package-lock.json", "Local node_modules"),
+                    ]
+
+                    console.print("[subtitle]Known Install Locations[/subtitle]")
+                    found_installs = False
+                    for check_path, label in install_checks:
+                        if check_path.exists():
+                            console.print(f"  [bright_red]🚨 FOUND: {label} → {check_path}[/bright_red]")
+                            found_installs = True
+                        else:
+                            console.print(f"  [bright_green]✓ {label} - not found[/bright_green]")
+
+                    console.print()
+                    console.print("[subtitle]Cloned Repositories[/subtitle]")
+                    search_dirs = [home, home / "projects", home / "code", home / "repos", home / "git"]
+                    for search_dir in search_dirs:
+                        if search_dir.exists():
+                            try:
+                                for item in search_dir.iterdir():
+                                    if item.is_dir() and item.name.lower() in ["clawdbot", "moltbot", "clawbot", "clawd.bot"]:
+                                        console.print(f"  [warning]⚠ Cloned repo: {item}[/warning]")
+                                        found_installs = True
+                            except PermissionError:
+                                pass
+
+                    console.print()
+                    console.print("[subtitle]MCP Server Configs[/subtitle]")
+                    claude_json = home / ".claude.json"
+                    if claude_json.exists():
+                        try:
+                            import json
+                            config = json.loads(claude_json.read_text())
+                            mcp_servers = config.get("mcpServers", {})
+                            for name, server_conf in mcp_servers.items():
+                                cmd_parts = server_conf.get("command", "") + " " + " ".join(server_conf.get("args", []))
+                                if "clawdbot" in cmd_parts.lower() or "moltbot" in cmd_parts.lower():
+                                    console.print(f"  [warning]⚠ MCP server '{name}' references Clawdbot[/warning]")
+                                    found_installs = True
+                        except Exception:
+                            pass
+
+                    if not found_installs:
+                        console.print(f"\n  [bright_green]✓ No Clawdbot/Moltbot installations detected[/bright_green]")
+
+                    console.print()
+                    next_step_type = "clawdbot"
+
+                elif cmd_name == "clawdbot-remediate":
+                    # Remediation guide
+                    console.print("[title]🤖 Clawdbot/Moltbot Remediation Guide[/title]\n")
+
+                    from rich.panel import Panel
+
+                    steps = [
+                        (
+                            "1. Revoke OAuth Tokens",
+                            "[bright_red]CRITICAL[/bright_red] — Clawdbot piggybacks Claude Code tokens\n"
+                            "  [yellow]$ rm ~/.claude/.credentials.json[/yellow]\n"
+                            "  [yellow]$ claude auth logout[/yellow]\n"
+                            "  Then re-authenticate: [yellow]$ claude auth login[/yellow]\n"
+                            "  This generates fresh tokens Clawdbot can't reuse."
+                        ),
+                        (
+                            "2. Fix File Permissions",
+                            "Lock down credential files:\n"
+                            "  [yellow]$ chmod 600 ~/.claude/.credentials.json[/yellow]\n"
+                            "  [yellow]$ chmod 700 ~/.claude/[/yellow]\n"
+                            "  [yellow]$ chmod 600 ~/.claude.json[/yellow]\n"
+                            "  Prevents other processes from reading tokens."
+                        ),
+                        (
+                            "3. Remove Clawdbot/Moltbot",
+                            "Uninstall from npm:\n"
+                            "  [yellow]$ npm uninstall -g clawdbot moltbot[/yellow]\n"
+                            "Remove config dirs:\n"
+                            "  [yellow]$ rm -rf ~/.clawdbot ~/.moltbot[/yellow]\n"
+                            "Remove MCP server refs from ~/.claude.json"
+                        ),
+                        (
+                            "4. Block Network Exposure",
+                            "Firewall the gateway port:\n"
+                            "  [yellow]$ sudo ufw deny 18789[/yellow]\n"
+                            "Block mDNS credential broadcast:\n"
+                            "  [yellow]$ sudo ufw deny out 5353[/yellow]\n"
+                            "Remove any reverse proxy configs for port 18789."
+                        ),
+                        (
+                            "5. Audit & Monitor",
+                            "Check if tokens were used:\n"
+                            "  [yellow]$ shellockolm shell → [71] Home Cred Audit[/yellow]\n"
+                            "Check network exposure:\n"
+                            "  [yellow]$ shellockolm shell → [73] Network Exposure[/yellow]\n"
+                            "Run full scan: [yellow]$ shellockolm shell → [70][/yellow]"
+                        ),
+                    ]
+
+                    for title, body in steps:
+                        console.print(Panel(body, title=f"[bold]{title}[/bold]", border_style="bright_red", width=76))
+                        console.print()
+
+                    console.print("[info]Run [70] Full Clawdbot Scan to verify your system is clean.[/info]")
+                    next_step_type = "clawdbot"
 
                 else:
                     console.print(f"[danger]Unknown command: {cmd_name}[/danger]")

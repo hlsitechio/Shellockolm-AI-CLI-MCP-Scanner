@@ -7,8 +7,9 @@ Your Security Detective with a graphical interface
 """
 
 import sys
-import io
 import tkinter as tk
+
+import compat  # noqa: F401 — Windows UTF-8 fix
 from tkinter import ttk, filedialog, scrolledtext
 from pathlib import Path
 import json

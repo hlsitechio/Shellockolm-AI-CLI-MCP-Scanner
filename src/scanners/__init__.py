@@ -10,6 +10,7 @@ from .npm_packages import NPMPackageScanner
 from .nodejs import NodeJSScanner
 from .n8n import N8NScanner
 from .supply_chain import SupplyChainScanner
+from .clawdbot import ClawdbotScanner
 
 __all__ = [
     'BaseScanner',
@@ -21,6 +22,7 @@ __all__ = [
     'NodeJSScanner',
     'N8NScanner',
     'SupplyChainScanner',
+    'ClawdbotScanner',
 ]
 
 # Scanner registry for CLI
@@ -31,6 +33,7 @@ SCANNER_REGISTRY = {
     'nodejs': NodeJSScanner,
     'n8n': N8NScanner,
     'supply-chain': SupplyChainScanner,
+    'clawdbot': ClawdbotScanner,
 }
 
 def get_all_scanners():

@@ -7,20 +7,17 @@ Usage: python scan.py [path]
 """
 
 import sys
-import io
 import json
 from pathlib import Path
+
+import compat  # noqa: F401 — Windows UTF-8 stdout fix (must be early)
+
 from scanner import CVEScanner
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich import box
 from rich.theme import Theme
-
-# Fix UTF-8 encoding for Windows console
-if sys.platform == 'win32':
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 # 🎨 DARK THEME CONFIGURATION
 dark_theme = Theme({
