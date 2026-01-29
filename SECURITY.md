@@ -141,19 +141,19 @@ Get started securely with our official installers:
 
 **Windows:**
 ```powershell
-iex (irm https://raw.githubusercontent.com/hlsitechio/shellockolm/main/install.ps1)
+iex (irm https://raw.githubusercontent.com/hlsitechio/shellockolm/main/scripts/install.ps1)
 ```
 
 **Linux/macOS:**
 ```bash
 # Ubuntu/Debian
-curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/install-debian.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/scripts/install-debian.sh | bash
 
 # Arch Linux
-curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/install-arch.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/scripts/install-arch.sh | bash
 
 # macOS
-curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/scripts/install.sh | bash
 ```
 
 All installers:

@@ -6,57 +6,18 @@
 
 ![Shellockolm - Your Security Detective](docs/images/banner.png)
 
-</div>
-
-## ⚡ Install & Run in 60 Seconds
-
-<div align="center">
-
-### 🪟 Windows
-```powershell
-iex (irm https://raw.githubusercontent.com/hlsitechio/shellockolm/main/scripts/install.ps1)
-```
-**Or:** [Download ZIP](https://github.com/hlsitechio/shellockolm/archive/refs/heads/main.zip) → Double-click `scripts/setup.bat`
-
----
-
-### 🐧 Ubuntu / Debian / Mint
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/scripts/install-debian.sh | bash
+pip install -r requirements.txt
+python src/cli.py scan .
 ```
-
----
-
-### 🏔️ Arch / Manjaro
-```bash
-curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/scripts/install-arch.sh | bash
-```
-
----
-
-### 🍎 macOS
-```bash
-curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/scripts/install.sh | bash
-```
-
----
-
-**Then run:** `python src/cli.py scan .` → ✅ **Instant security audit**
-
-📖 **[Full installation guide](docs/INSTALL.md)** | 🚀 **[Quick start](docs/QUICKSTART.md)** | ⚡ **[Fast install reference](docs/FAST_INSTALL.md)**
-
-</div>
-
-<div align="center">
 
 **✅ 32 CVEs detected** | **✅ Malware & secrets found** | **✅ Auto-fix with backups** | **✅ 100% offline**
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
 [![MIT License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![One-Line Install](https://img.shields.io/badge/install-one%20line-success)](docs/INSTALL.md)
 [![GitHub Release](https://img.shields.io/github/v/release/hlsitechio/shellockolm?color=success)](https://github.com/hlsitechio/shellockolm/releases/latest)
 
-[What It Finds](#-what-it-finds) • [Live Demo](#-see-it-in-action) • [All Features](#-complete-features) • [Full Docs](docs/INSTALL.md)
+[Quick Start](#-60-second-quick-start) • [What It Finds](#-what-it-finds) • [Live Demo](#-see-it-in-action) • [All Features](#-complete-features)
 
 </div>
 
@@ -72,6 +33,25 @@ I scanned my React projects and found **15 critical vulnerabilities** I didn't k
 - Supply chain attacks from compromised dependencies
 
 **Manual security audits would've taken days. This tool found everything in 2 minutes.**
+
+---
+
+## ⚡ 60-Second Quick Start
+
+```bash
+# Clone and install
+git clone https://github.com/hlsitechio/shellockolm.git
+cd shellockolm
+pip install -r requirements.txt
+
+# Scan your project (instant results)
+python src/cli.py scan /path/to/your/app
+
+# Or launch interactive shell with 60+ commands
+python src/cli.py
+```
+
+**That's it.** No config files, no API keys, no node_modules conflicts.
 
 ---
 
@@ -426,23 +406,12 @@ Found a bug? Have a feature request? Want to add CVE coverage?
 - [Issues](https://github.com/hlsitechio/shellockolm/issues)
 - [Discussions](https://github.com/hlsitechio/shellockolm/discussions)
 - [Contributing Guide](CONTRIBUTING.md)
-- [Code of Conduct](docs/CODE_OF_CONDUCT.md)
 
 ---
 
-## 📝 License
+## 📄 License
 
 MIT License — See [LICENSE](LICENSE)
-
-**📚 More Documentation:**
-- [Installation Guide](docs/INSTALL.md)
-- [Quick Start](docs/QUICKSTART.md)
-- [Fast Install Reference](docs/FAST_INSTALL.md)
-- [Contributing Guidelines](CONTRIBUTING.md)
-- [Security Policy](SECURITY.md)
-- [Code of Conduct](docs/CODE_OF_CONDUCT.md)
-- [Changelog](docs/CHANGELOG.md)
-- [Privacy & Security](docs/PRIVACY_AND_SECURITY.md)
 
 ---
 
@@ -450,8 +419,8 @@ MIT License — See [LICENSE](LICENSE)
 
 **⭐ Star this repo if it helped secure your applications**
 
-[Get Started](#-install--run-in-60-seconds) | [Features](#-complete-features) | [Report Issue](https://github.com/hlsitechio/shellockolm/issues)
+[Get Started](#-60-second-quick-start) | [Features](#-complete-features) | [Report Issue](https://github.com/hlsitechio/shellockolm/issues)
 
-Made with 🔍 by [@hlsitechio](https://github.com/hlsitechio) | Powered by GitHub Copilot
+Made with 🔍 for the security community
 
 </div>

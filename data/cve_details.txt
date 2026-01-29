@@ -1,0 +1,22 @@
+┌───────────────────────────── 🔍 CVE-2025-29927 ─────────────────────────────┐
+│ Next.js Middleware Authorization Bypass                                     │
+│                                                                             │
+│ Severity: CRITICAL (CVSS 9.1)                                               │
+│ Packages: next                                                              │
+│ Fixed in: 12.x→12.3.5, 13.x→13.5.7, 14.x→14.2.25, 15.x→15.2.3               │
+│ Exploit Difficulty: Trivial                                                 │
+│ Bug Bounty Worthy: Yes 💰                                                   │
+│                                                                             │
+│ Description:                                                                │
+│ x-middleware-subrequest header injection bypasses all middleware            │
+│ authorization checks                                                        │
+│                                                                             │
+│ Remediation:                                                                │
+│ Upgrade affected packages to patched versions.                              │
+│                                                                             │
+│ References:                                                                 │
+│   •                                                                         │
+│ https://securitylabs.datadoghq.com/articles/nextjs-middleware-auth-bypass/  │
+│   • https://projectdiscovery.io/blog/nextjs-middleware-authorization-bypass │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
