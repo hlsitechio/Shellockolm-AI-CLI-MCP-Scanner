@@ -30,7 +30,9 @@ Write-Host ""
 
 # Detect if running from web (one-liner) or local
 $IsRemoteInstall = $MyInvocation.MyCommand.Path -eq $null
-$ScriptDir = if ($IsRemoteInstall) { $PWD.Path } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+$ScriptLocation = if ($IsRemoteInstall) { $PWD.Path } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+# For local install, go up one level to repo root (scripts/ -> repo/)
+$ScriptDir = if ($IsRemoteInstall) { $PWD.Path } else { Split-Path -Parent $ScriptLocation }
 
 if ($IsRemoteInstall) {
     Write-Info "Remote installation detected"
