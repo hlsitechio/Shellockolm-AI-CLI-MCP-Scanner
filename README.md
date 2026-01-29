@@ -426,7 +426,7 @@ Found a bug? Have a feature request? Want to add CVE coverage?
 - [Issues](https://github.com/hlsitechio/shellockolm/issues)
 - [Discussions](https://github.com/hlsitechio/shellockolm/discussions)
 - [Contributing Guide](CONTRIBUTING.md)
-- [Code of Conduct](docs/CODE_OF_CONDUCT.md)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
 
 ---
 
@@ -440,7 +440,7 @@ MIT License — See [LICENSE](LICENSE)
 - [Fast Install Reference](docs/FAST_INSTALL.md)
 - [Contributing Guidelines](CONTRIBUTING.md)
 - [Security Policy](SECURITY.md)
-- [Code of Conduct](docs/CODE_OF_CONDUCT.md)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
 - [Changelog](docs/CHANGELOG.md)
 - [Privacy & Security](docs/PRIVACY_AND_SECURITY.md)
 
