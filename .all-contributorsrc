@@ -35,6 +35,16 @@
         "tool",
         "infra"
       ]
+    },
+    {
+      "login": "github-copilot",
+      "name": "GitHub Copilot",
+      "avatar_url": "https://avatars.githubusercontent.com/u/47998229?s=200&v=4",
+      "profile": "https://github.com/features/copilot",
+      "contributions": [
+        "code",
+        "tool"
+      ]
     }
   ],
   "contributorsPerLine": 7,

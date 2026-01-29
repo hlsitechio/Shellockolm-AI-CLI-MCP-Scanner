@@ -452,6 +452,6 @@ MIT License — See [LICENSE](LICENSE)
 
 [Get Started](#-install--run-in-60-seconds) | [Features](#-complete-features) | [Contributors](docs/CONTRIBUTORS.md) | [Report Issue](https://github.com/hlsitechio/shellockolm/issues)
 
-Built with 🔍 by [@hlsitechio](https://github.com/hlsitechio) & [Claude](https://claude.ai) | For the security community
+Built with 🔍 by [@hlsitechio](https://github.com/hlsitechio) & AI ([Claude](https://claude.ai) + [GitHub Copilot](https://github.com/features/copilot)) | For the security community
 
 </div>

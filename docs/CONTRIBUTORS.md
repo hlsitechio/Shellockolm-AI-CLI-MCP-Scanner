@@ -28,6 +28,17 @@ Thank you to everyone who has contributed to making Shellockolm better!
 <br />
 🤖 💡 📝 ⚡
 </td>
+<td align="center">
+<a href="https://github.com/features/copilot">
+<img src="https://avatars.githubusercontent.com/u/47998229?s=200&v=4" width="100px;" alt="GitHub Copilot"/>
+<br />
+<sub><b>GitHub Copilot</b></sub>
+</a>
+<br />
+<sub>AI Code Assistant</sub>
+<br />
+💻 🔧 📝
+</td>
 </tr>
 </table>
 
@@ -41,9 +52,11 @@ Thank you to everyone who has contributed to making Shellockolm better!
 - 📝 Content
 - ⚡ Infrastructure
 
-## 🤖 AI Development Partner
+## 🤖 AI Development Partners
 
-**Claude** (by Anthropic) contributed to:
+### Claude (by Anthropic)
+
+**Claude** contributed to:
 - ✅ **Complete installer system** - One-line installers for Windows, Ubuntu/Debian, Arch, macOS
 - ✅ **Repository structure optimization** - Clean organization with scripts/, docs/, data/ folders
 - ✅ **Viral README transformation** - Story-driven documentation that converts visitors
@@ -60,6 +73,23 @@ Thank you to everyone who has contributed to making Shellockolm better!
 
 **About Claude:**
 Claude is an AI assistant created by Anthropic. In this project, Claude served as a collaborative development partner, helping architect solutions, write code, and optimize the repository for maximum impact.
+
+### GitHub Copilot
+
+**GitHub Copilot** contributed to:
+- ✅ **Real-time code suggestions** - Inline completions during development
+- ✅ **Code generation** - Function implementations and boilerplate
+- ✅ **Code improvements** - Refactoring suggestions and optimizations
+- ✅ **Documentation snippets** - Comment generation and docstrings
+
+**Development approach:**
+- Integrated directly into VS Code / IDE
+- Autocomplete and code generation
+- Context-aware suggestions
+- Pair programming during active coding sessions
+
+**About GitHub Copilot:**
+GitHub Copilot is an AI pair programmer developed by GitHub and OpenAI. It provides real-time code suggestions and completions directly in the editor, helping accelerate development and reduce repetitive coding tasks.
 
 ## 🌟 Community Contributors
 
