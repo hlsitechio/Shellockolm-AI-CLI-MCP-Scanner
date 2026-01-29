@@ -450,8 +450,8 @@ MIT License — See [LICENSE](LICENSE)
 
 **⭐ Star this repo if it helped secure your applications**
 
-[Get Started](#-install--run-in-60-seconds) | [Features](#-complete-features) | [Report Issue](https://github.com/hlsitechio/shellockolm/issues)
+[Get Started](#-install--run-in-60-seconds) | [Features](#-complete-features) | [Contributors](docs/CONTRIBUTORS.md) | [Report Issue](https://github.com/hlsitechio/shellockolm/issues)
 
-Made with 🔍 by [@hlsitechio](https://github.com/hlsitechio) | Powered by GitHub Copilot
+Built with 🔍 by [@hlsitechio](https://github.com/hlsitechio) & [GitHub Copilot](docs/CONTRIBUTORS.md#-ai-development-partner) | For the security community
 
 </div>
