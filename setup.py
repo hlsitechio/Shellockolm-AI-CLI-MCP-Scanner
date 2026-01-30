@@ -1,6 +1,13 @@
 """
-CVE-2025-55182 Security Tools - Setup Configuration
-Complete toolset for detecting and patching CVE-2025-55182 (React2Shell)
+Shellockolm - CLI & MCP Security Scanner for AI Agents
+Complete security toolkit for React, Next.js, Node.js & npm ecosystem
+
+Integrates with:
+- Claude (Desktop & Code CLI)
+- GitHub Copilot CLI
+- Google Gemini CLI
+- Cursor IDE
+- Continue.dev
 """
 
 from setuptools import setup, find_packages
@@ -14,19 +21,21 @@ long_description = (this_directory / "README.md").read_text(encoding='utf-8')
 requirements = (this_directory / "requirements.txt").read_text(encoding='utf-8').splitlines()
 
 setup(
-    name="cve-2025-55182-tools",
-    version="1.1.0",
+    name="shellockolm-security-scanner",
+    version="3.0.0",
     author="HLS iTech",
     author_email="hlarosesurprenant@gmail.com",
-    description="Complete security toolkit for CVE-2025-55182 (React Server Components RCE vulnerability)",
+    description="CLI & MCP Security Scanner for AI Agents - Detects 32 CVEs, malware & supply chain attacks in React/Next.js/npm projects",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/hlsitechio/cve-2025-55182-tools",
+    url="https://github.com/hlsitechio/shellockolm",
     project_urls={
-        "Bug Tracker": "https://github.com/hlsitechio/cve-2025-55182-tools/issues",
-        "Documentation": "https://github.com/hlsitechio/cve-2025-55182-tools/blob/main/README.md",
-        "Source Code": "https://github.com/hlsitechio/cve-2025-55182-tools",
-        "Changelog": "https://github.com/hlsitechio/cve-2025-55182-tools/blob/main/CHANGELOG.md",
+        "Bug Tracker": "https://github.com/hlsitechio/shellockolm/issues",
+        "Documentation": "https://github.com/hlsitechio/shellockolm/blob/main/README.md",
+        "Source Code": "https://github.com/hlsitechio/shellockolm",
+        "Changelog": "https://github.com/hlsitechio/shellockolm/blob/main/docs/CHANGELOG.md",
+        "MCP Setup Guide": "https://github.com/hlsitechio/shellockolm/blob/main/docs/MCP_SETUP.md",
+        "Claude Code CLI": "https://github.com/hlsitechio/shellockolm/blob/main/docs/CLAUDE_CODE_CLI.md",
     },
     packages=find_packages(),
     py_modules=[
@@ -59,10 +68,19 @@ setup(
         "Natural Language :: English",
     ],
     keywords=[
-        "security", "vulnerability", "cve", "react", "nextjs", "rce",
-        "vulnerability-scanner", "security-tools", "patch-management",
-        "react-server-components", "cybersecurity", "devsecops",
-        "npm", "malware-scanner", "supply-chain-security"
+        # Primary
+        "security-scanner", "ai-agent-tools", "mcp-server", "cli-security",
+        # AI Platforms
+        "claude-mcp", "copilot-cli", "gemini-cli", "ai-assistant",
+        # Technologies
+        "react-security", "nextjs-security", "nodejs-security", "npm-security",
+        # Threats
+        "vulnerability-scanner", "cve-detection", "malware-scanner", 
+        "supply-chain-security", "rce-detection",
+        # Use Cases
+        "devsecops", "cybersecurity", "security-automation",
+        # Brand
+        "shellockolm", "sherlock-holmes-security"
     ],
     python_requires=">=3.10",
     install_requires=requirements,
@@ -77,10 +95,11 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'cve-2025-55182-scan=scan_simple:main',
-            'cve-2025-55182-fix=auto_fix:main',
-            'cve-2025-55182-patch=mass_patcher:main',
-            'cve-2025-55182-malware=malware_scanner:main',
+            'shellockolm=cli:main',
+            'shellockolm-scan=cli:main',
+            'shellockolm-fix=auto_fix:main',
+            'shellockolm-patch=mass_patcher:main',
+            'shellockolm-malware=malware_scanner:main',
         ],
     },
     include_package_data=True,

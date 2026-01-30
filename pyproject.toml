@@ -4,17 +4,18 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "shellockolm"
-version = "2.0.0"
-description = "Your Security Detective for React, Next.js & npm - Detect CVEs, malware, and supply chain attacks"
+version = "3.0.0"
+description = "CLI & MCP Security Scanner for AI Agents - Detects CVEs, malware & supply chain attacks in React/Next.js/npm projects. Integrates with Claude, Copilot, Gemini."
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 keywords = [
-    "security", "vulnerability", "cve", "react", "nextjs", "rce",
-    "vulnerability-scanner", "security-tools", "patch-management",
-    "react-server-components", "cybersecurity", "devsecops",
-    "npm", "malware-scanner", "supply-chain-security", "shellockolm",
-    "sherlock-holmes", "detective", "threat-detection"
+    "security-scanner", "ai-agent", "mcp-server", "cli-tool",
+    "vulnerability-scanner", "cve-detection", "malware-scanner",
+    "react", "nextjs", "nodejs", "npm", "rce",
+    "claude-mcp", "copilot", "gemini", "ai-assistant",
+    "supply-chain-security", "devsecops", "cybersecurity",
+    "react-server-components", "shellockolm", "sherlock-holmes"
 ]
 authors = [
     {name = "HLS iTech", email = "hlarosesurprenant@gmail.com"}

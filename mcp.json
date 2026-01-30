@@ -1,8 +1,10 @@
 {
   "name": "shellockolm",
-  "version": "2.0.0",
-  "description": "Security scanner for React, Next.js, Node.js & npm - finds CVEs, malware, secrets. 32 CVEs tracked.",
+  "displayName": "Shellockolm - AI Security Scanner",
+  "version": "3.0.0",
+  "description": "CLI & MCP Security Scanner for AI Agents - Fast CVE detection (0.1s), malware scanning, supply chain attack detection. Integrates with Claude, Copilot, Gemini.",
   "homepage": "https://github.com/hlsitechio/shellockolm",
+  "repository": "https://github.com/hlsitechio/shellockolm",
   "author": "hlsitechio",
   "license": "MIT",
   "server": {
@@ -13,46 +15,72 @@
   "capabilities": {
     "tools": [
       {
+        "name": "find_packages",
+        "description": "FAST: Find npm packages in 0.1s (excludes node_modules by default)"
+      },
+      {
+        "name": "quick_scan",
+        "description": "MEDIUM: Quick CVE scan in 2-3 minutes (package.json only)"
+      },
+      {
         "name": "scan_directory",
-        "description": "Scan a directory for 32 CVEs in React/Next.js/Node.js/npm packages"
+        "description": "SLOW: Deep security scan with CVEs, malware, secrets (10+ min)"
       },
       {
         "name": "scan_live",
-        "description": "Live probe a URL for exploitable vulnerabilities (Next.js, n8n, etc.)"
+        "description": "Live probe URLs for exploitable vulnerabilities (Next.js, n8n)"
       },
       {
-        "name": "fix_vulnerability",
-        "description": "Automatically patch a vulnerability with backup"
-      },
-      {
-        "name": "check_cve",
+        "name": "get_cve_info",
         "description": "Get detailed information about a specific CVE"
       },
       {
         "name": "list_cves",
-        "description": "List all 32 tracked CVEs with filters"
+        "description": "List all 32 tracked CVEs with filtering"
+      },
+      {
+        "name": "list_scanners",
+        "description": "List available vulnerability scanners"
+      },
+      {
+        "name": "generate_report",
+        "description": "Generate comprehensive JSON vulnerability report"
       }
     ],
     "resources": [
       {
         "name": "cve_database",
         "description": "Complete vulnerability database with 32 CVEs"
-      },
-      {
-        "name": "scan_history",
-        "description": "Historical scan results and findings"
       }
     ]
   },
   "tags": [
     "security",
+    "ai-agent",
+    "mcp-server",
+    "cli-tool",
     "vulnerability-scanner",
-    "cve",
+    "cve-detection",
     "react",
     "nextjs",
     "nodejs",
     "npm",
-    "malware",
-    "secrets"
-  ]
+    "malware-scanner",
+    "claude",
+    "copilot",
+    "gemini"
+  ],
+  "platforms": [
+    "claude-desktop",
+    "claude-code-cli",
+    "github-copilot",
+    "google-gemini",
+    "cursor",
+    "continue-dev"
+  ],
+  "performance": {
+    "find_packages": "0.1s",
+    "quick_scan": "2-3min",
+    "full_scan": "10+min"
+  }
 }

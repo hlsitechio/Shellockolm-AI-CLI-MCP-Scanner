@@ -2,9 +2,13 @@
 
 # 🔍 Shellockolm
 
-**Security scanner that found critical vulnerabilities in 15 of my React projects**
+### **CLI & MCP Security Scanner for AI Agents**
+
+**The security detective that scans React, Next.js & npm projects for CVEs, malware, and supply chain attacks**
 
 ![Shellockolm - Your Security Detective](docs/images/banner.png)
+
+**🤖 Built for AI Assistants** | **⚡ Lightning Fast** | **🔒 32 CVEs Tracked** | **🎯 100% Offline**
 
 </div>
 
@@ -54,11 +58,13 @@ curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/scripts
 **✅ 32 CVEs detected** | **✅ Malware & secrets found** | **✅ Auto-fix with backups** | **✅ 100% offline**
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
+[![MCP Server](https://img.shields.io/badge/MCP-AI%20Agent%20Ready-success)](docs/MCP_SETUP.md)
+[![Claude Compatible](https://img.shields.io/badge/Claude-Desktop%20%26%20Code%20CLI-blueviolet)](docs/CLAUDE_CODE_CLI.md)
 [![MIT License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![One-Line Install](https://img.shields.io/badge/install-one%20line-success)](docs/INSTALL.md)
-[![GitHub Release](https://img.shields.io/github/v/release/hlsitechio/shellockolm?color=success)](https://github.com/hlsitechio/shellocholm/releases/latest)
+[![v3.0.0](https://img.shields.io/badge/version-3.0.0-orange)](https://github.com/hlsitechio/shellockolm/releases/latest)
 
-[What It Finds](#-what-it-finds) • [Live Demo](#-see-it-in-action) • [All Features](#-complete-features) • [Full Docs](docs/INSTALL.md)
+[What It Finds](#-what-it-finds) • [Live Demo](#-see-it-in-action) • [AI Integration](#-use-in-ai-assistants) • [All Features](#-complete-features) • [Full Docs](docs/INSTALL.md)
 
 </div>
 
