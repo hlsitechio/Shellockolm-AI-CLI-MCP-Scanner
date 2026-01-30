@@ -450,15 +450,11 @@ async def handle_call_tool(
         if not Path(path).exists():
             return [types.TextContent(type="text", text=f"❌ Path does not exist: {path}")]
         
-        # First, find packages quickly
-        packages_result = await handle_call_tool("find_packages", {
-            "path": path,
-            "recursive": recursive,
-            "include_node_modules": not exclude_node_modules,
-            "max_depth": 3
-        })
+        output = "# Quick CVE Scan Results\n\n"
+        output += "**Mode**: Quick scan (package.json + lock files only)\n"
+        output += "**Speed**: Skipping deep file analysis, malware detection, and secrets scanning\n\n"
         
-        # Then scan only those package.json files (not deep analysis)
+        # Get scanners
         results: List[ScanResult] = []
         
         if scanner_name:
@@ -471,14 +467,20 @@ async def handle_call_tool(
         else:
             scanners = get_all_scanners()
         
-        # Quick scan mode: only check package.json files
+        # Quick scan mode: Pass quick_mode=True to scanners
         for s in scanners:
-            result = s.scan_directory(path, recursive=recursive)
-            results.append(result)
+            try:
+                result = s.scan_directory(
+                    path, 
+                    recursive=recursive,
+                    quick_mode=True  # ← THIS IS THE KEY!
+                )
+                results.append(result)
+            except TypeError:
+                # Scanner doesn't support quick_mode yet, use regular scan
+                result = s.scan_directory(path, recursive=recursive)
+                results.append(result)
         
-        output = "# Quick CVE Scan Results\n\n"
-        output += "**Note**: Quick scan mode - only checked package.json/lock files for known CVEs.\n"
-        output += "For deep analysis (malware, secrets, obfuscation), use `scan_directory` tool.\n\n"
         output += format_scan_results(results)
         
         return [types.TextContent(type="text", text=output)]

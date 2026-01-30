@@ -165,8 +165,36 @@ class BaseScanner(ABC):
         self.db = VulnerabilityDatabase
 
     @abstractmethod
-    def scan_directory(self, path: str, recursive: bool = True, max_depth: int = 10) -> ScanResult:
-        """Scan a local directory for vulnerabilities"""
+    def scan_directory(
+        self, 
+        path: str, 
+        recursive: bool = True, 
+        max_depth: int = 10,
+        quick_mode: bool = False
+    ) -> ScanResult:
+        """
+        Scan a local directory for vulnerabilities
+        
+        Args:
+            path: Directory path to scan
+            recursive: Recursively scan subdirectories
+            max_depth: Maximum directory depth to traverse
+            quick_mode: If True, only check package.json/lock files (FAST)
+                       If False, deep scan including file content analysis (SLOW)
+        
+        Quick Mode (2-3 minutes):
+            - Only reads package.json and lock files
+            - Checks versions against CVE database
+            - Skips deep file content analysis
+            - Skips malware detection
+            - Skips secrets scanning
+        
+        Deep Mode (10+ minutes):
+            - Full file content analysis
+            - Malware pattern detection
+            - Secrets scanning
+            - Complete security audit
+        """
         pass
 
     def scan_file(self, file_path: str) -> List[ScanFinding]:

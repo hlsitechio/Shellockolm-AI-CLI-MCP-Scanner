@@ -71,7 +71,8 @@ class NPMPackageScanner(BaseScanner):
         self,
         path: str,
         recursive: bool = True,
-        max_depth: int = 10
+        max_depth: int = 10,
+        quick_mode: bool = False
     ) -> ScanResult:
         """Scan directory for npm package vulnerabilities"""
         result = self.create_result(path)

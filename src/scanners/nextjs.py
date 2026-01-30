@@ -42,9 +42,15 @@ class NextJSScanner(BaseScanner):
         self,
         path: str,
         recursive: bool = True,
-        max_depth: int = 10
+        max_depth: int = 10,
+        quick_mode: bool = False
     ) -> ScanResult:
-        """Scan directory for Next.js vulnerabilities"""
+        """
+        Scan directory for Next.js vulnerabilities
+        
+        Args:
+            quick_mode: If True, only checks package.json versions (FAST)
+        """
         result = self.create_result(path)
 
         packages_scanned = 0
@@ -52,7 +58,13 @@ class NextJSScanner(BaseScanner):
 
         for package_json in self.find_package_json_files(path, recursive, max_depth):
             packages_scanned += 1
-            findings = self._scan_package(package_json)
+            
+            if quick_mode:
+                # QUICK MODE: Only check versions
+                findings = self._scan_package_quick(package_json)
+            else:
+                # DEEP MODE: Full analysis
+                findings = self._scan_package(package_json)
 
             if findings:
                 vulnerable_projects += 1
@@ -60,8 +72,30 @@ class NextJSScanner(BaseScanner):
 
         result.stats["packages_scanned"] = packages_scanned
         result.stats["vulnerable_projects"] = vulnerable_projects
+        result.stats["quick_mode"] = quick_mode
 
         return self.finalize_result(result)
+
+    def _scan_package_quick(self, package_json: Path) -> List[ScanFinding]:
+        """QUICK SCAN: Only check package.json version"""
+        findings = []
+        
+        data = self.parse_package_json(package_json)
+        if not data:
+            return findings
+        
+        deps = self.get_dependencies(data)
+        
+        if "next" in deps:
+            version = self.extract_version(deps["next"])
+            vulns = self.check_package_vulnerability("next", version)
+            
+            for vuln in vulns:
+                finding = self.create_finding(vuln, "next", version, package_json)
+                finding.raw_data["quick_scan"] = True
+                findings.append(finding)
+        
+        return findings
 
     def scan_live(self, url: str, timeout: int = 10) -> ScanResult:
         """
