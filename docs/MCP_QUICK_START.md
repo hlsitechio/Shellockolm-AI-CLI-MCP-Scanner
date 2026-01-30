@@ -4,6 +4,19 @@
 
 ---
 
+## ⚠️ IMPORTANT: Two Different Claude Products
+
+**Claude Desktop** (GUI app) and **Claude Code CLI** (terminal) are **separate products** with **different configs**.
+
+| Product | Type | Config File |
+|---------|------|-------------|
+| **Claude Desktop** | GUI app | `%APPDATA%\Claude\claude_desktop_config.json` |
+| **Claude Code CLI** | Terminal | `~/.claude.json` or `C:\Users\[user]\.claude.json` |
+
+**Make sure you configure the right one!**
+
+---
+
 ## ⚡ One-Command Setup
 
 ```bash
@@ -12,13 +25,13 @@ python src/configure_mcp.py
 ```
 
 **What it does:**
-1. Detects your installed AI tools (Claude, Copilot, Cursor, etc.)
+1. Detects your installed AI tools (Claude Desktop, Claude Code CLI, Copilot, Cursor, etc.)
 2. Automatically writes config files
 3. That's it!
 
 ---
 
-## 🟣 Claude Desktop (Most Popular)
+## 🟣 Claude Desktop (GUI App)
 
 ### Setup
 ```bash
@@ -63,6 +76,106 @@ Would you like me to help fix these?"
 - *"Scan G:\myproject for React CVEs"*
 - *"Is https://myapp.com hackable?"*
 - *"Generate a security report"*
+
+---
+
+## 💻 Claude Code CLI (Terminal Tool)
+
+### ⚠️ Different Config File!
+
+**Claude Code CLI uses:** `~/.claude.json` (or `C:\Users\[user]\.claude.json` on Windows)
+
+This is **NOT** the same as Claude Desktop!
+
+### Setup
+
+**Option 1: Automatic**
+```bash
+python src/configure_mcp.py
+# Select: Claude Code CLI
+```
+
+**Option 2: Manual**
+
+1. **Find your project in the config:**
+   ```bash
+   # Windows
+   notepad C:\Users\[USERNAME]\.claude.json
+   
+   # macOS/Linux
+   nano ~/.claude.json
+   ```
+
+2. **Find your project's `mcpServers` section:**
+   ```json
+   "projects": {
+     "C:/Users/hlaro": {
+       "mcpServers": {
+         "memory-sync": { ... }
+       }
+     }
+   }
+   ```
+
+3. **Add shellockolm** (note the `"type": "stdio"`):
+   ```json
+   "mcpServers": {
+     "memory-sync": { ... },
+     "shellockolm": {
+       "type": "stdio",
+       "command": "python",
+       "args": ["G:\\shellockholm\\src\\mcp_server.py"],
+       "env": {
+         "PYTHONPATH": "G:\\shellockholm\\src"
+       }
+     }
+   }
+   ```
+
+4. **Save and restart Claude Code CLI**
+
+### Verify It Works
+
+1. **Start Claude Code CLI:**
+   ```bash
+   claude
+   ```
+
+2. **Check MCP servers:**
+   - Look for the MCP menu
+   - Should see `shellockolm` listed
+   - Status should be ✔ connected
+
+3. **Test it:**
+   ```bash
+   # In Claude Code CLI chat:
+   "Use shellockolm to scan this directory for vulnerabilities"
+   "List available scanners"
+   "What CVEs does shellockolm track?"
+   ```
+
+### Example Session
+```bash
+$ claude
+
+❯ Use shellockolm to scan G:\ for vulnerabilities
+
+● I'll scan your G:\ drive for vulnerabilities using shellockolm.
+
+  shellockolm - scan_directory (MCP)
+  ├─ path: "G:\\"
+  └─ recursive: true
+
+[Scan runs automatically]
+
+● Found 5 vulnerabilities:
+  - CVE-2025-55182 (CRITICAL) - React Server Components RCE
+  - CVE-2025-55130 (HIGH) - Node.js permission bypass
+  - CLAWDBOT-CREDS (HIGH) - Exposed API tokens
+  ...
+
+Would you like me to explain how to fix these?
+```
 
 ---
 
