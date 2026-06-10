@@ -138,8 +138,8 @@ curl -fsSL https://raw.githubusercontent.com/hlsitechio/Shellockolm-AI-CLI-MCP-S
 # Full security audit
 python src/cli.py scan .
 
-# Scan before installing npm package
-python src/cli.py scan --scanner npm ./suspicious-package
+# Scan before installing npm package (-s is short for --scanner)
+python src/cli.py scan -s npm ./suspicious-package
 
 # Export to JSON for CI/CD
 python src/cli.py scan . -o security-report.json
@@ -149,6 +149,12 @@ python src/cli.py live https://target.com
 
 # Hunt for a specific CVE
 python src/cli.py info CVE-2025-55182
+
+# List CVEs in one category (-c is short for --category)
+python src/cli.py cves -c nextjs
+
+# Launch the interactive shell (also opens when run with no args)
+python src/cli.py shell
 ```
 
 ---
