@@ -39,6 +39,10 @@ class SecretType(Enum):
     PYPI_TOKEN = "PyPI Token"
     DOCKER_TOKEN = "Docker Token"
     HEROKU_KEY = "Heroku API Key"
+    OPENAI_KEY = "OpenAI API Key"
+    ANTHROPIC_KEY = "Anthropic API Key"
+    SHOPIFY_TOKEN = "Shopify Access Token"
+    DIGITALOCEAN_TOKEN = "DigitalOcean Token"
     GOOGLE_API_KEY = "Google API Key"
     GOOGLE_OAUTH = "Google OAuth"
     FIREBASE_KEY = "Firebase Key"
@@ -558,6 +562,55 @@ SECRET_PATTERNS: List[SecretPattern] = [
         severity=SecretSeverity.HIGH,
         description="Docker Hub Personal Access Token",
         remediation="Revoke at hub.docker.com/settings/security",
+    ),
+
+    # AI providers
+    SecretPattern(
+        id="OPENAI-001",
+        name="OpenAI API Key",
+        # OpenAI keys embed the marker "T3BlbkFJ" (base64 "OpenAI"); anchoring on
+        # it keeps false positives near zero versus a bare sk- prefix.
+        pattern=r'sk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{10,}T3BlbkFJ[A-Za-z0-9_-]{10,}',
+        secret_type=SecretType.OPENAI_KEY,
+        severity=SecretSeverity.CRITICAL,
+        description="OpenAI API key granting access to paid model usage on the account",
+        remediation="Revoke at platform.openai.com/api-keys and rotate. Use environment variables.",
+    ),
+    SecretPattern(
+        id="ANTHROPIC-001",
+        name="Anthropic API Key",
+        pattern=r'sk-ant-(?:api\d{2}-)?[A-Za-z0-9_-]{32,}',
+        secret_type=SecretType.ANTHROPIC_KEY,
+        severity=SecretSeverity.CRITICAL,
+        description="Anthropic (Claude) API key granting access to paid model usage",
+        remediation="Revoke at console.anthropic.com/settings/keys and rotate. Use environment variables.",
+    ),
+    SecretPattern(
+        id="SHOPIFY-001",
+        name="Shopify Access Token",
+        pattern=r'shp(?:at|ss|ca|pa)_[a-fA-F0-9]{32}',
+        secret_type=SecretType.SHOPIFY_TOKEN,
+        severity=SecretSeverity.CRITICAL,
+        description="Shopify access token (admin, custom, or private app, or shared secret)",
+        remediation="Revoke in the Shopify admin under Apps and rotate credentials.",
+    ),
+    SecretPattern(
+        id="DIGITALOCEAN-001",
+        name="DigitalOcean Personal Access Token",
+        pattern=r'dop_v1_[a-f0-9]{64}',
+        secret_type=SecretType.DIGITALOCEAN_TOKEN,
+        severity=SecretSeverity.CRITICAL,
+        description="DigitalOcean personal access token controlling cloud resources",
+        remediation="Revoke at cloud.digitalocean.com/account/api/tokens and rotate.",
+    ),
+    SecretPattern(
+        id="PYPI-001",
+        name="PyPI API Token",
+        pattern=r'pypi-AgEI[A-Za-z0-9_-]{20,}',
+        secret_type=SecretType.PYPI_TOKEN,
+        severity=SecretSeverity.HIGH,
+        description="PyPI upload token that can publish packages under the account",
+        remediation="Revoke at pypi.org/manage/account/token and rotate.",
     ),
 ]
 

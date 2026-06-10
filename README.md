@@ -193,7 +193,7 @@ python src/cli.py info CVE-2025-55182
 - **Backdoors** - Reverse shells, command injection
 - **Data exfiltration** - Suspicious HTTP requests
 - **Typosquatting** - Packages mimicking popular libraries
-- **100+ detection patterns** hand-tuned for JavaScript/Node.js
+- **70+ detection patterns** hand-tuned for JavaScript/Node.js
 
 </details>
 
