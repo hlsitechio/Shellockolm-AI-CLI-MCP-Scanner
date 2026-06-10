@@ -51,20 +51,33 @@ class IgnorePattern:
             self.is_rooted = True
             pattern = pattern[1:]
 
-        # Escape special regex characters (except * and ?)
-        regex_special = ".^$+{}[]|()\\"
-        for char in regex_special:
-            pattern = pattern.replace(char, "\\" + char)
-
-        # Convert gitignore wildcards to regex
-        # ** matches any number of directories
-        pattern = pattern.replace("\\*\\*", "<<<DOUBLE_STAR>>>")
-        # * matches anything except /
-        pattern = pattern.replace("\\*", "[^/]*")
-        # ? matches single character except /
-        pattern = pattern.replace("\\?", "[^/]")
-        # Restore **
-        pattern = pattern.replace("<<<DOUBLE_STAR>>>", ".*")
+        # Convert the gitignore glob into a regex.
+        #
+        # The glob metacharacters (**, *, ?) must NOT be passed through
+        # re.escape, while every other character must be escaped exactly once
+        # so it is treated as a literal. We split the pattern on the glob
+        # tokens, re.escape each literal segment, then substitute the glob
+        # tokens with their regex equivalents.
+        #   **  ->  .*        (matches across directory separators)
+        #   *   ->  [^/]*     (matches anything except a separator)
+        #   ?   ->  [^/]      (matches a single non-separator character)
+        token_regex = re.compile(r"\*\*|\*|\?")
+        out_parts = []
+        last_end = 0
+        for m in token_regex.finditer(pattern):
+            # Escape the literal text preceding this glob token.
+            out_parts.append(re.escape(pattern[last_end:m.start()]))
+            token = m.group(0)
+            if token == "**":
+                out_parts.append(".*")
+            elif token == "*":
+                out_parts.append("[^/]*")
+            else:  # "?"
+                out_parts.append("[^/]")
+            last_end = m.end()
+        # Escape the trailing literal text.
+        out_parts.append(re.escape(pattern[last_end:]))
+        pattern = "".join(out_parts)
 
         # Add anchors based on pattern type
         if self.is_rooted:

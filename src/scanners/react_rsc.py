@@ -3,6 +3,7 @@ React Server Components Scanner
 Detects CVE-2025-55182, CVE-2025-66478, and related RSC vulnerabilities
 """
 
+import os
 from pathlib import Path
 from typing import List, Set
 from datetime import datetime
@@ -31,11 +32,18 @@ class ReactRSCScanner(BaseScanner):
         "next",
     ]
 
-    # Vulnerable React 19.x versions
+    # Vulnerable React 19.x versions.
+    #
+    # NOTE: This coarse set is DEPRECATED for detection - the authoritative
+    # per-CVE version data lives in vulnerability_database.py and is consulted
+    # via check_package_vulnerability(). The patched releases (19.0.1, 19.1.2,
+    # 19.2.1 - the FIXES for CVE-2025-55182) have been removed so this set no
+    # longer flags patched versions as vulnerable. It is retained only because
+    # is_vulnerable_react_version() may be referenced externally.
     VULNERABLE_REACT_VERSIONS = {
-        "19.0.0", "19.0.1", "19.0.2",
-        "19.1.0", "19.1.1", "19.1.2", "19.1.3",
-        "19.2.0", "19.2.1", "19.2.2",
+        "19.0.0", "19.0.2",
+        "19.1.0", "19.1.1", "19.1.3",
+        "19.2.0", "19.2.2",
     }
 
     # RSC indicator packages
@@ -188,21 +196,28 @@ class ReactRSCScanner(BaseScanner):
             except (ValueError, IndexError):
                 pass
 
-        # Check for 'use server' directive in any .js/.jsx/.ts/.tsx files
-        # (This is a heuristic - could be expensive for large projects)
+        # Check for 'use server' directive in any .js/.jsx/.ts/.tsx files.
+        # Walk the tree with os.walk and prune excluded directories in-place so
+        # we never descend into node_modules (which the old **/* glob fully
+        # expanded before filtering). Stop early on the first RSC hit.
+        excluded_dirs = {"node_modules", ".git", "dist", "build", ".next"}
+        source_exts = (".js", ".jsx", ".ts", ".tsx")
         try:
-            for ext in ["js", "jsx", "ts", "tsx"]:
-                for f in project_dir.glob(f"**/*.{ext}"):
-                    if "node_modules" in str(f):
+            for root, dirs, files in os.walk(project_dir):
+                # Prune excluded dirs in-place so os.walk skips them entirely.
+                dirs[:] = [d for d in dirs if d not in excluded_dirs]
+                for name in files:
+                    if not name.endswith(source_exts):
                         continue
+                    f = os.path.join(root, name)
                     try:
                         with open(f, 'r', encoding='utf-8', errors='ignore') as fp:
                             content = fp.read(2000)  # Only check first 2KB
                             if "'use server'" in content or '"use server"' in content:
                                 return True
-                    except:
+                    except OSError:
                         pass
-        except:
+        except OSError:
             pass
 
         return False

@@ -384,11 +384,11 @@ class LockfileAnalyzer:
             # Check each CVE in the database
             for vuln in self.vuln_db.get_all_vulnerabilities():
                 if pkg.name in vuln.packages:
-                    # Check if version is vulnerable
-                    affected = vuln.affected_versions.get(pkg.name, [])
-                    if self._version_in_range(pkg.version, affected):
-                        patched = vuln.patched_versions.get(pkg.name, "latest")
-                        
+                    # affected_versions is a List[str] of exact versions and
+                    # range specs (e.g. "<3.9.4", "19.0.0-19.2.2", "20.x").
+                    if self._is_version_affected(pkg.version, vuln.affected_versions):
+                        patched = self._resolve_patched_version(pkg, vuln)
+
                         issues.append(LockfileIssue(
                             issue_type=IssueType.VULNERABLE_VERSION,
                             severity=IssueSeverity[vuln.severity.value],
@@ -402,6 +402,61 @@ class LockfileAnalyzer:
                         ))
         
         return issues
+
+    def _is_version_affected(self, version: str, affected_versions: List[str]) -> bool:
+        """Check if a concrete version is in the affected_versions list.
+
+        affected_versions is a List[str] of exact versions ("19.0.0") and range
+        specs ("<3.9.4", "19.0.0-19.2.2", "20.x"). Prefer the vulnerability
+        database's range helpers when available, falling back to the local
+        comparator otherwise.
+        """
+        if not version or not affected_versions:
+            return False
+
+        clean_version = version.lstrip("^~>=<").split()[0].strip()
+
+        # Exact match against any listed version
+        if clean_version in affected_versions:
+            return True
+
+        # Range matching - reuse the database helper if we have it
+        db_in_range = getattr(self.vuln_db, "_version_in_range", None)
+        for affected in affected_versions:
+            if db_in_range is not None:
+                try:
+                    if db_in_range(clean_version, affected):
+                        return True
+                    continue
+                except Exception:
+                    pass
+            # Fallback to the local single-range comparator
+            if self._version_in_range(clean_version, [affected]):
+                return True
+
+        return False
+
+    def _resolve_patched_version(self, pkg: "PackageInfo", vuln) -> str:
+        """Resolve the recommended patched version for a vulnerable package.
+
+        patched_versions is keyed by version-range (e.g. "15.0.x", "<3.9.4"),
+        NOT by package name. Delegate to the database resolver when possible.
+        """
+        get_patched = getattr(self.vuln_db, "get_patched_version", None)
+        if get_patched is not None:
+            try:
+                resolved = get_patched(pkg.name, pkg.version, vuln.cve_id)
+                if resolved:
+                    return resolved
+            except Exception:
+                pass
+
+        # Fallback: first patched value listed, else "latest"
+        patched_map = getattr(vuln, "patched_versions", None) or {}
+        for value in patched_map.values():
+            if value:
+                return value
+        return "latest"
 
     def _version_in_range(self, version: str, ranges: List[str]) -> bool:
         """Check if a version falls within any of the affected ranges"""

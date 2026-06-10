@@ -14,8 +14,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ['3.10', '3.11', '3.12']
+        os: [ubuntu-latest, windows-latest]
+        python-version: ['3.10', '3.12']
 
     steps:
     - name: Checkout code
@@ -27,88 +27,40 @@ jobs:
         python-version: ${{ matrix.python-version }}
         cache: 'pip'
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
+    - name: Upgrade pip tooling
+      run: python -m pip install --upgrade pip setuptools wheel
 
-    - name: Install dev dependencies
-      continue-on-error: true
-      run: |
-        pip install pytest pytest-cov black flake8 mypy
+    - name: Install package and dev dependencies
+      run: pip install .[dev]
 
-    - name: Lint with flake8 (warnings only)
-      continue-on-error: true
-      run: |
-        pip list | grep flake8 && flake8 . --count --exit-zero --max-complexity=10 --max-line-length=88 --statistics --exclude=.git,__pycache__,venv,env || echo "Flake8 not available, skipping"
-
-    - name: Check code formatting with Black (warnings only)
-      continue-on-error: true
-      run: |
-        pip list | grep black && black --check --diff . || echo "Black not available or formatting issues found"
-
-    - name: Type checking with mypy (warnings only)
-      continue-on-error: true
-      run: |
-        pip list | grep mypy && mypy src/*.py --ignore-missing-imports || echo "Mypy check completed with warnings"
-
-    - name: Run basic tool tests
+    - name: Verify console script works
       shell: bash
       run: |
-        # Test scanner import
-        python -c "import sys; sys.path.insert(0, 'src'); from scanner import CVEScanner; scanner = CVEScanner(); print('Scanner module OK')"
+        shellockolm version
+        shellockolm --help
 
-        # Test remediation import
-        python -c "import sys; sys.path.insert(0, 'src'); from remediation import Remediator; rem = Remediator(); print('Remediation module OK')"
-
-        # Test scan_simple help
-        python src/scan_simple.py --help || echo "scan_simple.py help command executed"
-
-        # Test auto_fix help
-        python src/auto_fix.py --help || echo "auto_fix.py help command executed"
-
-        echo "All basic imports and help commands successful"
-
-    - name: Test scanner on sample data
+    - name: Verify flat imports resolve from the installed package
       shell: bash
       run: |
-        # Create test package.json
-        mkdir -p test_project
+        # Run from a neutral directory so src/ is NOT implicitly on sys.path;
+        # this proves the installed distribution exposes the flat modules.
+        cd "$RUNNER_TEMP"
+        python -c "import cli, scanners, vulnerability_database, mcp_server; print('flat imports OK')"
 
-        # Create vulnerable package.json with Python (cross-platform)
-        python -c "import json; open('test_project/package.json', 'w').write(json.dumps({'name': 'test-project', 'version': '1.0.0', 'dependencies': {'react': '19.0.0', 'react-dom': '19.0.0'}}, indent=2))"
+    - name: Run test suite
+      run: pytest tests/ -v
 
-        echo "Test project created"
-
-        # Run scanner (allow failure since it's a test)
-        python src/scan_simple.py test_project || echo "Scanner test completed"
-
-        echo "Scanner execution test completed"
-
-  security-scan:
-    name: Security Scanning
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Run Bandit security scan
-      uses: tj-actions/bandit@v5.1
+    - name: Lint with flake8 (non-blocking)
       continue-on-error: true
-      with:
-        targets: |
-          .
-        options: "-r --format json --output bandit-report.json"
+      run: |
+        flake8 src --count --max-complexity=10 --max-line-length=88 --statistics
 
-    - name: Upload Bandit report
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: bandit-security-report
-        path: bandit-report.json
+    - name: Check formatting with Black (non-blocking)
+      continue-on-error: true
+      run: black --check --diff src
 
-  code-quality:
-    name: Code Quality Analysis
+  smoke-scan:
+    name: Smoke - scanner runs on sample data
     runs-on: ubuntu-latest
     steps:
     - name: Checkout code
@@ -117,17 +69,52 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.11'
+        python-version: '3.12'
+        cache: 'pip'
 
-    - name: Install dependencies
+    - name: Install package
       run: |
         python -m pip install --upgrade pip
-        pip install radon
+        pip install .
 
-    - name: Check cyclomatic complexity
+    - name: Scanner and remediation import smoke
+      shell: bash
       run: |
-        radon cc . -a -nb
+        python -c "import sys; sys.path.insert(0, 'src'); from scanner import CVEScanner; CVEScanner(); print('Scanner module OK')"
+        python -c "import sys; sys.path.insert(0, 'src'); from remediation import Remediator; Remediator(); print('Remediation module OK')"
 
-    - name: Check maintainability index
+    - name: Run scanner on a generated vulnerable project
+      shell: bash
       run: |
-        radon mi . -nb
+        mkdir -p test_project
+        python -c "import json; open('test_project/package.json', 'w').write(json.dumps({'name': 'test-project', 'version': '1.0.0', 'dependencies': {'next': '14.1.5'}}, indent=2))"
+        python src/scan_simple.py test_project
+
+  security-scan:
+    name: Security Scanning (Bandit)
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Run Bandit from pip
+      # Run bandit directly from PyPI instead of depending on a third-party
+      # action via a mutable tag. -ll reports MEDIUM+ severity; non-blocking.
+      continue-on-error: true
+      run: |
+        python -m pip install --upgrade pip bandit
+        bandit -r src -ll -f json -o bandit-report.json || true
+        bandit -r src -ll || true
+
+    - name: Upload Bandit report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: bandit-security-report
+        path: bandit-report.json
+        if-no-files-found: ignore

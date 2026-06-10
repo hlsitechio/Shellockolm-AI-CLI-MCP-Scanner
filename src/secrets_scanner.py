@@ -287,7 +287,9 @@ SECRET_PATTERNS: List[SecretPattern] = [
     SecretPattern(
         id="TWILIO-001",
         name="Twilio API Key",
-        pattern=r'SK[0-9a-fA-F]{32}',
+        # SK + 32 hex alone matches many random tokens. Require a word boundary
+        # before SK and a twilio/api-key/sid context keyword on the same line.
+        pattern=r'(?:twilio|api[_-]?key|account[_-]?sid|auth)[^\n]{0,40}\bSK[0-9a-fA-F]{32}\b',
         secret_type=SecretType.TWILIO_KEY,
         severity=SecretSeverity.HIGH,
         description="Twilio API Key",
@@ -516,7 +518,9 @@ SECRET_PATTERNS: List[SecretPattern] = [
     SecretPattern(
         id="CRYPTO-001",
         name="Bitcoin Private Key (WIF)",
-        pattern=r'[5KL][1-9A-HJ-NP-Za-km-z]{50,51}',
+        # WIF base58 alone matches many benign base58-ish tokens, so require a
+        # private-key/wallet/mnemonic/secret context keyword on the same line.
+        pattern=r'(?:priv(?:ate)?[_-]?key|wallet|mnemonic|seed[_-]?phrase|secret)[^\n]{0,40}[5KL][1-9A-HJ-NP-Za-km-z]{50,51}',
         secret_type=SecretType.CRYPTO_WALLET,
         severity=SecretSeverity.CRITICAL,
         description="Bitcoin Private Key in WIF format",
@@ -525,7 +529,9 @@ SECRET_PATTERNS: List[SecretPattern] = [
     SecretPattern(
         id="CRYPTO-002",
         name="Ethereum Private Key",
-        pattern=r'0x[a-fA-F0-9]{64}',
+        # A bare 0x + 64 hex matches tx hashes and keccak digests, so require a
+        # private-key/wallet/mnemonic/secret context keyword on the same line.
+        pattern=r'(?:priv(?:ate)?[_-]?key|wallet|mnemonic|seed[_-]?phrase|secret)[^\n]{0,40}0x[a-fA-F0-9]{64}',
         secret_type=SecretType.CRYPTO_WALLET,
         severity=SecretSeverity.CRITICAL,
         description="Ethereum/EVM Private Key",

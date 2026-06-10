@@ -15,6 +15,7 @@ import json
 import shutil
 import subprocess
 import re
+import tempfile
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
@@ -81,8 +82,10 @@ class AutoFixer:
     # Package version constraints
     VERSION_PREFIXES = ('^', '~', '>=', '>', '<=', '<', '=')
 
-    def __init__(self, backup_dir: str = "/tmp/shellockolm/backups"):
+    def __init__(self, backup_dir: Optional[str] = None):
         self.vuln_db = VulnerabilityDatabase()
+        if backup_dir is None:
+            backup_dir = str(Path(tempfile.gettempdir()) / "shellockolm" / "backups")
         self.backup_dir = Path(backup_dir)
         self.backup_dir.mkdir(parents=True, exist_ok=True)
 
@@ -152,13 +155,33 @@ class AutoFixer:
 
     def _is_vulnerable(self, installed_version: str, vuln) -> bool:
         """Check if installed version is vulnerable"""
+        spec = installed_version.strip()
+
+        # Fail SAFE for non-pinned / non-semver specifiers we cannot reason
+        # about. Rewriting these would either break the project or be wrong, so
+        # leave them untouched (return False) rather than assuming vulnerable.
+        #   *, x, latest, ""            -> floating tags
+        #   workspace:, npm:, file:,    -> protocol specs
+        #   link:, git/url, github short
+        lowered = spec.lower()
+        if (
+            spec in ("", "*", "x", "X")
+            or lowered in ("latest", "next", "*")
+            or lowered.startswith(("workspace:", "npm:", "file:", "link:", "portal:"))
+            or "://" in lowered  # git+https://, https://, etc.
+            or lowered.startswith(("git@", "git+"))
+            or re.match(r'^[\w.-]+/[\w.-]+(#.*)?$', spec)  # github user/repo shorthand
+        ):
+            return False
+
         # Strip version prefix
-        version = installed_version.lstrip('^~>=<')
+        version = spec.lstrip('^~>=<')
 
         # Parse version components
         match = self.SEMVER_PATTERN.match(version)
         if not match:
-            # Can't parse, assume vulnerable for safety
+            # Genuinely ambiguous but pinned-ish (e.g. odd pre-release tags):
+            # stay conservative and treat as vulnerable.
             return True
 
         major, minor, patch = int(match.group(1)), int(match.group(2)), int(match.group(3))

@@ -13,6 +13,7 @@ Features:
 import json
 import hashlib
 import subprocess
+import tempfile
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Set
@@ -107,7 +108,7 @@ class GitHubAdvisoryDB:
 
     GRAPHQL_ENDPOINT = "https://api.github.com/graphql"
     REST_ENDPOINT = "https://api.github.com/advisories"
-    CACHE_DIR = Path("/tmp/shellockolm/github_advisory_cache")
+    CACHE_DIR = Path(tempfile.gettempdir()) / "shellockolm" / "github_advisory_cache"
     CACHE_TTL_HOURS = 24  # Cache validity in hours
 
     # GraphQL query for security advisories

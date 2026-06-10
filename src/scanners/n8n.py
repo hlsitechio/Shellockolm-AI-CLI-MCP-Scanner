@@ -178,22 +178,38 @@ class N8NScanner(BaseScanner):
             v = Version(version)
 
             for cve_id, info in self.VULNS.items():
-                fixed_v = Version(info["fixed"])
+                # A CVE may be fixed across several release branches. Build the
+                # full list of fix versions (primary + alternates) so we can
+                # evaluate the branch that matches this version's minor line.
+                fix_versions = [Version(info["fixed"])]
+                fix_versions.extend(Version(alt) for alt in info.get("alt_fixed", []))
 
-                if v < fixed_v:
-                    # Check if any alternative fixed versions apply
-                    if "alt_fixed" in info:
-                        # For some CVEs, there are multiple fix branches
-                        is_vulnerable = True
-                        for alt in info["alt_fixed"]:
-                            alt_v = Version(alt)
-                            # If version is >= an alt fix, not vulnerable
-                            if v >= alt_v:
-                                is_vulnerable = False
-                                break
-                        if not is_vulnerable:
-                            continue
+                # Find fix branches on the SAME minor line (major.minor) as the
+                # installed version. A version is vulnerable if it is below the
+                # fix for its own branch.
+                same_branch_fixes = [
+                    fv for fv in fix_versions
+                    if (fv.major, fv.minor) == (v.major, v.minor)
+                ]
 
+                is_vulnerable = False
+                if same_branch_fixes:
+                    # Vulnerable if below the fix for its branch.
+                    is_vulnerable = v < max(same_branch_fixes)
+                else:
+                    # No fix on this exact branch. The version is vulnerable if
+                    # it sits below the lowest fix branch (older, unpatched
+                    # minor line). Versions on or above all fix branches that
+                    # have no matching branch fix are treated as patched.
+                    is_vulnerable = v < min(fix_versions)
+
+                # The vulnerability data may also explicitly enumerate affected
+                # versions/ranges (e.g. a single odd release like 1.121.0 that
+                # is >= the primary fix but still listed as affected). Honor it.
+                if not is_vulnerable:
+                    is_vulnerable = self._version_explicitly_affected(cve_id, version)
+
+                if is_vulnerable:
                     vuln = self.db.get_by_cve(cve_id)
                     if vuln:
                         finding = ScanFinding(
@@ -218,6 +234,55 @@ class N8NScanner(BaseScanner):
             pass
 
         return findings
+
+    def _version_explicitly_affected(self, cve_id: str, version: str) -> bool:
+        """Check the vulnerability DB's affected_versions list for this version.
+
+        Handles exact versions ("1.121.0") and range specs ("0.211.0-1.120.3").
+        Used to catch versions that are >= the primary fix but still explicitly
+        listed as affected.
+        """
+        try:
+            vuln = self.db.get_by_cve(cve_id)
+            if not vuln:
+                return False
+
+            from packaging.version import Version
+            v = Version(version)
+
+            for spec in vuln.affected_versions:
+                spec = spec.strip()
+                # Range like "0.211.0-1.120.3"
+                if "-" in spec and not spec.startswith("<") and not spec.startswith(">"):
+                    parts = spec.split("-")
+                    if len(parts) == 2:
+                        try:
+                            low, high = Version(parts[0].strip()), Version(parts[1].strip())
+                            if low <= v <= high:
+                                return True
+                            continue
+                        except Exception:
+                            # Not a clean version range (e.g. "1.122.0-RC"); fall
+                            # back to an exact string match below.
+                            pass
+                if "<" in spec:
+                    try:
+                        if v < Version(spec.lstrip("<").strip()):
+                            return True
+                        continue
+                    except Exception:
+                        pass
+                # Exact version match
+                try:
+                    if v == Version(spec):
+                        return True
+                except Exception:
+                    if spec == version:
+                        return True
+        except Exception:
+            pass
+
+        return False
 
     def _detect_n8n(self, url: str, timeout: int) -> tuple:
         """Detect if URL is an n8n instance and try to get version"""

@@ -13,6 +13,7 @@ Argus security audit: 512 findings, 8 CRITICAL.
 
 import json
 import os
+import platform
 import re
 import socket
 import stat
@@ -303,6 +304,12 @@ class ClawdbotScanner(BaseScanner):
 
     def _check_file_permissions(self, file_path: Path) -> Optional[ScanFinding]:
         """Check if a credential file has insecure permissions"""
+        # POSIX permission bits (S_IROTH/S_IRGRP/S_IWOTH) are meaningless on
+        # Windows - st_mode does not carry real Unix mode bits, so checking them
+        # produces bogus 666/777 findings on every file. Skip the check there.
+        if platform.system() == "Windows":
+            return None
+
         try:
             st = file_path.stat()
             mode = st.st_mode
@@ -622,18 +629,39 @@ class ClawdbotScanner(BaseScanner):
         return findings
 
     def _is_port_listening(self, port: int, udp: bool = False) -> bool:
-        """Check if a port is listening on localhost"""
-        try:
-            sock_type = socket.SOCK_DGRAM if udp else socket.SOCK_STREAM
-            with socket.socket(socket.AF_INET, sock_type) as sock:
-                sock.settimeout(1)
-                if udp:
-                    # For UDP, try to connect — won't error if port exists
-                    sock.connect(("127.0.0.1", port))
+        """Check if a port is listening on localhost.
+
+        For TCP we use connect_ex. For UDP, connect() never fails (it is
+        connectionless), so it cannot tell us whether anyone is listening.
+        Instead we attempt to bind the port: if the bind succeeds, nothing was
+        listening (return False); if it fails with EADDRINUSE, something already
+        holds the port (return True). Any other error is treated conservatively
+        as "not listening" to avoid false-positive HIGH findings.
+        """
+        if udp:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                # SO_REUSEADDR lets us probe without disturbing a legitimate
+                # listener; a true in-use port still raises EADDRINUSE on bind.
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.bind(("127.0.0.1", port))
+                # Bind succeeded -> nothing else is listening on this port.
+                return False
+            except OSError as e:
+                import errno
+                if e.errno in (errno.EADDRINUSE, errno.EACCES):
+                    # Port is already in use (or privileged) -> assume listening.
                     return True
-                else:
-                    result = sock.connect_ex(("127.0.0.1", port))
-                    return result == 0
+                # Uncertain -> conservatively report not listening.
+                return False
+            finally:
+                sock.close()
+
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(1)
+                result = sock.connect_ex(("127.0.0.1", port))
+                return result == 0
         except (socket.timeout, socket.error, OSError):
             return False
 
