@@ -1,5 +1,18 @@
 # 🚀 Promotion Guide - Get the Word Out!
 
+> ⚠️ **CREDIBILITY WARNING — DO NOT PUBLISH AS-IS.** A monetization/credibility audit
+> (2026-06-10) flagged claims below that will damage trust on the exact channels you'd
+> launch on (HN, r/netsec fact-check instantly). Verify with a source or remove each:
+>
+> - **"100% success rate" / "100% patch success rate"** — no honest scanner claims this. Remove or reword to "patched every project it flagged, in our testing."
+> - **"Zero false positives"** — indefensible for any scanner. Remove.
+> - **"Scanned 2,665 projects"** — keep only if it's real, reproducible test data; otherwise reword to "in our testing" with a true number.
+> - **"Actively exploited by state-nexus APT groups"** — drop the attribution unless you can cite a public source. Unverified threat-intel claims backfire hard.
+> - **CVE-2025-55182 specifics** (CVSS 10.0, affected versions) — verify against OSV/GHSA before repeating as fact.
+>
+> Honest launch copy (and the "honest-numbers" angle that actually converts in
+> security) is drafted in `growth/SHOW_HN_DRAFT.md`.
+
 This guide helps you promote the CVE-2025-55182 Security Tools and grow the community.
 
 ---
