@@ -17,7 +17,7 @@ const InstallSection = () => {
       icon: Github,
       title: "Clone & Install",
       commands: [
-        "git clone https://github.com/hlsitechio/shellockolm.git",
+        "git clone https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner.git",
         "cd shellockolm",
         "pip install -r requirements.txt"
       ],
@@ -149,7 +149,7 @@ const InstallSection = () => {
             <Button 
               size="lg"
               className="bg-primary text-primary-foreground hover:bg-primary/90 px-8 py-6 text-lg font-semibold glow-gold"
-              onClick={() => window.open('https://github.com/hlsitechio/shellockolm', '_blank')}
+              onClick={() => window.open('https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner', '_blank')}
             >
               <Github className="w-5 h-5 mr-2" />
               View on GitHub

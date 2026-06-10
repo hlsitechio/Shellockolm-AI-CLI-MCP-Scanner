@@ -52,7 +52,7 @@ const HeroSection = () => {
             <Button 
               size="lg" 
               className="group relative overflow-hidden bg-primary text-primary-foreground hover:bg-primary/90 px-8 py-6 text-lg font-semibold glow-ultramarine animate-glow-pulse"
-              onClick={() => window.open('https://github.com/hlsitechio/shellockolm', '_blank')}
+              onClick={() => window.open('https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner', '_blank')}
             >
               <Shield className="w-5 h-5 mr-2" />
               Get Started

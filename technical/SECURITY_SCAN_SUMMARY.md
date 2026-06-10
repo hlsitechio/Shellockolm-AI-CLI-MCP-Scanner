@@ -228,8 +228,8 @@ All security actions have been logged:
 
 For questions about this scan or the security tools:
 
-- **GitHub Repository**: https://github.com/hlsitechio/shellockolm
-- **Issues**: https://github.com/hlsitechio/shellockolm/issues
+- **GitHub Repository**: https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner
+- **Issues**: https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/issues
 - **Security Policy**: See SECURITY.md
 
 ---

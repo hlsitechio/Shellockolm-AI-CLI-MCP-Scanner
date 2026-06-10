@@ -2,10 +2,10 @@ import { Github, FileText, Shield, Heart } from "lucide-react";
 
 const Footer = () => {
   const links = [
-    { label: "Quick Start", href: "https://github.com/hlsitechio/shellockolm/blob/main/docs/QUICK_START.md", icon: FileText },
-    { label: "GitHub Scanner", href: "https://github.com/hlsitechio/shellockolm/blob/main/docs/GITHUB_SCANNER.md", icon: Github },
-    { label: "Privacy & Security", href: "https://github.com/hlsitechio/shellockolm/blob/main/PRIVACY_AND_SECURITY.md", icon: Shield },
-    { label: "Contributing", href: "https://github.com/hlsitechio/shellockolm/blob/main/CONTRIBUTING.md", icon: Heart },
+    { label: "Quick Start", href: "https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/blob/main/docs/QUICK_START.md", icon: FileText },
+    { label: "GitHub Scanner", href: "https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/blob/main/docs/GITHUB_SCANNER.md", icon: Github },
+    { label: "Privacy & Security", href: "https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/blob/main/PRIVACY_AND_SECURITY.md", icon: Shield },
+    { label: "Contributing", href: "https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/blob/main/CONTRIBUTING.md", icon: Heart },
   ];
 
   return (
@@ -42,13 +42,13 @@ const Footer = () => {
         <div className="mt-12 pt-8 border-t border-border/50 flex flex-col md:flex-row items-center justify-between gap-4 text-sm text-muted-foreground">
           <p>MIT License • Built by HLSITech</p>
           <a
-            href="https://github.com/hlsitechio/shellockolm"
+            href="https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner"
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-2 hover:text-primary transition-colors"
           >
             <Github className="w-4 h-4" />
-            github.com/hlsitechio/shellockolm
+            github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner
           </a>
         </div>
       </div>

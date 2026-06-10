@@ -8,7 +8,7 @@
 
 ### PowerShell (Recommended)
 ```powershell
-iex (irm https://raw.githubusercontent.com/hlsitechio/shellockolm/main/install.ps1)
+iex (irm https://raw.githubusercontent.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/main/scripts/install.ps1)
 ```
 
 ### Download & Double-Click (No Terminal)
@@ -23,7 +23,7 @@ iex (irm https://raw.githubusercontent.com/hlsitechio/shellockolm/main/install.p
 
 ### Ubuntu / Debian / Mint / Pop!_OS
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/install-debian.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/main/scripts/install-debian.sh | bash
 ```
 
 **What it does:**
@@ -37,7 +37,7 @@ curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/install
 
 ### Arch / Manjaro / EndeavourOS
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/install-arch.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/main/scripts/install-arch.sh | bash
 ```
 
 **What it does:**
@@ -55,7 +55,7 @@ curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/install
 sudo dnf install python3 python3-pip git
 
 # Then run generic installer
-curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/main/scripts/install.sh | bash
 ```
 
 ---
@@ -64,7 +64,7 @@ curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/install
 
 ### One-Line Install
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/main/scripts/install.sh | bash
 ```
 
 **Requirements:** Python 3.10+ (install via [Homebrew](https://brew.sh/))

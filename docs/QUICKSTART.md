@@ -25,7 +25,7 @@
 
 ### Option 2: One-Line PowerShell (For Advanced Users)
 ```powershell
-iex (irm https://raw.githubusercontent.com/hlsitechio/shellockolm/main/install.ps1)
+iex (irm https://raw.githubusercontent.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/main/scripts/install.ps1)
 ```
 
 Installs everything from scratch without downloading manually.
@@ -36,7 +36,7 @@ Installs everything from scratch without downloading manually.
 
 ### One-Line Terminal Install
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/main/scripts/install.sh | bash
 ```
 
 Or manual:

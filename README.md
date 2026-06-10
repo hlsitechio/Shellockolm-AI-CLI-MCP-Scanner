@@ -18,7 +18,7 @@
 
 ### 🪟 Windows
 ```powershell
-iex (irm https://raw.githubusercontent.com/hlsitechio/shellockolm/main/scripts/install.ps1)
+iex (irm https://raw.githubusercontent.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/main/scripts/install.ps1)
 ```
 **Or:** [Download ZIP](https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/archive/refs/heads/main.zip) → Double-click `scripts/setup.bat`
 
@@ -26,21 +26,21 @@ iex (irm https://raw.githubusercontent.com/hlsitechio/shellockolm/main/scripts/i
 
 ### 🐧 Ubuntu / Debian / Mint
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/scripts/install-debian.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/main/scripts/install-debian.sh | bash
 ```
 
 ---
 
 ### 🏔️ Arch / Manjaro
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/scripts/install-arch.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/main/scripts/install-arch.sh | bash
 ```
 
 ---
 
 ### 🍎 macOS
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/main/scripts/install.sh | bash
 ```
 
 ---

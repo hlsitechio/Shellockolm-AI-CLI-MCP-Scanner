@@ -7,7 +7,7 @@
 .EXAMPLE
     .\install.ps1
 .EXAMPLE
-    iex (irm https://raw.githubusercontent.com/hlsitechio/shellockolm/main/install.ps1)
+    iex (irm https://raw.githubusercontent.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/main/scripts/install.ps1)
 #>
 
 $ErrorActionPreference = "Stop"

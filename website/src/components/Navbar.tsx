@@ -58,7 +58,7 @@ const Navbar = () => {
               variant="outline"
               size="sm"
               className="border-primary/50 hover:bg-primary/10 text-primary hover:text-primary gap-2"
-              onClick={() => window.open("https://github.com/hlsitechio/shellockolm", "_blank")}
+              onClick={() => window.open("https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner", "_blank")}
             >
               <Star className="w-4 h-4 fill-primary" />
               Star
@@ -67,7 +67,7 @@ const Navbar = () => {
               variant="outline"
               size="sm"
               className="border-border hover:border-primary/50"
-              onClick={() => window.open("https://github.com/hlsitechio/shellockolm", "_blank")}
+              onClick={() => window.open("https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner", "_blank")}
             >
               <Github className="w-4 h-4 mr-2" />
               GitHub
@@ -102,7 +102,7 @@ const Navbar = () => {
                 variant="outline"
                 size="sm"
                 className="border-border hover:border-primary/50 w-full mt-2"
-                onClick={() => window.open("https://github.com/hlsitechio/shellockolm", "_blank")}
+                onClick={() => window.open("https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner", "_blank")}
               >
                 <Github className="w-4 h-4 mr-2" />
                 GitHub
