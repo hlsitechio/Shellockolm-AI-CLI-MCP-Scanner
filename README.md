@@ -8,8 +8,6 @@
 
 **The security detective that scans React, Next.js & npm projects for CVEs, malware, and supply chain attacks**
 
-![Shellockolm - Your Security Detective](docs/images/banner.png)
-
 **🤖 Built for AI Assistants** | **⚡ Lightning Fast** | **🔒 32 CVEs Tracked** | **🎯 100% Offline**
 
 </div>
