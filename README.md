@@ -1,5 +1,7 @@
 <div align="center">
 
+![Shellockolm — AI CLI MCP Scanner](docs/images/hero-banner.png)
+
 # 🔍 Shellockolm
 
 ### **CLI & MCP Security Scanner for AI Agents**
