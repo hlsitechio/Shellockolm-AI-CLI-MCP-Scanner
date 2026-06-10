@@ -15,6 +15,7 @@ import sys
 import json
 import os
 import re
+import inspect
 import tempfile
 from pathlib import Path
 from typing import Optional, List
@@ -66,6 +67,21 @@ def _is_safe_npm_package(name: str) -> bool:
 def _is_safe_npm_version(version: str) -> bool:
     """True if ``version`` is a syntactically safe (semver-ish) version string."""
     return bool(version) and bool(_NPM_VERSION_RE.match(version))
+
+
+def _run_scanner(s, path, *, recursive=True, max_depth=10, quick=False):
+    """Run a scanner's scan_directory, passing quick_mode only if it's supported.
+
+    Not all scanners accept ``quick_mode`` (supply-chain, n8n and clawdbot don't).
+    Rather than catch a blanket ``TypeError`` (which would also swallow real bugs
+    inside a scanner), we inspect the signature and only pass the kwarg when the
+    scanner actually declares it.
+    """
+    sig = inspect.signature(s.scan_directory)
+    kwargs = {"recursive": recursive, "max_depth": max_depth}
+    if quick and "quick_mode" in sig.parameters:
+        kwargs["quick_mode"] = True
+    return s.scan_directory(path, **kwargs)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -665,6 +681,7 @@ def scan(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed findings"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Save JSON report to file"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
+    quick: bool = typer.Option(False, "--quick", help="Quick mode: only check package versions (fast!)"),
     _from_menu: bool = False,  # Internal: skip banner when called from menu
 ):
     """
@@ -675,6 +692,7 @@ def scan(
         shellockolm scan /path/to/project       # Scan specific path
         shellockolm scan -s react ./            # Use only React scanner
         shellockolm scan -o report.json ./      # Export to JSON
+        shellockolm scan --quick ./             # Quick scan (package versions only)
     """
     if not quiet and not _from_menu:
         print_banner()
@@ -711,7 +729,7 @@ def scan(
         if not quiet:
             progress.update(current=i, item=s.NAME)
 
-        result = s.scan_directory(path, recursive=recursive, max_depth=max_depth)
+        result = _run_scanner(s, path, recursive=recursive, max_depth=max_depth, quick=quick)
         results.append(result)
 
         # Track findings by severity
