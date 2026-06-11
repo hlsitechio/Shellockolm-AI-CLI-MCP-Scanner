@@ -99,7 +99,21 @@ SECRET_RULE = AgentRule(
     "A hardcoded API key/token is embedded in the artifact, exposing it to anyone who installs it.",
     "Move secrets to environment variables or a secret manager, and rotate the exposed credential.",
 )
-GENERIC_TEXT_RULES: List[AgentRule] = [EXFIL_RULE, OBF_RULE, SECRET_RULE]
+URL_EXFIL_RULE = AgentRule(
+    "AGENT-EXFIL-002", "Secret referenced in an outbound URL / markdown image",
+    FindingSeverity.CRITICAL, 9.0,
+    _c(r"https?://[^\s)\"']*[?&][^\s)\"']*(\$[A-Z][A-Z0-9_]*(KEY|TOKEN|SECRET)|api[_-]?key=|token=|secret=)"),
+    "A URL (often a tracking-pixel markdown image) carries a secret in its query string — a stealth exfiltration channel.",
+    "Remove the URL or the secret reference; never place credentials in a URL the agent will fetch.",
+)
+DESTRUCT_RULE = AgentRule(
+    "AGENT-DESTRUCT-001", "Destructive shell command in agent artifact",
+    FindingSeverity.HIGH, 7.0,
+    _c(r"(rm\s+-rf\s+[~/*]|\bmkfs\.|:\(\)\s*\{\s*:\|:|del\s+/[fsq]|format\s+[a-z]:|>\s*/dev/sd)"),
+    "A destructive filesystem/disk command is embedded — an agent that runs it could wipe data.",
+    "Remove destructive commands; agent artifacts should never instruct mass deletion or disk formatting.",
+)
+GENERIC_TEXT_RULES: List[AgentRule] = [EXFIL_RULE, URL_EXFIL_RULE, OBF_RULE, SECRET_RULE, DESTRUCT_RULE]
 
 # MCP server configs
 MCP_RULES: List[AgentRule] = [
@@ -151,6 +165,13 @@ class AgentSupplyChainScanner(BaseScanner):
 
     SKILL_NAMES = {"skill.md"}
     MCP_NAMES = {"mcp.json", ".mcp.json", "claude_desktop_config.json"}
+    # AI instruction files that agents read as standing context — prime
+    # prompt-injection targets (Claude Code, Cursor, Windsurf, Copilot, Cline, Gemini).
+    INSTRUCTION_NAMES = {
+        "agents.md", "claude.md", "gemini.md",
+        ".cursorrules", ".windsurfrules", ".clinerules",
+        "copilot-instructions.md",
+    }
 
     # Heavy dirs to skip; note we deliberately do NOT skip dot-dirs in general,
     # because agent artifacts live in .claude/.cursor/.mcp/.windsurf etc.
@@ -179,13 +200,14 @@ class AgentSupplyChainScanner(BaseScanner):
 
         targets = [root] if root.is_file() else list(self._walk(root, recursive, max_depth))
 
-        skills = mcps = workflows = 0
+        skills = mcps = workflows = instrs = 0
         for fp in targets:
             name = fp.name.lower()
             is_skill = name in self.SKILL_NAMES or name.endswith(".skill.md")
             is_mcp = name in self.MCP_NAMES or name.endswith(".mcp.json")
+            is_instr = name in self.INSTRUCTION_NAMES
             is_json = name.endswith(".json")
-            if not (is_skill or is_mcp or is_json):
+            if not (is_skill or is_mcp or is_instr or is_json):
                 continue
 
             try:
@@ -201,6 +223,9 @@ class AgentSupplyChainScanner(BaseScanner):
             elif is_mcp:
                 mcps += 1
                 result.findings.extend(self._scan_mcp(fp, text))
+            elif is_instr:
+                instrs += 1
+                result.findings.extend(self._scan_instructions(fp, text, quick_mode))
             elif is_json and '"nodes"' in text and '"connections"' in text:
                 workflows += 1
                 result.findings.extend(self._scan_n8n(fp, text))
@@ -210,6 +235,7 @@ class AgentSupplyChainScanner(BaseScanner):
             "skills_scanned": skills,
             "mcp_configs_scanned": mcps,
             "n8n_workflows_scanned": workflows,
+            "instruction_files_scanned": instrs,
         })
         return result
 
@@ -299,6 +325,13 @@ class AgentSupplyChainScanner(BaseScanner):
 
     def _scan_n8n(self, fp: Path, text: str) -> List[ScanFinding]:
         findings = self._apply_rules(text, N8N_RULES + GENERIC_TEXT_RULES, fp, "n8n-workflow")
+        return self._dedupe(findings)
+
+    def _scan_instructions(self, fp: Path, text: str, quick_mode: bool) -> List[ScanFinding]:
+        findings = self._apply_rules(text, PROMPT_INJECTION_RULES + GENERIC_TEXT_RULES, fp, "agent-instructions")
+        findings += self._check_invisible(text, fp, "agent-instructions")
+        if not quick_mode:
+            findings += self._check_b64(text, fp, "agent-instructions")
         return self._dedupe(findings)
 
     def _apply_rules(self, text: str, rules: List[AgentRule], fp: Path, artifact: str) -> List[ScanFinding]:
