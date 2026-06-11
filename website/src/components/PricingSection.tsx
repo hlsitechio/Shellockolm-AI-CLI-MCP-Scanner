@@ -9,9 +9,9 @@ import { Button } from "@/components/ui/button";
 // frontend — Payment Links need no keys at all. If a link is left blank,
 // the button falls back to an email enquiry.
 const PAYMENT_LINKS = {
-  express: "",
-  auditFix: "",
-  retainer: "",
+  express: "https://buy.stripe.com/aFadRaa9efwBdOZ4tE3Je02",
+  auditFix: "https://buy.stripe.com/eVq28s1CI4RXdOZ1hs3Je03",
+  retainer: "https://buy.stripe.com/28EcN66X2acheT35xI3Je04",
 };
 
 const CONTACT_EMAIL = "hlarosesurprenant@gmail.com";
@@ -31,7 +31,7 @@ const plans: Plan[] = [
   {
     icon: ShieldCheck,
     name: "Express Audit",
-    price: "$1,500",
+    price: "$2,000",
     cadence: "fixed scope · ~3 days",
     blurb: "A scan, triaged by a human, for one app or repo.",
     features: [
@@ -46,7 +46,7 @@ const plans: Plan[] = [
   {
     icon: Wrench,
     name: "Audit + Remediation",
-    price: "$4,500",
+    price: "$6,000",
     cadence: "fixed scope · ~2 weeks",
     blurb: "Everything in Express Audit — and I fix it with you.",
     features: [
