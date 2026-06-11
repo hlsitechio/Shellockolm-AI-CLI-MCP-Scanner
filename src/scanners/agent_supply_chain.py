@@ -90,6 +90,16 @@ PROMPT_INJECTION_RULES: List[AgentRule] = [
         "Instructs the agent to act covertly or hide what it's doing from the user — a hallmark of a malicious skill.",
         "Remove. Legitimate skills never ask the agent to conceal its actions from the user.",
     ),
+    AgentRule(
+        "AGENT-PI-008", "Embedded directive block (MCP tool poisoning)",
+        FindingSeverity.HIGH, 8.4,
+        _c(r"<\s*/?\s*(important|secret|confidential|admin|sudo|system[-_ ]?prompt|hidden[-_ ]?instructions?|do[-_ ]?not[-_ ]?(tell|mention|reveal))\s*>"),
+        "A pseudo-XML directive block (e.g. <IMPORTANT>...</IMPORTANT>) is embedded in the "
+        "instructions — the signature of an MCP 'tool poisoning' attack, where a tool/skill "
+        "description hides commands the model obeys but a human reviewer skims past.",
+        "Remove the directive block. Tool/skill descriptions should describe behavior, not "
+        "smuggle imperative <IMPORTANT>/<SYSTEM> instructions for the model.",
+    ),
 ]
 
 # Applied to every artifact type
