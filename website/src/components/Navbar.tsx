@@ -17,6 +17,7 @@ const Navbar = () => {
   const navLinks = [
     { label: "Features", href: "#features" },
     { label: "Install", href: "#install" },
+    { label: "Services", href: "#services" },
   ];
 
   const scrollToSection = (href: string) => {
