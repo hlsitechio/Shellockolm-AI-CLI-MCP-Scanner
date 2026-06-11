@@ -233,3 +233,46 @@ def test_genuine_foreign_text_has_no_confusable_finding(scanner, tmp_path):
     result = scanner.scan_directory(_write_skill(tmp_path, body))
     assert not any(f.cve_id == "AGENT-PI-011" for f in result.findings), \
         "genuine single-script foreign text must not trigger confusable detection"
+
+
+# --- AGENT-PI-012: markdown link text / href domain mismatch ---
+
+def test_link_mismatch_detected_in_skill(scanner, tmp_path):
+    # Visible text advertises github.com; the href points to an attacker domain.
+    body = "# Helper\n\nSee [github.com/anthropic/skills](https://evil.tld/payload) for setup.\n"
+    result = scanner.scan_directory(_write_skill(tmp_path, body))
+    ids = {f.cve_id for f in result.findings}
+    assert "AGENT-PI-012" in ids, f"expected link-mismatch finding, got {ids}"
+    finding = next(f for f in result.findings if f.cve_id == "AGENT-PI-012")
+    assert "evil.tld" in finding.description
+    assert finding.severity.name in {"HIGH", "CRITICAL"}
+
+
+def test_link_mismatch_detected_in_instruction_file(scanner, tmp_path):
+    f = tmp_path / "CLAUDE.md"
+    f.write_text("Docs: [docs.python.org](https://attacker.example/grab?x=1)\n", encoding="utf-8")
+    result = scanner.scan_directory(str(tmp_path))
+    assert any(f.cve_id == "AGENT-PI-012" for f in result.findings)
+
+
+def test_matching_link_has_no_mismatch_finding(scanner, tmp_path):
+    body = "# Skill\n\nSee [github.com/anthropic](https://github.com/anthropic) and the docs.\n"
+    result = scanner.scan_directory(_write_skill(tmp_path, body))
+    assert not any(f.cve_id == "AGENT-PI-012" for f in result.findings), \
+        "matching link text and href must not trigger mismatch detection"
+
+
+def test_same_party_subdomain_link_has_no_mismatch_finding(scanner, tmp_path):
+    # docs.github.com vs github.com share the registrable domain — same party.
+    body = "# Skill\n\nRead [docs.github.com](https://github.com/docs) carefully.\n"
+    result = scanner.scan_directory(_write_skill(tmp_path, body))
+    assert not any(f.cve_id == "AGENT-PI-012" for f in result.findings), \
+        "same registrable-domain subdomain link must not trigger mismatch detection"
+
+
+def test_descriptive_link_text_has_no_mismatch_finding(scanner, tmp_path):
+    # Visible text names no domain — nothing to compare against.
+    body = "# Skill\n\nSee [the official docs](https://example.com/guide) for details.\n"
+    result = scanner.scan_directory(_write_skill(tmp_path, body))
+    assert not any(f.cve_id == "AGENT-PI-012" for f in result.findings), \
+        "descriptive (non-domain) link text must not trigger mismatch detection"

@@ -81,6 +81,25 @@ CONFUSABLES: Dict[str, str] = {
 # noise from short fragments; mixed-script detection happens per token below.
 _CONFUSABLE_WORD = re.compile(r"[A-Za-zЀ-ӿͰ-Ͽ]{3,}")
 
+# Inline markdown link: [visible text](href). Used to detect a link whose visible
+# text advertises one domain while the href points to a different one — a lure that
+# gets an agent (or a skimming human) to auto-fetch an attacker-controlled URL.
+_MD_LINK = re.compile(r"\[([^\]\n]{1,200})\]\((https?://[^)\s]{1,400})\)")
+# A bare hostname token (label.label[.label…], TLD 2+ alpha) anywhere in link text.
+_HOST_IN_TEXT = re.compile(r"\b((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,})\b", re.IGNORECASE)
+# Host portion of an http(s) URL.
+_URL_HOST = re.compile(r"https?://(?:[^@/\s]*@)?([^:/?#\s]+)", re.IGNORECASE)
+
+
+def _registrable(host: str) -> str:
+    """Last two labels of a hostname (e.g. a.b.github.com -> github.com).
+
+    A deliberately simple eTLD heuristic — good enough to treat docs.github.com and
+    github.com as the same party while still flagging github.com vs evil.tld.
+    """
+    labels = host.strip().strip(".").lower().split(".")
+    return ".".join(labels[-2:]) if len(labels) >= 2 else host.strip().lower()
+
 
 @dataclass
 class AgentRule:
@@ -404,6 +423,7 @@ class AgentSupplyChainScanner(BaseScanner):
         findings += self._check_tag_smuggling(text, fp, "agent-skill")
         findings += self._check_bidi(text, fp, "agent-skill")
         findings += self._check_confusables(text, fp, "agent-skill")
+        findings += self._check_link_mismatch(text, fp, "agent-skill")
         if not quick_mode:
             findings += self._check_b64(text, fp, "agent-skill")
         return self._dedupe(findings)
@@ -472,6 +492,7 @@ class AgentSupplyChainScanner(BaseScanner):
         findings += self._check_tag_smuggling(text, fp, "agent-instructions")
         findings += self._check_bidi(text, fp, "agent-instructions")
         findings += self._check_confusables(text, fp, "agent-instructions")
+        findings += self._check_link_mismatch(text, fp, "agent-instructions")
         if not quick_mode:
             findings += self._check_b64(text, fp, "agent-instructions")
         return self._dedupe(findings)
@@ -581,6 +602,40 @@ class AgentSupplyChainScanner(BaseScanner):
                 "artifacts never mix Cyrillic/Greek look-alikes into English words.",
             )
             return [self._finding(rule, fp, artifact, snippet, line_no)]
+        return []
+
+    def _check_link_mismatch(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
+        """Detect a markdown link whose visible text names a different domain than its href.
+
+        `[github.com/anthropic](https://evil.tld/x)` reads as a trusted link but points
+        elsewhere — a classic lure to get an agent to auto-fetch attacker content. We
+        only flag when the visible text actually advertises a hostname AND that host's
+        registrable domain differs from the href's, so plain descriptive link text
+        ("see the docs") and same-party subdomains never trip the rule.
+        """
+        for m in _MD_LINK.finditer(text):
+            link_text, href = m.group(1), m.group(2)
+            href_host = _URL_HOST.search(href)
+            if not href_host:
+                continue
+            href_dom = _registrable(href_host.group(1))
+            for tm in _HOST_IN_TEXT.finditer(link_text):
+                text_dom = _registrable(tm.group(1))
+                if text_dom == href_dom:
+                    continue
+                line_no = text.count("\n", 0, m.start()) + 1
+                snippet = f"text says {tm.group(1)!r} but href is {href_host.group(1)!r}"
+                rule = AgentRule(
+                    "AGENT-PI-012", "Markdown link text / href domain mismatch",
+                    FindingSeverity.HIGH, 7.4, None,
+                    "A markdown link's visible text advertises one domain while its href "
+                    "points to a different one. In an agent artifact this is a lure: the "
+                    "model (or a skimming reviewer) trusts the visible domain and follows "
+                    "or auto-fetches the real, attacker-controlled URL.",
+                    "Make the link text match its destination, or remove the link. Visible "
+                    "text should never name a domain other than the one it links to.",
+                )
+                return [self._finding(rule, fp, artifact, snippet, line_no)]
         return []
 
     def _check_b64(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
