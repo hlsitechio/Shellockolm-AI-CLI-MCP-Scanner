@@ -151,6 +151,34 @@ N8N_RULES: List[AgentRule] = [
     ),
 ]
 
+# Pro-tier advanced detections — unlocked with a Shellockolm Pro license. The free
+# rule sets above always run; these are *additional* coverage, never a replacement.
+# (In the durable open-core model these are served by the licensing endpoint so
+# they aren't reconstructable from the open repo; bundled here as the starter pack.)
+PRO_RULES: List[AgentRule] = [
+    AgentRule(
+        "AGENT-PRO-001", "Indirect prompt injection via fetched content",
+        FindingSeverity.HIGH, 8.3,
+        _c(r"\b(fetch|read|load|open|visit|retrieve|download)\b[^\n]{0,50}\b(then|and)\b[^\n]{0,40}\b(follow|do|execute|obey|apply|run|perform)\b"),
+        "Instructs the agent to fetch external content and then follow instructions inside it — indirect (second-order) prompt injection.",
+        "Treat fetched content as untrusted data, never as instructions. Remove the 'then follow' directive.",
+    ),
+    AgentRule(
+        "AGENT-PRO-002", "Tool / skill shadowing or redefinition",
+        FindingSeverity.HIGH, 7.9,
+        _c(r"\b(override|replace|shadow|supersede|redefine|take\s+precedence\s+over|instead\s+of)\b[^\n]{0,30}\b(tool|function|command|skill|server|capability)\b"),
+        "Claims to override or replace another tool/skill — tool shadowing, used to hijack a trusted tool's behavior.",
+        "Audit the redefinition. Skills should not silently supersede other tools.",
+    ),
+    AgentRule(
+        "AGENT-PRO-003", "Conversation / context exfiltration",
+        FindingSeverity.CRITICAL, 9.0,
+        _c(r"\b(send|post|upload|forward|share|transmit|leak)\b[^\n]{0,45}\b(conversation|chat\s+history|message\s+history|context\s+window|transcript|all\s+(messages|prior\s+turns))\b"),
+        "Instruction to send the conversation/context elsewhere — exfiltration of everything shared with the agent.",
+        "Remove. No legitimate skill needs to transmit the conversation history off-box.",
+    ),
+]
+
 
 class AgentSupplyChainScanner(BaseScanner):
     """Scans agent skills, MCP configs, and n8n workflows for agentic-era threats."""
@@ -183,6 +211,20 @@ class AgentSupplyChainScanner(BaseScanner):
 
     MAX_FILE_BYTES = 2_000_000
     _B64 = re.compile(r"[A-Za-z0-9+/]{160,}={0,2}")
+
+    def __init__(self, pro: Optional[bool] = None):
+        super().__init__()
+        if pro is None:
+            try:
+                from licensing import LicenseManager
+                pro = LicenseManager().is_pro()
+            except Exception:
+                pro = False
+        self.pro = bool(pro)
+
+    def _extra(self) -> List[AgentRule]:
+        """Pro-only rules, included when a valid Pro/Team license is active."""
+        return PRO_RULES if self.pro else []
 
     def scan_directory(
         self,
@@ -267,7 +309,7 @@ class AgentSupplyChainScanner(BaseScanner):
         yield from rec(root, 0)
 
     def _scan_skill(self, fp: Path, text: str, quick_mode: bool) -> List[ScanFinding]:
-        findings = self._apply_rules(text, PROMPT_INJECTION_RULES + GENERIC_TEXT_RULES, fp, "agent-skill")
+        findings = self._apply_rules(text, PROMPT_INJECTION_RULES + GENERIC_TEXT_RULES + self._extra(), fp, "agent-skill")
         findings += self._check_invisible(text, fp, "agent-skill")
         if not quick_mode:
             findings += self._check_b64(text, fp, "agent-skill")
@@ -278,10 +320,10 @@ class AgentSupplyChainScanner(BaseScanner):
         structured = self._scan_mcp_structured(fp, text)
         if structured is None:
             # not valid JSON — fall back to raw-text rules
-            findings += self._apply_rules(text, MCP_RULES + GENERIC_TEXT_RULES, fp, "mcp-config")
+            findings += self._apply_rules(text, MCP_RULES + GENERIC_TEXT_RULES + self._extra(), fp, "mcp-config")
         else:
             findings += structured
-            findings += self._apply_rules(text, GENERIC_TEXT_RULES, fp, "mcp-config")
+            findings += self._apply_rules(text, GENERIC_TEXT_RULES + self._extra(), fp, "mcp-config")
         return self._dedupe(findings)
 
     def _scan_mcp_structured(self, fp: Path, text: str) -> Optional[List[ScanFinding]]:
@@ -324,11 +366,11 @@ class AgentSupplyChainScanner(BaseScanner):
         return out
 
     def _scan_n8n(self, fp: Path, text: str) -> List[ScanFinding]:
-        findings = self._apply_rules(text, N8N_RULES + GENERIC_TEXT_RULES, fp, "n8n-workflow")
+        findings = self._apply_rules(text, N8N_RULES + GENERIC_TEXT_RULES + self._extra(), fp, "n8n-workflow")
         return self._dedupe(findings)
 
     def _scan_instructions(self, fp: Path, text: str, quick_mode: bool) -> List[ScanFinding]:
-        findings = self._apply_rules(text, PROMPT_INJECTION_RULES + GENERIC_TEXT_RULES, fp, "agent-instructions")
+        findings = self._apply_rules(text, PROMPT_INJECTION_RULES + GENERIC_TEXT_RULES + self._extra(), fp, "agent-instructions")
         findings += self._check_invisible(text, fp, "agent-instructions")
         if not quick_mode:
             findings += self._check_b64(text, fp, "agent-instructions")
