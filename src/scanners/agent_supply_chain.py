@@ -75,6 +75,13 @@ PROMPT_INJECTION_RULES: List[AgentRule] = [
         "Instruction directing the agent to read sensitive credential files.",
         "Remove. Skills should not instruct the agent to open credential stores.",
     ),
+    AgentRule(
+        "AGENT-PI-006", "Covert / secretive action instruction",
+        FindingSeverity.HIGH, 7.6,
+        _c(r"\bsilently\b|\bcovertly\b|(do\s?n.?t|don't|never|without)\s+(let|tell|inform|notify|alert|mention)[^\n]{0,25}(user|human|them|operator|owner)|without[^\n]{0,15}(knowing|noticing)|keep\s+(this|it)\s+(secret|hidden|quiet)"),
+        "Instructs the agent to act covertly or hide what it's doing from the user — a hallmark of a malicious skill.",
+        "Remove. Legitimate skills never ask the agent to conceal its actions from the user.",
+    ),
 ]
 
 # Applied to every artifact type
@@ -113,7 +120,14 @@ DESTRUCT_RULE = AgentRule(
     "A destructive filesystem/disk command is embedded — an agent that runs it could wipe data.",
     "Remove destructive commands; agent artifacts should never instruct mass deletion or disk formatting.",
 )
-GENERIC_TEXT_RULES: List[AgentRule] = [EXFIL_RULE, URL_EXFIL_RULE, OBF_RULE, SECRET_RULE, DESTRUCT_RULE]
+WEBHOOK_EXFIL_RULE = AgentRule(
+    "AGENT-EXFIL-003", "Exfiltration to a paste / webhook / out-of-band service",
+    FindingSeverity.HIGH, 8.0,
+    _c(r"(discord(app)?\.com/api/webhooks|hooks\.slack\.com/services|pastebin\.com/(raw/)?|hastebin\.com|requestbin|pipedream\.net|webhook\.site|\.ngrok\.(io|app|dev)|\.oast\.(live|fun|site|online|pro|me)|interact\.sh|burpcollaborator\.net|dnslog\.cn|\.requestcatcher\.com)"),
+    "References a paste bin, chat webhook, or out-of-band collaborator endpoint — common exfiltration sinks for stolen data.",
+    "Remove the endpoint. Agent artifacts should not post to paste/webhook/OOB services.",
+)
+GENERIC_TEXT_RULES: List[AgentRule] = [EXFIL_RULE, URL_EXFIL_RULE, WEBHOOK_EXFIL_RULE, OBF_RULE, SECRET_RULE, DESTRUCT_RULE]
 
 # MCP server configs
 MCP_RULES: List[AgentRule] = [
