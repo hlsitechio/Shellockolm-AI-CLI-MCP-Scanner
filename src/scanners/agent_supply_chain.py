@@ -100,6 +100,19 @@ PROMPT_INJECTION_RULES: List[AgentRule] = [
         "Remove the directive block. Tool/skill descriptions should describe behavior, not "
         "smuggle imperative <IMPORTANT>/<SYSTEM> instructions for the model.",
     ),
+    AgentRule(
+        "AGENT-PI-009", "Forged chat-template control token / role-boundary spoof",
+        FindingSeverity.HIGH, 8.6,
+        _c(r"<\|\s*(im_start|im_end|system|user|assistant|endoftext|eot_id|start_header_id|end_header_id)\s*\|>"
+           r"|<<\s*SYS\s*>>|\[/?INST\]|<\|begin_of_text\|>"
+           r"|###\s*(system|instruction)s?\s*###"
+           r"|\b(enable|activate|enter|switch\s+to|you\s+are\s+now\s+in)\b[^\n]{0,20}\b(developer|DAN|jailbreak|sudo|god|unrestricted|root)\s+mode\b"),
+        "A forged LLM chat-template control token (e.g. <|im_start|>system, <<SYS>>, [INST]) or a "
+        "jailbreak mode-switch phrase is embedded. These spoof a privileged role boundary so the "
+        "model treats injected text as a higher-authority system instruction.",
+        "Remove the control tokens / mode-switch phrasing. Skill and instruction files are plain "
+        "content and never need to emit raw chat-template delimiters or 'developer mode' switches.",
+    ),
 ]
 
 # Applied to every artifact type
