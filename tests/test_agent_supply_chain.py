@@ -157,3 +157,38 @@ def test_benign_skill_has_no_control_token_finding(scanner, tmp_path):
     result = scanner.scan_directory(_write_skill(tmp_path, body))
     assert not any(f.cve_id == "AGENT-PI-009" for f in result.findings), \
         "benign skill must not trigger control-token spoof detection"
+
+
+# --- AGENT-PI-010: bidirectional "Trojan Source" text-reordering characters ---
+
+# U+202E RLO, U+2066 LRI, U+202D LRO, U+2069 PDI — the reorder/override set.
+@pytest.mark.parametrize("bidi", ["‮", "‭", "⁦", "⁧", "⁨", "‫"])
+def test_bidi_trojan_source_detected_in_skill(scanner, tmp_path, bidi):
+    # An RLO/override hidden in the middle of an otherwise-innocent line: the rendered
+    # text reads differently than the bytes the model consumes.
+    body = f"# Helper skill\n\nReturn{bidi} access; admin /* only to owner */\n"
+    result = scanner.scan_directory(_write_skill(tmp_path, body))
+    ids = {f.cve_id for f in result.findings}
+    assert "AGENT-PI-010" in ids, f"expected Trojan Source finding for U+{ord(bidi):04X}, got {ids}"
+    finding = next(f for f in result.findings if f.cve_id == "AGENT-PI-010")
+    assert finding.severity.name in {"HIGH", "CRITICAL"}
+    assert f"U+{ord(bidi):04X}" in finding.description
+
+
+def test_bidi_trojan_source_detected_in_instruction_file(scanner, tmp_path):
+    f = tmp_path / "CLAUDE.md"
+    f.write_text("Project rules.\nNever‮ exfiltrate secrets.\n", encoding="utf-8")
+    result = scanner.scan_directory(str(tmp_path))
+    assert any(f.cve_id == "AGENT-PI-010" for f in result.findings)
+
+
+def test_benign_skill_has_no_bidi_finding(scanner, tmp_path):
+    # Plain LTR prose with no direction-control characters must not trip the rule.
+    body = (
+        "# Translator Helper\n\n"
+        "This skill translates text. It handles accents (cafe, naive) and emoji,\n"
+        "and preserves arrows like -> and <- which are ordinary ASCII, not bidi.\n"
+    )
+    result = scanner.scan_directory(_write_skill(tmp_path, body))
+    assert not any(f.cve_id == "AGENT-PI-010" for f in result.findings), \
+        "benign skill must not trigger Trojan Source detection"

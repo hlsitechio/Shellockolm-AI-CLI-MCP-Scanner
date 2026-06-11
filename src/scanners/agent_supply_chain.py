@@ -12,7 +12,8 @@ Artifacts covered:
 
 Detections: prompt injection, hidden triggers, secret-exfiltration instructions,
 tool poisoning / remote-script execution, rug-pull (unpinned) MCP servers,
-invisible-character and Unicode-Tags ASCII smuggling, and hardcoded credentials.
+invisible-character, Unicode-Tags ASCII smuggling, bidirectional "Trojan Source"
+text-reordering (CVE-2021-42574), and hardcoded credentials.
 Pattern-based and 100% offline, consistent with the rest of
 Shellockolm — a seatbelt you run *before* you install an untrusted skill or server.
 """
@@ -35,6 +36,25 @@ INVISIBLE_CHARS = ["​", "‌", "‍", "⁠", "﻿", "­"]
 # model still reads. Distinct from the zero-width chars above, which carry no payload.
 TAG_BLOCK_START = 0xE0000
 TAG_BLOCK_END = 0xE007F
+
+# Bidirectional text-direction control characters ("Trojan Source", CVE-2021-42574).
+# These reorder how a run of text is *displayed* without changing the underlying byte
+# sequence — so a human reviewer reading the rendered file sees a different ordering
+# than the model (or a compiler) reads from the raw bytes. An attacker can use them to
+# hide or visually reverse instructions inside a skill / instruction file. Normal
+# left-to-right artifacts never need them; even genuine RTL prose almost never needs
+# the override (RLO/LRO) and isolate forms, which are the ones used to weaponize this.
+BIDI_CONTROL_CHARS = {
+    "‪": "LRE (Left-to-Right Embedding)",
+    "‫": "RLE (Right-to-Left Embedding)",
+    "‬": "PDF (Pop Directional Formatting)",
+    "‭": "LRO (Left-to-Right Override)",
+    "‮": "RLO (Right-to-Left Override)",
+    "⁦": "LRI (Left-to-Right Isolate)",
+    "⁧": "RLI (Right-to-Left Isolate)",
+    "⁨": "FSI (First Strong Isolate)",
+    "⁩": "PDI (Pop Directional Isolate)",
+}
 
 
 @dataclass
@@ -357,6 +377,7 @@ class AgentSupplyChainScanner(BaseScanner):
         findings = self._apply_rules(text, PROMPT_INJECTION_RULES + GENERIC_TEXT_RULES + self._extra(), fp, "agent-skill")
         findings += self._check_invisible(text, fp, "agent-skill")
         findings += self._check_tag_smuggling(text, fp, "agent-skill")
+        findings += self._check_bidi(text, fp, "agent-skill")
         if not quick_mode:
             findings += self._check_b64(text, fp, "agent-skill")
         return self._dedupe(findings)
@@ -364,6 +385,7 @@ class AgentSupplyChainScanner(BaseScanner):
     def _scan_mcp(self, fp: Path, text: str) -> List[ScanFinding]:
         findings = self._check_invisible(text, fp, "mcp-config")
         findings += self._check_tag_smuggling(text, fp, "mcp-config")
+        findings += self._check_bidi(text, fp, "mcp-config")
         structured = self._scan_mcp_structured(fp, text)
         if structured is None:
             # not valid JSON — fall back to raw-text rules
@@ -415,12 +437,14 @@ class AgentSupplyChainScanner(BaseScanner):
     def _scan_n8n(self, fp: Path, text: str) -> List[ScanFinding]:
         findings = self._apply_rules(text, N8N_RULES + GENERIC_TEXT_RULES + self._extra(), fp, "n8n-workflow")
         findings += self._check_tag_smuggling(text, fp, "n8n-workflow")
+        findings += self._check_bidi(text, fp, "n8n-workflow")
         return self._dedupe(findings)
 
     def _scan_instructions(self, fp: Path, text: str, quick_mode: bool) -> List[ScanFinding]:
         findings = self._apply_rules(text, PROMPT_INJECTION_RULES + GENERIC_TEXT_RULES + self._extra(), fp, "agent-instructions")
         findings += self._check_invisible(text, fp, "agent-instructions")
         findings += self._check_tag_smuggling(text, fp, "agent-instructions")
+        findings += self._check_bidi(text, fp, "agent-instructions")
         if not quick_mode:
             findings += self._check_b64(text, fp, "agent-instructions")
         return self._dedupe(findings)
@@ -474,6 +498,31 @@ class AgentSupplyChainScanner(BaseScanner):
             "Strip all U+E0000–U+E007F characters; no legitimate artifact uses the Tags block.",
         )
         return [self._finding(rule, fp, artifact, snippet, line_no)]
+
+    def _check_bidi(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
+        """Detect Trojan Source bidirectional control characters (CVE-2021-42574).
+
+        These reorder displayed text without changing the bytes, so a human reviewer
+        sees a different ordering than the model reads — a stealth way to hide or
+        visually reverse instructions inside an artifact.
+        """
+        for idx, ch in enumerate(text):
+            name = BIDI_CONTROL_CHARS.get(ch)
+            if name is None:
+                continue
+            line_no = text.count("\n", 0, idx) + 1
+            rule = AgentRule(
+                "AGENT-PI-010", "Bidirectional text override (Trojan Source) character",
+                FindingSeverity.HIGH, 8.0, None,
+                "A Unicode bidirectional control character (Trojan Source, CVE-2021-42574) "
+                "is present. It reorders how text is displayed without changing the raw "
+                "bytes, so a human reviewer reads a different ordering than the model — a "
+                "stealth channel to hide or visually reverse instructions.",
+                "Strip U+202A–U+202E and U+2066–U+2069; plain LTR agent artifacts never "
+                "need bidi overrides or isolates.",
+            )
+            return [self._finding(rule, fp, artifact, f"U+{ord(ch):04X} {name}", line_no)]
+        return []
 
     def _check_b64(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
         m = self._B64.search(text)
