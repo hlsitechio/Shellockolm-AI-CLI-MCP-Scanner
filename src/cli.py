@@ -486,9 +486,9 @@ def print_banner(show_full: bool = True):
 [dim]{date_str} • {time_str}[/dim]
 
 [bright_cyan]AI MCP Tool & Python CVE Scanner[/bright_cyan]
-[dim]React • Next.js • Node.js • n8n • npm • Supply Chain • Clawdbot[/dim]
+[dim]React • Next.js • Node.js • n8n • npm • Supply Chain • Clawdbot • Agent Skills/MCP[/dim]
 
-[bright_green]✓ 32 CVEs  ✓ 7 Scanners  ✓ Malware  ✓ Secrets  ✓ Auto-Fix[/bright_green]
+[bright_green]✓ 32 CVEs  ✓ 8 Scanners  ✓ Malware  ✓ Secrets  ✓ Auto-Fix[/bright_green]
 [link=https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner][bright_blue]🔗 github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner[/bright_blue][/link]
 ────────────────────────────────────────────────────────────────────
 [bright_yellow]💡 Tip:[/bright_yellow] {tip}{session_line}"""
@@ -691,6 +691,7 @@ def scan(
         shellockolm scan                        # Scan current directory
         shellockolm scan /path/to/project       # Scan specific path
         shellockolm scan -s react ./            # Use only React scanner
+        shellockolm scan -s agent ./SKILL.md    # Vet an AI agent skill/MCP before you install it
         shellockolm scan -o report.json ./      # Export to JSON
         shellockolm scan --quick ./             # Quick scan (package versions only)
     """
@@ -1123,7 +1124,7 @@ MENU_CATEGORIES = {
             {
                 "id": "1",
                 "name": "Full Scan",
-                "description": "Run ALL 7 scanners on a directory to detect 32 CVEs across React, Next.js, Node.js, npm packages, n8n, supply chain, and Clawdbot/Moltbot.",
+                "description": "Run ALL 8 scanners on a directory to detect 32 CVEs across React, Next.js, Node.js, npm packages, n8n, supply chain, and Clawdbot/Moltbot — plus the AI-agent supply chain (skills, MCP configs, n8n workflows).",
                 "action": "scan",
                 "requires_input": "path",
                 "input_prompt": "Enter path to scan (or . for current dir): ",
@@ -1216,6 +1217,14 @@ MENU_CATEGORIES = {
                 "requires_input": "path",
                 "input_prompt": "Enter path to scan: ",
             },
+            {
+                "id": "7a",
+                "name": "Agent Supply-Chain Scanner",
+                "description": "🤖 Scan the AI-agent coding supply chain BEFORE you install it: SKILL.md skills, MCP server configs, and n8n workflows for prompt injection, secret-exfiltration instructions, tool poisoning, unpinned (rug-pull) MCP servers, and invisible-character / Unicode-Tags ASCII smuggling. 100% offline.",
+                "action": "scan -s agent",
+                "requires_input": "path",
+                "input_prompt": "Enter path to a skill/MCP config/workflow to scan: ",
+            },
         ]
     },
     "live_recon": {
@@ -1282,7 +1291,7 @@ MENU_CATEGORIES = {
             {
                 "id": "15",
                 "name": "List Scanners",
-                "description": "Show all 7 available scanners with their descriptions, CVE coverage, and live scan capability.",
+                "description": "Show all 8 available scanners with their descriptions, CVE coverage, and live scan capability.",
                 "action": "scanners",
                 "requires_input": None,
             },
@@ -1782,6 +1791,7 @@ def show_main_menu():
     t1.add_row("[cyan][1c][/cyan] Deep", "[yellow][14][/yellow] Details", "[red][20][/red] Remove", "[magenta][26][/magenta] Report", "[blue][32][/blue] Rollback")
     t1.add_row("[cyan][1d][/cyan] CVE Hunter", "[yellow][15][/yellow] By Pkg", "[red][21][/red] Cleanup", "", "[bright_red][ X][/bright_red] QuickFix")
     t1.add_row("[cyan][1e][/cyan] Custom", "[yellow][16][/yellow] Export", "[red][22][/red] Report", "", "[green][ F][/green] FixWizard")
+    t1.add_row("[bright_green][7a][/bright_green] 🤖 Agent", "", "", "", "")
     console.print(t1)
 
     # Row 2: LIVE, DEPS, GITHUB, SBOM, CI/CD
@@ -1856,7 +1866,7 @@ def show_next_steps(cmd_type: str, context: dict = None):
         ],
         "scanners": [
             ("[1]", "Run full scan (all scanners)"),
-            ("[2-7]", "Run a specific scanner"),
+            ("[2-7,7a]", "Run a specific scanner"),
             ("[11]", "View CVE database"),
         ],
         "malware_scan": [

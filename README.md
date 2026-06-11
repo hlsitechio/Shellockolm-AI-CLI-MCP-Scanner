@@ -124,9 +124,10 @@ curl -fsSL https://raw.githubusercontent.com/hlsitechio/Shellockolm-AI-CLI-MCP-S
 ┌─────────────────────────────────────────────────────────────┐
 │  Shellockolm - Security Detective v1.0                      │
 ├─────────────────────────────────────────────────────────────┤
-│  1   Full Scan           → All 7 scanners, 32 CVEs          │
+│  1   Full Scan           → All 8 scanners, 32 CVEs          │
 │  2   React Scanner       → Server Components RCE            │
 │  3   Next.js Scanner     → Middleware bypass                │
+│  7a  Agent Scanner       → Vet skills/MCP before install   │
 │  17  Deep Malware Scan   → RCE payloads, cryptominers       │
 │  23  Scan for Secrets    → 50+ patterns, high entropy       │
 │  X   QuickFix            → Auto-patch all vulnerabilities   │
@@ -175,7 +176,7 @@ python src/cli.py shell
 ## 🛠️ Complete Features
 
 <details>
-<summary><strong>📊 7 Specialized Scanners</strong></summary>
+<summary><strong>📊 8 Specialized Scanners</strong></summary>
 
 | Scanner | What It Detects | CVEs Covered |
 |---------|----------------|--------------|
@@ -186,8 +187,33 @@ python src/cli.py shell
 | **n8n** | Ni8mare unauthenticated RCE, expression injection | CVE-2026-21858, CVE-2025-68613, CVE-2025-68668 |
 | **Supply Chain** | Shai-Hulud worm, eslint-config-prettier compromise | CVE-2025-54313 + 10 campaign CVEs |
 | **Clawdbot/Moltbot** | AI gateway credential leaks, OAuth piggybacking | 4 critical auth bypass patterns |
+| **🤖 Agent Supply Chain** | Prompt injection, secret-exfiltration & tool-poisoning in `SKILL.md` skills, MCP configs & n8n workflows; unpinned (rug-pull) MCP servers; invisible-char / Unicode-Tags ASCII smuggling | Agentic-era threat model (offline, pattern-based) |
 
-**Total: 32 unique CVEs tracked**
+**Total: 32 unique CVEs tracked — plus the AI-agent coding supply chain**
+
+</details>
+
+<details>
+<summary><strong>🤖 Agent Supply-Chain Scanner — vet a skill before you install it</strong></summary>
+
+Traditional scanners check *your dependencies*. The **agent scanner** checks the artifacts that feed
+**instructions and tools to your AI coding agent** — where the new attack surface lives:
+
+- **Agent skills** — `SKILL.md` / `*.skill.md` (Claude Code, Cursor, Windsurf, OpenClaw)
+- **MCP servers** — `mcp.json` / `*.mcp.json` / `claude_desktop_config.json`
+- **n8n workflows** — exported workflow JSON (Code/Function nodes, `eval`, hardcoded creds)
+
+Detections: prompt injection / instruction override, hidden conditional triggers, **secret-exfiltration
+instructions**, tool poisoning / remote-script execution, **rug-pull (unpinned) MCP servers**,
+invisible-character and **Unicode-Tags ASCII smuggling**, and hardcoded credentials. 100% offline.
+
+```bash
+# Vet an untrusted skill or MCP config BEFORE you install it
+python src/cli.py scan -s agent ./some-skill/SKILL.md
+python src/cli.py scan -s agent ./claude_desktop_config.json
+```
+
+Also available as the `scan` MCP tool (pass `scanner: "agent"`) so an agent can vet a skill mid-session.
 
 </details>
 
@@ -251,7 +277,7 @@ Finds leaked credentials in code, configs, and environment files:
 <details>
 <summary><strong>📋 60+ Interactive Commands</strong></summary>
 
-**Scanning**: Full scan, React, Next.js, npm, Node.js, n8n, supply chain, custom  
+**Scanning**: Full scan, React, Next.js, npm, Node.js, n8n, supply chain, agent skills/MCP, custom  
 **Malware**: Deep scan, quarantine, package removal, code cleaning  
 **Secrets**: Scan all files, .env targeting, high-entropy detection  
 **Live Probing**: Test URLs for exploitable vulnerabilities  
@@ -281,6 +307,13 @@ python src/cli.py scan ~/my-nextjs-app --scanner nextjs
 python src/cli.py shell
 > 1b  # Pre-Download Check
 > suspicious-package-name
+```
+
+### 🤖 Vet an AI agent skill / MCP server before installing it
+```bash
+# Point it at a SKILL.md, an mcp.json, or an exported n8n workflow
+python src/cli.py scan -s agent ./some-skill/SKILL.md
+python src/cli.py scan -s agent ./claude_desktop_config.json
 ```
 
 ### 🚨 Hunt for a specific CVE
@@ -338,7 +371,7 @@ The scanner sits **outside the blast radius** of the ecosystem it's auditing.
 
 | Command | Name | What It Does |
 |---------|------|-------------|
-| `1` | Full Scan | Runs all 7 scanners on a directory to detect 32 CVEs across React, Next.js, Node.js, npm, n8n, supply chain, and Clawdbot/Moltbot. |
+| `1` | Full Scan | Runs all 8 scanners on a directory to detect 32 CVEs across React, Next.js, Node.js, npm, n8n, supply chain, and Clawdbot/Moltbot — plus the AI-agent supply chain. |
 | `1a` | Scan ALL npm | Auto-discovers and scans every npm project on your system by finding all `package.json` files. |
 | `1b` | Pre-Download Check | Sandbox-installs an npm package to a temp directory, scans it for malware and vulns, then destroys the sandbox. |
 | `1c` | Deep Scan | Version checks + code pattern analysis + config inspection — shows step-by-step HOW each vulnerability is detected. |
@@ -350,6 +383,7 @@ The scanner sits **outside the blast radius** of the ecosystem it's auditing.
 | `5` | Node.js Runtime | Scan for Node.js runtime vulnerabilities from the January 2026 security release. |
 | `6` | n8n Scanner | Scan for n8n workflow automation vulns including Ni8mare unauthenticated RCE. |
 | `7` | Supply Chain | Detect Shai-Hulud worm campaign, eslint-config-prettier compromise, malicious install scripts. |
+| `7a` | 🤖 Agent Supply Chain | Vet `SKILL.md` skills, MCP configs, and n8n workflows **before you install them** — prompt injection, secret-exfiltration instructions, tool poisoning, rug-pull (unpinned) MCP servers, and invisible-char / Unicode-Tags ASCII smuggling. 100% offline. |
 
 ### Live Probing
 
@@ -367,7 +401,7 @@ The scanner sits **outside the blast radius** of the ecosystem it's auditing.
 | `12` | Critical Only | Filter to show only CRITICAL severity CVEs (CVSS 9.0+). |
 | `13` | Bug Bounty | List CVEs that are high-value bug bounty targets — critical severity or with public PoCs. |
 | `14` | CVE Details | Get full details on a specific CVE: description, affected versions, patches, references. |
-| `15` | List Scanners | Show all 7 scanners with their descriptions, CVE coverage, and capabilities. |
+| `15` | List Scanners | Show all 8 scanners with their descriptions, CVE coverage, and capabilities. |
 
 ### Malware Analysis
 
@@ -453,6 +487,7 @@ Found a bug? Have a feature request? Want to add CVE coverage?
 MIT License — See [LICENSE](LICENSE)
 
 **📚 More Documentation:**
+- [🤖 Agent Supply-Chain Scanner Guide](docs/AGENT_SCANNER.md)
 - [Installation Guide](docs/INSTALL.md)
 - [Quick Start](docs/QUICKSTART.md)
 - [Fast Install Reference](docs/FAST_INSTALL.md)
