@@ -19,6 +19,7 @@ const Navbar = () => {
     { label: "Features", href: "#features" },
     { label: "Install", href: "#install" },
     { label: "Services", href: "#services" },
+    { label: "Pricing", href: "#pro" },
   ];
 
   const scrollToSection = (href: string) => {

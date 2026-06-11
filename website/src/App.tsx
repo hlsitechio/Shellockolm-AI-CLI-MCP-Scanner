@@ -5,6 +5,7 @@ import FeaturesSection from "@/components/FeaturesSection";
 import StatsSection from "@/components/StatsSection";
 import InstallSection from "@/components/InstallSection";
 import PricingSection from "@/components/PricingSection";
+import ProTierSection from "@/components/ProTierSection";
 import Footer from "@/components/Footer";
 
 const App = () => {
@@ -32,6 +33,9 @@ const App = () => {
         </section>
         <section id="services" aria-label="Services and pricing">
           <PricingSection />
+        </section>
+        <section id="pro" aria-label="Free vs Pro open-core tiers">
+          <ProTierSection />
         </section>
       </main>
 
