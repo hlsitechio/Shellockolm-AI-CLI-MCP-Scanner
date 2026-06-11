@@ -56,6 +56,31 @@ BIDI_CONTROL_CHARS = {
     "⁩": "PDI (Pop Directional Isolate)",
 }
 
+# Confusable (homoglyph) map — non-ASCII characters that render identically to a
+# Latin ASCII letter. An attacker drops one of these into an otherwise-ASCII word
+# ("ignоre" with a Cyrillic о) so the word reads normally to a human and to the
+# model, but a keyword/substring review for "ignore" never matches. We use a small
+# curated map of the high-value Cyrillic/Greek look-alikes rather than the full
+# UTS#39 confusables table, which keeps it fast and false-positive-light.
+CONFUSABLES: Dict[str, str] = {
+    # Cyrillic lowercase
+    "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "х": "x", "у": "y",
+    "і": "i", "ј": "j", "ѕ": "s", "ԁ": "d", "һ": "h", "ӏ": "l", "ʙ": "b",
+    "ո": "n", "м": "m", "т": "t", "к": "k",
+    # Cyrillic uppercase
+    "А": "A", "В": "B", "Е": "E", "К": "K", "М": "M", "Н": "H", "О": "O",
+    "Р": "P", "С": "C", "Т": "T", "Х": "X", "У": "Y", "І": "I", "Ј": "J",
+    # Greek
+    "ο": "o", "ν": "v", "α": "a", "ρ": "p", "ε": "e", "ι": "i", "κ": "k",
+    "Α": "A", "Β": "B", "Ε": "E", "Η": "H", "Κ": "K", "Μ": "M", "Ν": "N",
+    "Ο": "O", "Ρ": "P", "Τ": "T", "Χ": "X", "Υ": "Y", "Ι": "I", "Ζ": "Z",
+}
+
+# Word tokens of length >= 3 made of ASCII letters and/or the confusable scripts
+# above (Latin + Cyrillic U+0400–04FF + Greek U+0370–03FF). Length >= 3 avoids
+# noise from short fragments; mixed-script detection happens per token below.
+_CONFUSABLE_WORD = re.compile(r"[A-Za-zЀ-ӿͰ-Ͽ]{3,}")
+
 
 @dataclass
 class AgentRule:
@@ -378,6 +403,7 @@ class AgentSupplyChainScanner(BaseScanner):
         findings += self._check_invisible(text, fp, "agent-skill")
         findings += self._check_tag_smuggling(text, fp, "agent-skill")
         findings += self._check_bidi(text, fp, "agent-skill")
+        findings += self._check_confusables(text, fp, "agent-skill")
         if not quick_mode:
             findings += self._check_b64(text, fp, "agent-skill")
         return self._dedupe(findings)
@@ -445,6 +471,7 @@ class AgentSupplyChainScanner(BaseScanner):
         findings += self._check_invisible(text, fp, "agent-instructions")
         findings += self._check_tag_smuggling(text, fp, "agent-instructions")
         findings += self._check_bidi(text, fp, "agent-instructions")
+        findings += self._check_confusables(text, fp, "agent-instructions")
         if not quick_mode:
             findings += self._check_b64(text, fp, "agent-instructions")
         return self._dedupe(findings)
@@ -522,6 +549,38 @@ class AgentSupplyChainScanner(BaseScanner):
                 "need bidi overrides or isolates.",
             )
             return [self._finding(rule, fp, artifact, f"U+{ord(ch):04X} {name}", line_no)]
+        return []
+
+    def _check_confusables(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
+        """Detect mixed-script confusable (homoglyph) spoofing.
+
+        Flags a word that mixes ASCII Latin letters with a confusable look-alike
+        from another script (e.g. Cyrillic о inside "ignore") — the word reads
+        normally but evades keyword/substring review of the instruction text.
+        A word written *entirely* in one non-Latin script is genuine foreign text
+        and is not flagged; only Latin-plus-confusable mixing trips the rule.
+        """
+        for m in _CONFUSABLE_WORD.finditer(text):
+            word = m.group(0)
+            has_ascii = any("a" <= c.lower() <= "z" for c in word)
+            confusables = [c for c in word if c in CONFUSABLES]
+            if not (has_ascii and confusables):
+                continue
+            normalized = "".join(CONFUSABLES.get(c, c) for c in word)
+            line_no = text.count("\n", 0, m.start()) + 1
+            cps = ", ".join(f"U+{ord(c):04X}" for c in confusables[:5])
+            snippet = f"{word!r} spoofs {normalized!r} (confusable: {cps})"
+            rule = AgentRule(
+                "AGENT-PI-011", "Homoglyph / mixed-script confusable spoofing",
+                FindingSeverity.HIGH, 7.7, None,
+                "A word mixes ASCII letters with confusable look-alike characters from "
+                "another script (Cyrillic/Greek). It reads identically to a human and to "
+                "the model, but defeats keyword/substring review — used to smuggle "
+                "instructions or impersonate a trusted tool/skill name past a filter.",
+                "Normalize the text to ASCII and re-review; legitimate Latin-script "
+                "artifacts never mix Cyrillic/Greek look-alikes into English words.",
+            )
+            return [self._finding(rule, fp, artifact, snippet, line_no)]
         return []
 
     def _check_b64(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
