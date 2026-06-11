@@ -1,5 +1,6 @@
 import Navbar from "@/components/Navbar";
 import HeroSection from "@/components/HeroSection";
+import LiveDemoSection from "@/components/LiveDemoSection";
 import FeaturesSection from "@/components/FeaturesSection";
 import StatsSection from "@/components/StatsSection";
 import InstallSection from "@/components/InstallSection";
@@ -22,6 +23,7 @@ const App = () => {
       <main id="main-content">
         <HeroSection />
         <StatsSection />
+        <LiveDemoSection />
         <section id="features" aria-label="Features">
           <FeaturesSection />
         </section>

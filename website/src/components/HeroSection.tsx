@@ -1,4 +1,4 @@
-import { Shield, Zap, ArrowRight } from "lucide-react";
+import { Shield, ArrowRight, Bot, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const HeroSection = () => {
@@ -39,7 +39,7 @@ const HeroSection = () => {
           <div className="animate-fade-up-delay-1 mb-8">
             <span className="badge-detective" role="note">
               <Shield className="w-4 h-4" aria-hidden="true" />
-              60+ Commands &nbsp;·&nbsp; Zero Config &nbsp;·&nbsp; 100% Local
+              AI-Agent Supply Chain · CVEs · Secrets · 100% Offline
             </span>
           </div>
 
@@ -53,15 +53,35 @@ const HeroSection = () => {
             "Elementary, my dear developer!"
           </p>
 
-          {/* Sub-copy */}
-          <p className="animate-fade-up-delay-2 text-base sm:text-lg text-muted-foreground max-w-2xl mx-auto mb-10 leading-relaxed">
-            Security scanner for <strong className="text-foreground/80 font-medium">React</strong>,{" "}
-            <strong className="text-foreground/80 font-medium">Next.js</strong>,{" "}
-            <strong className="text-foreground/80 font-medium">Node.js</strong>, and{" "}
-            <strong className="text-foreground/80 font-medium">npm</strong> — detects 32 CVEs
-            across 7 specialised scanners. Scans, patches, and generates SBOMs without
-            leaving your machine.
+          {/* Sub-copy — specific, no buzzwords */}
+          <p className="animate-fade-up-delay-2 text-base sm:text-lg text-muted-foreground max-w-2xl mx-auto mb-4 leading-relaxed">
+            Scans the <strong className="text-foreground/80 font-medium">AI-agent coding supply chain</strong> —
+            Claude/agent skills, MCP servers, and n8n workflows — for{" "}
+            <strong className="text-foreground/80 font-medium">prompt injection</strong>,{" "}
+            <strong className="text-foreground/80 font-medium">secret exfiltration</strong>, and{" "}
+            <strong className="text-foreground/80 font-medium">tool poisoning</strong>.
+            Plus React, Next.js, Node.js, and npm CVEs.
           </p>
+
+          {/* Concrete threat list */}
+          <div className="animate-fade-up-delay-2 flex flex-wrap justify-center gap-x-5 gap-y-2 mb-10 text-xs font-mono text-muted-foreground/70">
+            <span className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" aria-hidden="true" />
+              Prompt-injected SKILL.md
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 inline-block" aria-hidden="true" />
+              curl|bash MCP servers
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" aria-hidden="true" />
+              CVE-2025-29927 Next.js auth bypass
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" aria-hidden="true" />
+              CVE-2026-21858 n8n Ni8mare RCE
+            </span>
+          </div>
 
           {/* CTA buttons */}
           <div className="animate-fade-up-delay-3 flex flex-col sm:flex-row gap-4 justify-center">
@@ -69,16 +89,12 @@ const HeroSection = () => {
               size="lg"
               className="group relative overflow-hidden bg-primary text-primary-foreground hover:bg-primary/90 px-8 py-6 text-base sm:text-lg font-semibold glow-ultramarine animate-glow-pulse"
               onClick={() =>
-                window.open(
-                  "https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner",
-                  "_blank",
-                  "noopener noreferrer"
-                )
+                document.getElementById("demo")?.scrollIntoView({ behavior: "smooth" })
               }
-              aria-label="Get started — open Shellockolm on GitHub"
+              aria-label="See live demo of Shellockolm catching real threats"
             >
-              <Shield className="w-5 h-5 mr-2" aria-hidden="true" />
-              Get Started Free
+              <Eye className="w-5 h-5 mr-2" aria-hidden="true" />
+              See It Catch a Threat
               <ArrowRight
                 className="w-4 h-4 ml-2 transition-transform group-hover:translate-x-1"
                 aria-hidden="true"
@@ -89,62 +105,76 @@ const HeroSection = () => {
               variant="outline"
               className="border-border hover:bg-secondary hover:border-primary/50 px-8 py-6 text-base sm:text-lg"
               onClick={() =>
-                document.getElementById("features")?.scrollIntoView({ behavior: "smooth" })
+                window.open(
+                  "https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner",
+                  "_blank",
+                  "noopener noreferrer"
+                )
               }
-              aria-label="See features section"
+              aria-label="Get Shellockolm on GitHub — free and open source"
             >
-              <Zap className="w-5 h-5 mr-2" aria-hidden="true" />
-              See Features
+              <Bot className="w-5 h-5 mr-2" aria-hidden="true" />
+              Get It Free
             </Button>
           </div>
 
           {/* Trust strip */}
           <p className="animate-fade-up-delay-3 mt-6 text-xs text-muted-foreground/60">
-            Open source · MIT License · No telemetry · Runs entirely on your machine
+            Open source · MIT License · No telemetry · No cloud · Runs entirely on your machine
           </p>
         </div>
 
         {/* Divider */}
         <div
-          className="my-16 lg:my-24 flex items-center justify-center"
+          className="my-16 lg:my-20 flex items-center justify-center"
           aria-hidden="true"
         >
           <div className="h-px w-full max-w-4xl bg-gradient-to-r from-transparent via-primary/50 to-transparent" />
         </div>
 
-        {/* Terminal demo */}
+        {/* Hero terminal — quick-scan preview */}
         <div className="animate-fade-up-delay-3 max-w-3xl mx-auto">
           <p className="text-center text-xs text-muted-foreground/60 font-mono mb-3 uppercase tracking-widest">
-            Live example
+            What it finds
           </p>
-          <div className="terminal-window" role="img" aria-label="Terminal showing Shellockolm scanning and patching vulnerabilities">
+          <div
+            className="terminal-window"
+            role="img"
+            aria-label="Terminal output showing Shellockolm catching a poisoned Claude skill and two CVEs"
+          >
             <div className="terminal-header">
               <div className="terminal-dot bg-danger" aria-hidden="true" />
               <div className="terminal-dot bg-gold" aria-hidden="true" />
               <div className="terminal-dot bg-success" aria-hidden="true" />
               <span className="ml-4 text-sm text-muted-foreground font-mono select-none">
-                shellockolm — terminal
+                shellockolm — scan output
               </span>
             </div>
-            <div className="terminal-body text-left space-y-1">
-              <p className="text-muted-foreground">
-                <span aria-hidden="true">$ </span>python src/auto_fix.py ~/projects
+            <div className="terminal-body text-left space-y-1.5">
+              <p className="text-muted-foreground text-sm">
+                <span aria-hidden="true">$ </span>python src/scan.py --mode ai-agent ./skills/
               </p>
-              <p className="text-primary mt-2">
-                🔍 Scanning 32 CVEs across 7 scanners…
+              <p className="text-primary text-sm mt-2">
+                › Scanning AI-agent supply chain…
               </p>
-              <p className="text-foreground">
-                &nbsp;&nbsp;&nbsp;→ React 19.0.0&nbsp;&nbsp;&nbsp;CVE-2025-55182 (CVSS 10.0)
+              <p className="text-red-400 text-sm">
+                &nbsp;&nbsp;[CRITICAL] AGENT-PI-003 &nbsp;SKILL.md:3 — Secret-exfiltration instruction
               </p>
-              <p className="text-foreground">
-                &nbsp;&nbsp;&nbsp;→ Next.js 15.0.0&nbsp;CVE-2025-66478 (CVSS 10.0)
+              <p className="text-amber-400 text-sm">
+                &nbsp;&nbsp;[HIGH]&nbsp;&nbsp;&nbsp;&nbsp; AGENT-PI-001 &nbsp;SKILL.md:2 — Instruction override / jailbreak phrasing
               </p>
-              <p className="text-foreground">
-                &nbsp;&nbsp;&nbsp;→ n8n 1.76.1&nbsp;&nbsp;&nbsp;&nbsp;CVE-2026-21858 (Ni8mare RCE)
+              <p className="text-amber-400 text-sm">
+                &nbsp;&nbsp;[HIGH]&nbsp;&nbsp;&nbsp;&nbsp; AGENT-MCP-001 mcp.json » server:bad — curl|bash remote execution
               </p>
-              <p className="text-success mt-2">✓ All vulnerabilities patched. Elementary!</p>
+              <p className="text-red-400 text-sm">
+                &nbsp;&nbsp;[CRITICAL] CVE-2025-29927 &nbsp;package.json — Next.js middleware auth bypass (CVSS 9.1)
+              </p>
+              <p className="text-success text-sm mt-2">✓ Scan complete — 4 findings. Elementary!</p>
             </div>
           </div>
+          <p className="text-center text-xs text-muted-foreground/40 font-mono mt-3">
+            Interactive demo with expandable explanations ↓
+          </p>
         </div>
       </div>
 
