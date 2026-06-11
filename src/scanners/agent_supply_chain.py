@@ -11,8 +11,9 @@ Artifacts covered:
   - n8n workflows:  exported workflow JSON (Code/Function nodes, eval, hardcoded creds)
 
 Detections: prompt injection, hidden triggers, secret-exfiltration instructions,
-tool poisoning / remote-script execution, rug-pull (unpinned) MCP servers, and
-hardcoded credentials. Pattern-based and 100% offline, consistent with the rest of
+tool poisoning / remote-script execution, rug-pull (unpinned) MCP servers,
+invisible-character and Unicode-Tags ASCII smuggling, and hardcoded credentials.
+Pattern-based and 100% offline, consistent with the rest of
 Shellockolm — a seatbelt you run *before* you install an untrusted skill or server.
 """
 
@@ -27,6 +28,13 @@ from .base import BaseScanner, ScanResult, ScanFinding, FindingSeverity
 
 # Zero-width / invisible characters used to hide instructions from human reviewers
 INVISIBLE_CHARS = ["​", "‌", "‍", "⁠", "﻿", "­"]
+
+# Unicode Tags block (U+E0000–U+E007F). These code points render as nothing in
+# every normal viewer, but each U+E00xx maps 1:1 to a printable ASCII char — so an
+# attacker can smuggle a fully invisible instruction ("ASCII smuggling") that the
+# model still reads. Distinct from the zero-width chars above, which carry no payload.
+TAG_BLOCK_START = 0xE0000
+TAG_BLOCK_END = 0xE007F
 
 
 @dataclass
@@ -325,12 +333,14 @@ class AgentSupplyChainScanner(BaseScanner):
     def _scan_skill(self, fp: Path, text: str, quick_mode: bool) -> List[ScanFinding]:
         findings = self._apply_rules(text, PROMPT_INJECTION_RULES + GENERIC_TEXT_RULES + self._extra(), fp, "agent-skill")
         findings += self._check_invisible(text, fp, "agent-skill")
+        findings += self._check_tag_smuggling(text, fp, "agent-skill")
         if not quick_mode:
             findings += self._check_b64(text, fp, "agent-skill")
         return self._dedupe(findings)
 
     def _scan_mcp(self, fp: Path, text: str) -> List[ScanFinding]:
         findings = self._check_invisible(text, fp, "mcp-config")
+        findings += self._check_tag_smuggling(text, fp, "mcp-config")
         structured = self._scan_mcp_structured(fp, text)
         if structured is None:
             # not valid JSON — fall back to raw-text rules
@@ -381,11 +391,13 @@ class AgentSupplyChainScanner(BaseScanner):
 
     def _scan_n8n(self, fp: Path, text: str) -> List[ScanFinding]:
         findings = self._apply_rules(text, N8N_RULES + GENERIC_TEXT_RULES + self._extra(), fp, "n8n-workflow")
+        findings += self._check_tag_smuggling(text, fp, "n8n-workflow")
         return self._dedupe(findings)
 
     def _scan_instructions(self, fp: Path, text: str, quick_mode: bool) -> List[ScanFinding]:
         findings = self._apply_rules(text, PROMPT_INJECTION_RULES + GENERIC_TEXT_RULES + self._extra(), fp, "agent-instructions")
         findings += self._check_invisible(text, fp, "agent-instructions")
+        findings += self._check_tag_smuggling(text, fp, "agent-instructions")
         if not quick_mode:
             findings += self._check_b64(text, fp, "agent-instructions")
         return self._dedupe(findings)
@@ -415,6 +427,30 @@ class AgentSupplyChainScanner(BaseScanner):
                 )
                 return [self._finding(rule, fp, artifact, repr(ch), line_no)]
         return []
+
+    def _check_tag_smuggling(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
+        """Detect ASCII smuggled via the Unicode Tags block (invisible instructions)."""
+        tag_idx = [i for i, ch in enumerate(text)
+                   if TAG_BLOCK_START <= ord(ch) <= TAG_BLOCK_END]
+        if not tag_idx:
+            return []
+        # Decode the smuggled payload back to ASCII so the finding shows what was hidden.
+        decoded = "".join(
+            chr(ord(text[i]) - TAG_BLOCK_START)
+            for i in tag_idx if 0x20 <= ord(text[i]) - TAG_BLOCK_START <= 0x7E
+        )
+        line_no = text.count("\n", 0, tag_idx[0]) + 1
+        snippet = f"{len(tag_idx)} tag char(s); decodes to: {decoded[:80]!r}" if decoded \
+            else f"{len(tag_idx)} Unicode Tag char(s)"
+        rule = AgentRule(
+            "AGENT-PI-007", "ASCII smuggling via Unicode Tags block",
+            FindingSeverity.HIGH, 8.2, None,
+            "Invisible Unicode Tag characters (U+E0000–U+E007F) encode hidden ASCII that "
+            "renders as nothing to a human reviewer but is read by the model — a stealth "
+            "prompt-injection channel.",
+            "Strip all U+E0000–U+E007F characters; no legitimate artifact uses the Tags block.",
+        )
+        return [self._finding(rule, fp, artifact, snippet, line_no)]
 
     def _check_b64(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
         m = self._B64.search(text)
