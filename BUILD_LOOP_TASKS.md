@@ -15,7 +15,7 @@ Status legend: `[ ]` open · `[x] (hash)` done · `[~]` blocked (note why).
 
 ## Tier 1 — Detection engine depth (the product IS the detections)
 
-1. [x] **AGENT-PI-011: Homoglyph/confusable spoofing** — detect mixed-script confusables (Cyrillic а/е/о inside ASCII words) in skill/instruction files used to evade keyword review. Use a small confusable map, not a full UTS#39 table. _(commit COMMIT_HASH)_
+1. [x] **AGENT-PI-011: Homoglyph/confusable spoofing** — detect mixed-script confusables (Cyrillic а/е/о inside ASCII words) in skill/instruction files used to evade keyword review. Use a small confusable map, not a full UTS#39 table. _(commit 99aa1f1)_
 2. [ ] **AGENT-PI-012: Markdown link/text mismatch** — link text says one domain, href is another (`[github.com/x](https://evil.tld)`) in agent artifacts; classic lure for agent auto-fetch.
 3. [ ] **AGENT-PI-013: HTML-comment-hidden instructions** — imperative instructions hidden inside `<!-- ... -->` blocks in skills/instruction files (invisible in rendered view, read by model).
 4. [ ] **AGENT-PI-014: Frontmatter abuse in SKILL.md** — YAML frontmatter keys that auto-broaden agent behavior (`allowed-tools: *`, hidden `model:`/`bypassPermissions` style flags, suspicious `metadata` blobs).
