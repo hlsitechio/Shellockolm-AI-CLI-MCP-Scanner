@@ -102,36 +102,50 @@ const features = [
 
 const FeaturesSection = () => {
   return (
-    <section className="relative py-24 overflow-hidden">
-      <div className="absolute inset-0 bg-gradient-dark" />
-      <div 
+    <section aria-label="Features" className="relative py-24 overflow-hidden">
+      <div className="absolute inset-0 bg-gradient-dark" aria-hidden="true" />
+      <div
         className="absolute inset-0 opacity-25"
+        aria-hidden="true"
         style={{
           backgroundImage: `radial-gradient(ellipse 60% 40% at 50% 50%, hsl(var(--ultramarine) / 0.15), transparent)`,
         }}
       />
 
-      <div className="relative z-10 container mx-auto px-6">
-        <div className="text-center mb-16">
-          <h2 className="font-display text-4xl md:text-5xl font-bold mb-4">
-            <span className="text-gradient-ultramarine">6</span> Core Tools
+      <div className="relative z-10 container mx-auto px-4 sm:px-6">
+        {/* Section header */}
+        <div className="text-center mb-16 max-w-2xl mx-auto">
+          <span className="badge-detective mb-6 inline-flex">
+            <Shield className="w-4 h-4" aria-hidden="true" />
+            Core Capabilities
+          </span>
+          <h2 className="font-display text-4xl sm:text-5xl font-bold mb-4">
+            <span className="text-gradient-ultramarine">6</span> Tools,{" "}
+            <span className="text-foreground">one scanner</span>
           </h2>
-          <p className="text-muted-foreground max-w-lg mx-auto">
+          <p className="text-muted-foreground text-base sm:text-lg leading-relaxed">
             Everything you need to secure React, Next.js, and Node.js apps.
+            Flip a card to see each tool in action.
           </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-5xl mx-auto">
+        {/* Feature grid */}
+        <div
+          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 max-w-5xl mx-auto"
+          role="list"
+          aria-label="Feature cards — click any card to see a live terminal example"
+        >
           {features.map((feature, index) => (
-            <FlipCard
-              key={feature.title}
-              icon={feature.icon}
-              title={feature.title}
-              description={feature.description}
-              highlight={feature.highlight}
-              terminalLines={feature.terminalLines}
-              index={index}
-            />
+            <div key={feature.title} role="listitem">
+              <FlipCard
+                icon={feature.icon}
+                title={feature.title}
+                description={feature.description}
+                highlight={feature.highlight}
+                terminalLines={feature.terminalLines}
+                index={index}
+              />
+            </div>
           ))}
         </div>
       </div>
