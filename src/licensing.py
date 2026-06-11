@@ -37,6 +37,11 @@ from typing import Optional
 _OFFLINE_SECRET = b"shellockolm-offline-keycheck-v1"
 _PREFIX = "SHLK"
 
+# Default authoritative validation endpoint (public; only called when a license key
+# is actually present, so free users with no key make zero network calls and stay
+# 100% offline). Override with SHELLOCKOLM_LICENSE_API.
+DEFAULT_LICENSE_API = "https://rqwwmucfqmvqfjhxbzrt.supabase.co/functions/v1/validate-license"
+
 
 class Tier(str, Enum):
     FREE = "free"
@@ -83,7 +88,7 @@ class LicenseManager:
     """Resolves the active license and answers tier/feature questions."""
 
     def __init__(self, key: Optional[str] = None, api_url: Optional[str] = None):
-        self.api_url = api_url or os.environ.get("SHELLOCKOLM_LICENSE_API")
+        self.api_url = api_url or os.environ.get("SHELLOCKOLM_LICENSE_API") or DEFAULT_LICENSE_API
         self._license = self._resolve(key)
 
     def _resolve(self, key: Optional[str]) -> License:
