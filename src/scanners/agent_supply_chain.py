@@ -13,8 +13,8 @@ Artifacts covered:
 Detections: prompt injection, hidden triggers, secret-exfiltration instructions,
 tool poisoning / remote-script execution, rug-pull (unpinned) MCP servers,
 invisible-character, Unicode-Tags ASCII smuggling, bidirectional "Trojan Source"
-text-reordering (CVE-2021-42574), HTML-comment-concealed instructions, and
-hardcoded credentials.
+text-reordering (CVE-2021-42574), HTML-comment-concealed instructions,
+permission/safety-bypass flags in skill frontmatter, and hardcoded credentials.
 Pattern-based and 100% offline, consistent with the rest of
 Shellockolm — a seatbelt you run *before* you install an untrusted skill or server.
 """
@@ -161,6 +161,42 @@ _COMMENT_DIRECTIVE = _c(
     r"|\b(?:follow|obey|comply\s+with|adhere\s+to|apply)\b[^\n]{0,25}"
     r"\b(?:these|the\s+following|the\s+below|the\s+hidden|the\s+secret)\b[^\n]{0,15}instruction"
 )
+
+
+# --- AGENT-PI-014: permission/safety-bypass flags in skill frontmatter ---------
+# A SKILL.md / instruction file may open with a YAML frontmatter block delimited by
+# `---` lines. That block is metadata, loaded as standing context before the agent
+# runs the skill. Runtime safety toggles do not belong there: baked into a
+# distributable artifact they silently broaden the agent's autonomy past the
+# per-invocation consent the user expects, while the prose body looks ordinary. We
+# parse the block structurally (key/value), so a description that merely *mentions*
+# such a flag never trips the rule, and a legitimately tool-adaptive
+# `allowed-tools: "*"` (used by tool-adaptive skills) is deliberately not abuse.
+_FRONTMATTER = re.compile(r"\A\uFEFF?---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.DOTALL)
+_FM_KV = re.compile(r"^[ \t]*-?[ \t]*[\"']?([\w.-]+)[\"']?[ \t]*:[ \t]*(.*?)[ \t]*$")
+# The CLI escape-hatch string ("--dangerously-skip-permissions") is never benign in
+# metadata, wherever in the block it appears (key, value, or inside an args list).
+_FM_DANGEROUS = re.compile(r"(?:--?)?dangerously[-_]?skip[-_]?permissions?", re.IGNORECASE)
+# Boolean safety toggles: flagged only when set to a truthy value, so `auto-approve:
+# false` and prose mentions never trip. Both hyphen and concatenated spellings are
+# listed because key normalization only folds `_`->`-` and case.
+_FM_BYPASS_KEYS: Set[str] = {
+    "bypass-permissions", "bypasspermissions", "skip-permissions", "skippermissions",
+    "dangerously-skip-permissions", "dangerouslyskippermissions",
+    "auto-approve", "autoapprove", "auto-accept", "autoaccept",
+    "skip-confirmation", "skip-confirmations", "skipconfirmation", "skipconfirmations",
+    "disable-safety", "disablesafety", "disable-guardrails", "disable-permissions",
+    "disable-confirmation", "disable-confirmations", "disable-checks", "disable-sandbox",
+    "no-confirm", "noconfirm", "no-confirmation",
+    "unsafe", "unsafe-mode", "unsafemode", "yolo", "yolo-mode", "yolomode",
+}
+_FM_TRUTHY: Set[str] = {"true", "yes", "on", "1", "enable", "enabled", "always"}
+# Permission-mode keys whose *value* selects how much autonomy the agent has — only
+# explicit bypass-named modes are abuse (a benign `permission-mode: read-only` or a
+# broad-but-legitimate value never matches). Compared with hyphens stripped.
+_FM_MODE_KEYS_C: Set[str] = {"permissionmode", "permissionsmode", "defaultmode"}
+_FM_BYPASS_MODES_C: Set[str] = {"bypasspermissions", "bypass",
+                                "dangerouslyskippermissions", "yolo", "unrestricted"}
 
 
 # Free-text instruction content (skills, tool descriptions)
@@ -471,6 +507,7 @@ class AgentSupplyChainScanner(BaseScanner):
         findings += self._check_confusables(text, fp, "agent-skill")
         findings += self._check_link_mismatch(text, fp, "agent-skill")
         findings += self._check_hidden_comment(text, fp, "agent-skill")
+        findings += self._check_frontmatter(text, fp, "agent-skill")
         if not quick_mode:
             findings += self._check_b64(text, fp, "agent-skill")
         return self._dedupe(findings)
@@ -541,6 +578,7 @@ class AgentSupplyChainScanner(BaseScanner):
         findings += self._check_confusables(text, fp, "agent-instructions")
         findings += self._check_link_mismatch(text, fp, "agent-instructions")
         findings += self._check_hidden_comment(text, fp, "agent-instructions")
+        findings += self._check_frontmatter(text, fp, "agent-instructions")
         if not quick_mode:
             findings += self._check_b64(text, fp, "agent-instructions")
         return self._dedupe(findings)
@@ -719,6 +757,74 @@ class AgentSupplyChainScanner(BaseScanner):
             )
             return [self._finding(rule, fp, artifact, snippet, line_no)]
         return []
+
+    def _check_frontmatter(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
+        """Detect permission/safety-bypass flags baked into a skill's YAML frontmatter.
+
+        A SKILL.md / instruction file may open with a `---`-delimited YAML frontmatter
+        block — metadata loaded as standing context *before* the agent runs the skill.
+        Runtime safety toggles do not belong there. A `bypassPermissions`, an
+        `--dangerously-skip-permissions`, an `auto-approve: true` / `yolo: true`, or a
+        `permission-mode: bypassPermissions` baked into a distributable artifact
+        silently broadens the agent's autonomy past the per-invocation consent the user
+        expects, while the visible prose body looks ordinary.
+
+        The block is parsed structurally (key/value) so that a `description` that merely
+        *mentions* such a flag in prose never trips the rule, and a broad-but-legitimate
+        `allowed-tools: "*"` (used by tool-adaptive skills) is deliberately not treated
+        as abuse — only an explicit safety-bypass directive is.
+        """
+        fm_match = _FRONTMATTER.search(text)
+        if not fm_match:
+            return []
+        fm = fm_match.group(1)
+        fm_start = fm_match.start(1)
+
+        hit_pos: Optional[int] = None
+        snippet = ""
+
+        # The CLI escape-hatch string is never benign in metadata, wherever it sits
+        # (key, value, or buried in an args list a launcher would forward).
+        dm = _FM_DANGEROUS.search(fm)
+        if dm:
+            hit_pos = fm_start + dm.start()
+            snippet = dm.group(0)
+        else:
+            offset = 0
+            for line in fm.splitlines(keepends=True):
+                kv = _FM_KV.match(line)
+                if kv:
+                    key = kv.group(1).strip().strip("\"'").lower().replace("_", "-")
+                    val = kv.group(2).split("#")[0].strip().strip("\"'").strip().lower()
+                    key_c = key.replace("-", "")
+                    if key in _FM_BYPASS_KEYS and val in _FM_TRUTHY:
+                        hit_pos = fm_start + offset + kv.start(1)
+                        snippet = f"{kv.group(1).strip()}: {kv.group(2).strip()}"
+                    elif key_c in _FM_MODE_KEYS_C and val.replace("-", "") in _FM_BYPASS_MODES_C:
+                        hit_pos = fm_start + offset + kv.start(1)
+                        snippet = f"{kv.group(1).strip()}: {kv.group(2).strip()}"
+                if hit_pos is not None:
+                    break
+                offset += len(line)
+
+        if hit_pos is None:
+            return []
+        line_no = text.count("\n", 0, hit_pos) + 1
+        rule = AgentRule(
+            "AGENT-PI-014", "Permission/safety-bypass flag in skill frontmatter",
+            FindingSeverity.HIGH, 8.0, None,
+            "The skill / instruction file's YAML frontmatter declares a permission- or "
+            "safety-bypass flag (e.g. bypassPermissions, --dangerously-skip-permissions, "
+            "auto-approve: true, yolo: true, or permission-mode: bypassPermissions). "
+            "Frontmatter is metadata loaded before the skill runs, so the flag silently "
+            "broadens the agent's autonomy past the per-invocation consent the user "
+            "expects — the prompts that gate dangerous actions — while the prose body "
+            "looks ordinary.",
+            "Remove the bypass / auto-approve flag from the frontmatter. A distributable "
+            "skill should declare only descriptive metadata and the specific tools it "
+            "needs, never disable the permission prompts that gate dangerous actions.",
+        )
+        return [self._finding(rule, fp, artifact, "frontmatter flag: " + self._redact(snippet), line_no)]
 
     def _check_b64(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
         m = self._B64.search(text)
