@@ -262,6 +262,116 @@ _PI015_PAYLOAD_CUE = _c(
 )
 
 
+# --- AGENT-PI-016: cross-file staged payload (instruction-following indirection) ---
+# A skill / instruction file that points the agent at a COMPANION file and tells it
+# to FOLLOW / OBEY the instructions inside ("read ./helpers/notes.txt and follow it")
+# stages the real payload out-of-band: the reviewed artifact looks innocuous while
+# the model is sent to a sibling file to fetch and carry out the actual injected
+# directives. We anchor on a concrete file reference and fire only when it is paired
+# with a STRONG instruction-following cue — either an obey-verb + instruction-noun
+# pointing INTO the file ("follow the instructions in <file>", "execute the
+# directives inside") or a bare obey-pronoun right after a read of the file
+# ("read <file> … and follow it", "do exactly what it says"). A plain data read
+# ("open config.json and parse the apiUrl"), a documentation pointer ("see
+# ./docs/setup.md for the setup steps"), "run it" on a script you were told to
+# write, and "follow the steps below" (in-document) all lack that cue and are not
+# flagged. Canonical human-doc filenames (README, CONTRIBUTING, LICENSE, …) are
+# allowlisted because legitimately telling the agent to read them is routine.
+
+# Concrete file reference: an optional path then a base name with a recognised
+# extension (so ordinary prose words can't match). Optional surrounding backticks.
+_PI016_FILE_REF = re.compile(
+    r"`?"
+    # optional leading prefix: drive (C:\), home (~/), UNC (\\), ./ ../ , or a bare sep
+    r"(?:[A-Za-z]:[\\/]|~[\\/]?|\\\\|\.{1,2}[\\/]|[\\/])?"
+    r"(?:[\w.\-]+[\\/])*"
+    r"(?P<name>[\w\-][\w.\-]*?)"
+    r"\.(?:txt|md|markdown|mdx|rst|text|dat|notes|json|ya?ml|toml|ini|cfg|conf|"
+    r"xml|csv|sh|bash|zsh|fish|ps1|psm1|py|js|mjs|cjs|ts|rb|pl|lua|cmd|bat)"
+    r"`?",
+    re.IGNORECASE,
+)
+# Canonical human documentation files — telling the agent to read these is routine
+# and carries no staged-indirection risk, so they never trip the rule.
+_PI016_DOC_ALLOW: Set[str] = {
+    "readme", "contributing", "changelog", "changes", "history", "license",
+    "licence", "copying", "notice", "authors", "credits", "code_of_conduct",
+    "codeowners", "maintainers", "todo",
+}
+# Verbs that mean "treat the file's contents as instructions to carry out".
+_PI016_OBEY = r"(?:follow|obey|comply\s+with|adhere\s+to|carry\s+out|execute|run|apply)"
+# Verbs that, with a bare pronoun object, specifically mean *obey as instructions*
+# (NOT "run it"/"execute it", which legitimately apply to a script you just wrote).
+_PI016_OBEY_PRONOUN = r"(?:follow|obey|comply\s+with|adhere\s+to)"
+# Instruction-payload nouns. Deliberately excludes "command"/"rule"/"step"/"task":
+# "execute the commands in setup.sh", "apply the rules in .eslintrc", and "follow
+# the steps below" are all ordinary and must not trip the rule.
+_PI016_INSTR_NOUN = r"(?:instruction|directive|order|prompt)s?"
+
+# Condition A — obey-verb + instruction-noun + a locative that points INTO the
+# referenced file, anchored to end right before the file token.
+_PI016_INTO_BEFORE = re.compile(
+    _PI016_OBEY + r"\s+(?:all\s+|the\s+|any\s+|these\s+|those\s+|its\s+)*"
+    + _PI016_INSTR_NOUN +
+    r"\s+(?:contained\s+|listed\s+|written\s+|provided\s+|found\s+|given\s+|specified\s+)?"
+    r"(?:in|inside|within|from)\s+"
+    r"(?:the\s+file\s+|file\s+|a\s+file\s+(?:called|named)\s+)?$",
+    re.IGNORECASE,
+)
+# Condition B(i) — a bare obey-pronoun immediately after the file token
+# ("… and follow it", "; then obey that file"). Requires a read of the file in the
+# preceding window so the pronoun's antecedent is unambiguously this file. The
+# negative lookahead keeps the benign phrasal verb "follow it up" out.
+_PI016_AFTER_PRONOUN = re.compile(
+    r"^[`'\")\].,;:]*\s*"
+    r"(?:and\s+then\s+|and\s+|then\s+|,\s*then\s+|;\s*)?"
+    + _PI016_OBEY_PRONOUN +
+    r"\s+(?:exactly\s+)?(?:it|them|that\s+file|the\s+file)\b(?!\s+up\b)",
+    re.IGNORECASE,
+)
+# Condition B(ii) — an obey directive after the file that is self-tied to it via a
+# locative or a pronoun ("follow the instructions inside", "do exactly what it
+# says", "execute its directives"). Self-anchored, so no separate read is required.
+_PI016_AFTER_INSIDE = re.compile(
+    r"^[`'\")\].,;:]*\s*"
+    r"(?:and\s+then\s+|and\s+|then\s+|,\s*then\s+|;\s*)?"
+    r"(?:"
+    + _PI016_OBEY + r"\s+(?:all\s+|the\s+|any\s+|its\s+)*" + _PI016_INSTR_NOUN +
+        r"\s+(?:contained\s+|listed\s+|written\s+)?"
+        r"(?:inside|within|therein|there|in\s+it|in\s+that\s+file|in\s+the\s+file)\b"
+    r"|"
+    + _PI016_OBEY + r"\s+its\s+(?:instruction|directive|content)s?\b"
+    r"|"
+    r"do\s+(?:exactly\s+)?(?:what|whatever)\s+(?:it|that\s+file|the\s+file|its\s+contents?)\s+"
+    r"(?:say|says|said|state|states|contain|contains|instruct|instructs|tell|tells)\b"
+    r")",
+    re.IGNORECASE,
+)
+# A read / access of the file — needed to bind a bare "follow it" to this file.
+_PI016_READ = re.compile(
+    r"\b(?:re-?read|read|open|cat|load|fetch|retrieve|download|import|ingest|"
+    r"parse|consult|review|see|view|access|check|inspect|look\s+at|refer\s+to|"
+    r"contents?\s+of|content\s+of)\b",
+    re.IGNORECASE,
+)
+# GATE: plain "read forms.md and follow its instructions" is the OFFICIAL skill
+# progressive-disclosure pattern (a skill referencing its own bundled companion
+# file) and must NOT be flagged — calibration on real skills (Anthropic's pdf /
+# skill-creator skills) confirmed it. The exploitable subset is indirection to a
+# target a reviewer won't scrutinise, so we fire only when the referenced path is
+# SUSPICIOUS — escapes the bundle via parent traversal (../), is absolute, a home
+# (~) or UNC path, or routes through a hidden dot-directory (.hidden/, /.ssh/).
+# (A leading "./" is a same-dir reference, not hidden, and does not match.)
+_PI016_SUSPICIOUS_PATH = re.compile(
+    r"(?:^|[\\/])\.\.[\\/]"        # parent-dir traversal: ../  ..\
+    r"|^~[\\/]"                    # home directory
+    r"|^[A-Za-z]:[\\/]"           # Windows drive-absolute  C:\
+    r"|^\\\\"                      # UNC path  \\host\share
+    r"|^/"                         # POSIX absolute
+    r"|(?:^|[\\/])\.[\w-]"         # a hidden dot-segment (.hidden/, foo/.ssh/)
+)
+
+
 # Free-text instruction content (skills, tool descriptions)
 PROMPT_INJECTION_RULES: List[AgentRule] = [
     AgentRule(
@@ -805,6 +915,7 @@ class AgentSupplyChainScanner(BaseScanner):
         findings += self._check_hidden_comment(text, fp, "agent-skill")
         findings += self._check_frontmatter(text, fp, "agent-skill")
         findings += self._check_memory_poisoning(text, fp, "agent-skill")
+        findings += self._check_staged_payload(text, fp, "agent-skill")
         if not quick_mode:
             findings += self._check_b64(text, fp, "agent-skill")
         return self._dedupe(findings)
@@ -1031,6 +1142,7 @@ class AgentSupplyChainScanner(BaseScanner):
         findings += self._check_hidden_comment(text, fp, "agent-instructions")
         findings += self._check_frontmatter(text, fp, "agent-instructions")
         findings += self._check_memory_poisoning(text, fp, "agent-instructions")
+        findings += self._check_staged_payload(text, fp, "agent-instructions")
         if not quick_mode:
             findings += self._check_b64(text, fp, "agent-instructions")
         return self._dedupe(findings)
@@ -1313,6 +1425,80 @@ class AgentSupplyChainScanner(BaseScanner):
                 "agent's CLAUDE.md / memory / settings should be changed only by the user, "
                 "never on instruction from an untrusted artifact.",
             )
+            return [self._finding(rule, fp, artifact, snippet, line_no)]
+        return []
+
+    def _check_staged_payload(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
+        """AGENT-PI-016: detect cross-file staged-payload indirection.
+
+        Flags an artifact that points the agent at a companion file and tells it to
+        FOLLOW / OBEY the instructions inside it, where the real payload is staged
+        out-of-band so the reviewed file looks clean. We anchor on a concrete file
+        reference paired with a strong instruction-following cue (an obey-verb +
+        instruction-noun pointing into the file, a bare obey-pronoun right after a
+        read of it, or "do what it says").
+
+        Crucially, the plain "read forms.md and follow its instructions" form is the
+        OFFICIAL skill progressive-disclosure pattern (a skill referencing its own
+        bundled companion file) — confirmed benign on real skills — so a GATE limits
+        firing to the exploitable subset: the referenced path is SUSPICIOUS (escapes
+        the bundle via ../, is absolute / home / UNC, or routes through a hidden
+        dot-directory) OR a covert / instruction-override cue accompanies the
+        indirection. A plain in-bundle sibling reference, a data read ("open
+        config.json and parse the apiUrl"), a doc pointer ("see ./docs/setup.md for
+        the steps"), "run it" on a script, and "follow the steps below" are not
+        flagged.
+        """
+        for fm in _PI016_FILE_REF.finditer(text):
+            if fm.group("name").lower() in _PI016_DOC_ALLOW:
+                continue
+            before = text[max(0, fm.start() - 160):fm.start()]
+            after = text[fm.end():fm.end() + 160]
+
+            cue: Optional[str] = None
+            mi = _PI016_INTO_BEFORE.search(before)
+            if mi:
+                cue = mi.group(0) + fm.group(0)
+            else:
+                ma = _PI016_AFTER_INSIDE.search(after)
+                if ma:
+                    cue = fm.group(0) + ma.group(0)
+                else:
+                    mp = _PI016_AFTER_PRONOUN.search(after)
+                    if mp and _PI016_READ.search(before):
+                        cue = fm.group(0) + mp.group(0)
+            if cue is None:
+                continue
+
+            # GATE — suppress the benign progressive-disclosure pattern. Fire only on
+            # a suspicious target path or a covert/override framing of the indirection.
+            ref = fm.group(0).strip("`'\"() \t")
+            suspicious = _PI016_SUSPICIOUS_PATH.search(ref)
+            window = text[max(0, fm.start() - 200):min(len(text), fm.end() + 220)]
+            covert = None if suspicious else _PI015_PAYLOAD_CUE.search(window)
+            if not (suspicious or covert):
+                continue
+            reason = "suspicious target path" if suspicious else "covert/override framing"
+
+            line_no = text.count("\n", 0, fm.start()) + 1
+            rule = AgentRule(
+                "AGENT-PI-016", "Cross-file staged payload (instruction-following indirection)",
+                FindingSeverity.HIGH, 7.8, None,
+                "The artifact directs the agent to read a companion file and then follow / "
+                "obey the instructions inside it, and the indirection is suspicious — the "
+                "referenced path escapes or hides from the skill bundle (parent traversal, "
+                "an absolute/home/UNC path, or a hidden dot-directory), or a covert / "
+                "instruction-override cue accompanies it. This stages the real payload "
+                "out-of-band: the reviewed file looks benign while the actual injected "
+                "directives live in a sibling file the reviewer won't open — a way to "
+                "smuggle a prompt-injection past review of the primary artifact. (A plain "
+                "in-bundle reference like \"read forms.md and follow its instructions\" is "
+                "ordinary progressive disclosure and is not flagged.)",
+                "Inline what the agent must do, or keep companion files inside the skill "
+                "bundle and free of covert/override directions. A skill should never send "
+                "the agent to obey instructions in a hidden, out-of-tree, or concealed file.",
+            )
+            snippet = f"staged cross-file payload ({reason}): " + self._redact(cue)
             return [self._finding(rule, fp, artifact, snippet, line_no)]
         return []
 
