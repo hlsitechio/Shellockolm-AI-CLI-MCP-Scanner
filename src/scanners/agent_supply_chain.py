@@ -540,6 +540,104 @@ N8N_RULES: List[AgentRule] = [
     ),
 ]
 
+
+# --- AGENT-N8N-002: credential read paired with an external exfil sink ----------
+# An exported n8n workflow can quietly be a credential-theft pipeline: one node
+# reads stored credentials (or pulls a host secret via an expression / hardcoded
+# key) and a second node POSTs data to an attacker-controlled out-of-band endpoint.
+# Almost every legitimate workflow both uses credentials AND calls external APIs, so
+# co-occurrence alone is far too broad — we fire only on a tight pairing:
+#
+#   (A) PAIRING — the workflow reads a credential AND posts to a known OOB /
+#       request-capture / paste sink (webhook.site, *.ngrok.*, *.oast.*,
+#       interact.sh, burpcollaborator, dnslog, *.requestcatcher.com, pastebin /
+#       hastebin). Those hosts have no place in a production workflow. Ordinary API
+#       hosts — and Slack / Discord *incoming webhooks*, which are legitimate n8n
+#       notification destinations — are deliberately NOT in the sink list, so a
+#       notification workflow that also uses a credential never trips the rule.
+#   (B) DIRECT EMBED — a node that posts to an external host AND carries a hardcoded
+#       high-entropy key literal (AKIA…, ghp_…, sk-…, AIza…, xox…) in its request
+#       parameters: the workflow ships a real secret out in the request itself.
+#
+# n8n injects real authentication into its encrypted credential store, never into a
+# request body — so a workflow that funnels credential material to a capture sink,
+# or pastes a real key into an outbound call, is exfiltration, not an integration.
+
+# Out-of-band / request-capture / paste sinks that never belong in a production n8n
+# workflow. Slack / Discord incoming webhooks and pipedream are intentionally absent
+# (legitimate notification patterns) so they are never mistaken for exfil here.
+_N8N_OOB_SINK_HOSTS = (
+    "webhook.site", "requestbin.com", "requestbin.net",
+    "interact.sh", "burpcollaborator.net", "dnslog.cn",
+    "pastebin.com", "hastebin.com", "paste.ee",
+)
+_N8N_OOB_SINK_SUFFIXES = (
+    ".ngrok.io", ".ngrok.app", ".ngrok.dev", ".ngrok-free.app",
+    ".oast.live", ".oast.fun", ".oast.site", ".oast.online", ".oast.pro", ".oast.me",
+    ".requestcatcher.com",
+)
+# Expressions / calls that pull RAW credential or secret values into the data stream
+# (as opposed to n8n's normal auth injection, which never exposes the value).
+_N8N_CRED_EXPR = re.compile(
+    r"\$credentials\b|\$secrets\.|\bgetCredentials\s*\(|\$node\[[^\]]*\]\.credentials",
+    re.IGNORECASE,
+)
+# A $env reference whose variable name looks like a secret (token / key / password…).
+_N8N_ENV_SECRET = re.compile(
+    r"\$env\.[A-Za-z0-9_]*?(?:KEY|TOKEN|SECRET|PASS(?:WORD)?|CRED(?:ENTIAL)?|PRIVATE|AUTH)",
+    re.IGNORECASE,
+)
+# Any http(s) URL appearing inside a node's serialized parameters.
+_N8N_ANY_URL = re.compile(r"https?://[^\s\"'<>)\\]+", re.IGNORECASE)
+
+
+def _n8n_is_oob_sink(host: str) -> bool:
+    """True if `host` is a known out-of-band / request-capture / paste sink."""
+    h = host.strip().strip("[]").lower().rstrip(".")
+    if not h:
+        return False
+    for known in _N8N_OOB_SINK_HOSTS:
+        if h == known or h.endswith("." + known):
+            return True
+    return any(h.endswith(suf) for suf in _N8N_OOB_SINK_SUFFIXES)
+
+
+def _n8n_is_external_host(host: str) -> bool:
+    """True if `host` is a routable external endpoint (not localhost / private / .local).
+
+    Used for the DIRECT-EMBED case so a local-dev fixture (localhost, 127.0.0.1, a
+    private RFC1918 address, *.local) is never treated as an exfil destination.
+    """
+    h = host.strip().strip("[]").lower()
+    if not h:
+        return False
+    try:
+        return ipaddress.ip_address(h).is_global
+    except ValueError:
+        pass
+    if h == "localhost" or h.endswith((".local", ".internal", ".localhost")):
+        return False
+    return "." in h
+
+
+N8N_CRED_EXFIL_RULE = AgentRule(
+    "AGENT-N8N-002", "n8n workflow pairs a credential read with an external exfil sink",
+    FindingSeverity.HIGH, 8.6, None,
+    "An exported n8n workflow reads stored credentials (a node's credential binding, "
+    "or an expression that pulls a raw secret — $credentials, getCredentials, a "
+    "secret-named $env var) and, in the same workflow, posts data to an "
+    "attacker-mutable out-of-band sink (webhook.site, *.ngrok.*, *.oast.*, "
+    "interact.sh, a paste bin) — or a node embeds a hardcoded API key directly in an "
+    "outbound request. n8n injects real authentication into its encrypted credential "
+    "store, never into a request body, so funnelling credential material to a "
+    "request-capture endpoint or pasting a live key into an outbound call is a "
+    "credential-exfiltration pipeline, not a normal integration.",
+    "Remove the out-of-band sink and never place credential/secret values "
+    "($credentials, getCredentials, $env secrets, hardcoded keys) into a node's URL, "
+    "body, query, or headers. Let n8n's credential store inject authentication and "
+    "route data only to trusted, first-party endpoints; rotate any exposed key.",
+)
+
 # Pro-tier advanced detections — unlocked with a Shellockolm Pro license. The free
 # rule sets above always run; these are *additional* coverage, never a replacement.
 # (In the durable open-core model these are served by the licensing endpoint so
@@ -846,9 +944,82 @@ class AgentSupplyChainScanner(BaseScanner):
 
     def _scan_n8n(self, fp: Path, text: str) -> List[ScanFinding]:
         findings = self._apply_rules(text, N8N_RULES + GENERIC_TEXT_RULES + self._extra(), fp, "n8n-workflow")
+        findings += self._check_n8n_cred_exfil(fp, text)
         findings += self._check_tag_smuggling(text, fp, "n8n-workflow")
         findings += self._check_bidi(text, fp, "n8n-workflow")
         return self._dedupe(findings)
+
+    def _check_n8n_cred_exfil(self, fp: Path, text: str) -> List[ScanFinding]:
+        """AGENT-N8N-002: structurally pair a credential read with an exfil sink.
+
+        Parses the workflow's node list and fires only on a tight pairing — a
+        credential read plus a post to a known OOB/capture sink (condition A), or a
+        single node that posts to an external host while embedding a hardcoded key
+        literal in its parameters (condition B). Returns [] when the file isn't a
+        parseable n8n workflow or when nothing pairs up.
+        """
+        try:
+            data = json.loads(text)
+        except (ValueError, TypeError):
+            return []
+        if not isinstance(data, dict):
+            return []
+        nodes = data.get("nodes")
+        if not isinstance(nodes, list):
+            return []
+
+        cred_node: Optional[str] = None        # a node that reads credentials / secret material
+        oob_sink = None                        # (node_name, host) posting to an OOB capture sink
+        direct = None                          # (node_name, host, evidence) hardcoded key shipped externally
+
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            nname = str(node.get("name") or node.get("type") or "node")
+            try:
+                params_blob = json.dumps(node.get("parameters", {}), ensure_ascii=False)
+            except (TypeError, ValueError):
+                params_blob = str(node.get("parameters", ""))
+
+            # --- credential-read signal (condition A) -------------------------------
+            creds = node.get("credentials")
+            reads_cred = isinstance(creds, dict) and bool(creds)
+            if not reads_cred and (_N8N_CRED_EXPR.search(params_blob) or _N8N_ENV_SECRET.search(params_blob)):
+                reads_cred = True
+            # A hardcoded key literal counts as a credential read AND drives condition B.
+            secret_m = SECRET_RULE.pattern.search(params_blob) if SECRET_RULE.pattern else None
+            if secret_m:
+                reads_cred = True
+            if reads_cred and cred_node is None:
+                cred_node = nname
+
+            # --- outbound URLs in this node -----------------------------------------
+            ext_host: Optional[str] = None
+            for um in _N8N_ANY_URL.finditer(params_blob):
+                hm = _URL_HOST.search(um.group(0))
+                if not hm:
+                    continue
+                host = hm.group(1)
+                if oob_sink is None and _n8n_is_oob_sink(host):
+                    oob_sink = (nname, host.lower().rstrip("."))
+                if ext_host is None and _n8n_is_external_host(host):
+                    ext_host = host.lower()
+
+            # --- condition B: hardcoded key shipped to an external host -------------
+            if direct is None and secret_m is not None and ext_host is not None:
+                direct = (nname, ext_host, secret_m.group(0))
+
+        if direct is not None:
+            nname, host, ev = direct
+            snippet = f"node {nname!r} embeds a hardcoded key in an outbound request to external host {host}"
+            return [self._mk(N8N_CRED_EXFIL_RULE, f"{fp} » node:{nname}", "n8n-workflow",
+                             f"{snippet} ({self._redact(ev)})")]
+        if cred_node is not None and oob_sink is not None:
+            sink_name, sink_host = oob_sink
+            snippet = (f"credential read in node {cred_node!r} paired with POST to "
+                       f"out-of-band sink {sink_host} in node {sink_name!r}")
+            return [self._mk(N8N_CRED_EXFIL_RULE, f"{fp} » node:{sink_name}", "n8n-workflow", snippet)]
+        return []
 
     def _scan_instructions(self, fp: Path, text: str, quick_mode: bool) -> List[ScanFinding]:
         findings = self._apply_rules(text, PROMPT_INJECTION_RULES + GENERIC_TEXT_RULES + self._extra(), fp, "agent-instructions")
