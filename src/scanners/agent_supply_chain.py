@@ -392,6 +392,82 @@ MCP_RULES: List[AgentRule] = [
     ),
 ]
 
+
+# --- AGENT-MCP-004: broad host-secret exfil via an MCP server's env block ------
+# An MCP server config's `env` block sets environment variables for the server
+# process. Forwarding a BROAD AMBIENT host credential — one that grants access to
+# the developer's whole cloud account, version-control identity, or SSH agent
+# (AWS_*, GITHUB_TOKEN, SSH_AUTH_SOCK, GOOGLE_APPLICATION_CREDENTIALS, KUBECONFIG,
+# …) — into a THIRD-PARTY server whose package/command has nothing to do with that
+# service hands that process your keys. A genuine integration needs its own
+# service's credential (an aws-* server reading AWS creds, a github server reading
+# GITHUB_TOKEN); a notes/weather/utility server pulling in your AWS secret key and
+# GitHub token is credential harvesting — the server can read the value and post it
+# out at will.
+#
+# Each sensitive credential maps to the service tokens that make forwarding it
+# legitimate. We flag a forwarded credential only when NONE of its service tokens
+# appear in the server's name/command/args/package — so the official integration is
+# never flagged, while an unrelated server is. "Forwarding" means the value pulls
+# the host value (a ${VAR}/$VAR/${env:VAR} interpolation) or carries a real secret,
+# not a constant like "production" or a non-secret config var (AWS_REGION, etc.).
+_MCP_SENSITIVE_ENV = [
+    # (regex matching the credential's env-var NAME, service tokens that justify it)
+    (re.compile(r"^AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN|SECURITY_TOKEN)$", re.I), ("aws",)),
+    (re.compile(r"^(GH|GITHUB)_TOKEN$|^GITHUB_(PAT|PERSONAL_ACCESS_TOKEN)$", re.I), ("github", "gh")),
+    (re.compile(r"^GITLAB_TOKEN$|^GITLAB_(PAT|PERSONAL_ACCESS_TOKEN)$", re.I), ("gitlab", "glab")),
+    (re.compile(r"^SSH_AUTH_SOCK$|^SSH_PRIVATE_KEY$", re.I), ("ssh",)),
+    (re.compile(r"^GOOGLE_APPLICATION_CREDENTIALS$|^(GCP|GCLOUD)_[A-Z0-9_]*(KEY|TOKEN|SECRET|CREDENTIAL|CREDENTIALS)$", re.I),
+     ("gcp", "google", "gcloud", "firebase")),
+    (re.compile(r"^AZURE_(CLIENT_SECRET|CLIENT_ID|TENANT_ID)$", re.I), ("azure",)),
+    (re.compile(r"^KUBECONFIG$", re.I), ("kube", "k8s", "kubernetes")),
+    (re.compile(r"^(NPM_TOKEN|NODE_AUTH_TOKEN)$", re.I), ("npm",)),
+    (re.compile(r"^DOCKER_(PASSWORD|AUTH_CONFIG)$", re.I), ("docker",)),
+    (re.compile(r"^(CF|CLOUDFLARE)_API_(TOKEN|KEY)$", re.I), ("cloudflare", "cf", "wrangler")),
+    (re.compile(r"^(DIGITALOCEAN|DO)_(API_)?TOKEN$", re.I), ("digitalocean", "doctl")),
+    (re.compile(r"^VERCEL_TOKEN$", re.I), ("vercel",)),
+    (re.compile(r"^NETLIFY_(AUTH_)?TOKEN$", re.I), ("netlify",)),
+    (re.compile(r"^HEROKU_API_KEY$", re.I), ("heroku",)),
+    (re.compile(r"^HF_TOKEN$|^HUGGING(FACE)?_?(HUB_)?TOKEN$", re.I), ("huggingface", "hf")),
+]
+# Extract environment-variable references from an env value: ${VAR}, ${env:VAR},
+# $VAR — the forms an MCP launcher interpolates to pull the host's value through.
+_MCP_ENV_REF = re.compile(r"\$\{?(?:env:)?([A-Za-z_][A-Za-z0-9_]*)\}?")
+
+
+def _mcp_sensitive_service(varname: str):
+    """Service tokens that justify forwarding `varname`, or None if it's not a
+    recognized broad ambient credential."""
+    name = varname.strip()
+    for pat, services in _MCP_SENSITIVE_ENV:
+        if pat.match(name):
+            return services
+    return None
+
+
+def _token_present(token: str, text_lower: str) -> bool:
+    """True if `token` appears in `text_lower` as a delimited token (not a
+    substring) — so 'gh' matches 'gh-helper' but not 'highlight', and 'aws'
+    matches 'server-aws' but not 'lawsuit'."""
+    return re.search(r"(?<![a-z0-9])" + re.escape(token) + r"(?![a-z0-9])", text_lower) is not None
+
+
+MCP_ENV_EXFIL_RULE = AgentRule(
+    "AGENT-MCP-004", "Broad host credential forwarded to an unrelated MCP server",
+    FindingSeverity.HIGH, 8.3, None,
+    "The MCP server's `env` block forwards a broad ambient host credential — one "
+    "that grants access to your cloud account, version-control identity, or SSH "
+    "agent (e.g. AWS_SECRET_ACCESS_KEY, GITHUB_TOKEN, SSH_AUTH_SOCK, "
+    "GOOGLE_APPLICATION_CREDENTIALS, KUBECONFIG) — into a server process whose "
+    "package/command has nothing to do with that service. A third-party server "
+    "launched this way receives your keys directly; it's a low-effort credential-"
+    "harvesting channel, because the server can read the value and exfiltrate it.",
+    "Remove the credential from this server's env, or scope it down. Forward a "
+    "credential only to the service's own official integration (an AWS server "
+    "reading AWS creds), pin and vet the package first, and prefer a least-"
+    "privilege, dedicated token over a broad ambient one.",
+)
+
 # n8n workflow exports
 N8N_RULES: List[AgentRule] = [
     AgentRule(
@@ -624,7 +700,55 @@ class AgentSupplyChainScanner(BaseScanner):
                     m = rule.pattern.search(joined)
                     if m:
                         out.append(self._mk(rule, loc, "mcp-config", self._redact(m.group(0))))
+            out += self._check_mcp_env_exfil(name, cfg, fp)
         return out
+
+    def _check_mcp_env_exfil(self, name: str, cfg: Dict[str, Any], fp: Path) -> List[ScanFinding]:
+        """AGENT-MCP-004: broad ambient host credential forwarded to an unrelated server.
+
+        The `env` block sets variables for the server process. Forwarding a broad
+        host credential (AWS_*, GITHUB_TOKEN, SSH_AUTH_SOCK,
+        GOOGLE_APPLICATION_CREDENTIALS, KUBECONFIG, …) — identified by the env key
+        name OR by a ${VAR} interpolation in the value (which catches a credential
+        renamed to an innocuous key) — to a server whose name/command/args/package
+        does not relate to that credential's service hands a third-party process
+        your keys. A server that IS the service's own integration (an aws-* server
+        receiving AWS creds) is not flagged. Non-secret config vars (AWS_REGION,
+        NODE_ENV) and app-scoped keys (BRAVE_API_KEY) are not in the credential map
+        and never trip the rule.
+        """
+        env = cfg.get("env")
+        if not isinstance(env, dict) or not env:
+            return []
+        # Text that identifies what this server actually is, for service-association.
+        ident_parts = [str(name), str(cfg.get("command", ""))]
+        args = cfg.get("args", [])
+        if isinstance(args, list):
+            ident_parts += [str(a) for a in args]
+        ident = " ".join(ident_parts).lower()
+
+        leaked: List[str] = []
+        for k, v in env.items():
+            key = str(k).strip()
+            val = str(v).strip()
+            if not val:
+                continue
+            # Credential identity from the KEY itself, or from a host var the value pulls.
+            for cand in [key] + _MCP_ENV_REF.findall(val):
+                services = _mcp_sensitive_service(cand)
+                if services is None:
+                    continue
+                if any(_token_present(tok, ident) for tok in services):
+                    continue  # this server is that service's own integration — legitimate
+                label = key if cand.upper() == key.upper() else f"{key}<-${{{cand}}}"
+                leaked.append(label)
+                break  # one credential per env entry is enough
+        if not leaked:
+            return []
+        seen: Set[str] = set()
+        uniq = [x for x in leaked if not (x in seen or seen.add(x))]
+        snippet = "env forwards " + ", ".join(uniq[:6]) + " to unrelated server"
+        return [self._mk(MCP_ENV_EXFIL_RULE, f"{fp} » server:{name}", "mcp-config", snippet)]
 
     def _scan_n8n(self, fp: Path, text: str) -> List[ScanFinding]:
         findings = self._apply_rules(text, N8N_RULES + GENERIC_TEXT_RULES + self._extra(), fp, "n8n-workflow")
