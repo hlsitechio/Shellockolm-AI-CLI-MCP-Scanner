@@ -12,6 +12,7 @@ Artifacts covered:
 
 Detections: prompt injection, hidden triggers, secret-exfiltration instructions,
 tool poisoning / remote-script execution, rug-pull (unpinned) MCP servers,
+raw-URL / gist / paste / IP-literal MCP launch sources,
 invisible-character, Unicode-Tags ASCII smuggling, bidirectional "Trojan Source"
 text-reordering (CVE-2021-42574), HTML-comment-concealed instructions,
 permission/safety-bypass flags in skill frontmatter, and hardcoded credentials.
@@ -19,6 +20,7 @@ Pattern-based and 100% offline, consistent with the rest of
 Shellockolm — a seatbelt you run *before* you install an untrusted skill or server.
 """
 
+import ipaddress
 import json
 import re
 from dataclasses import dataclass
@@ -468,6 +470,65 @@ MCP_ENV_EXFIL_RULE = AgentRule(
     "privilege, dedicated token over a broad ambient one.",
 )
 
+# --- AGENT-MCP-005: MCP server launches code from a raw URL / gist / paste / IP ---
+# An MCP server's launch command should reference a pinned package from a trusted
+# registry or a vetted local file — not pull its code at launch from a raw,
+# unversioned, attacker-mutable source. A command/args that fetches from
+# raw.githubusercontent.com, a GitHub gist, a paste service, or a bare IP-literal
+# host means the bytes that actually run are whatever live at that URL the moment
+# the agent starts the server: no version pin, no provenance, no review. Launchers
+# execute it directly (`deno run <url>`, `npx <tarball-url>`, `bunx <url>`,
+# `uvx --from git+<rawhost>`). This is a supply-chain RCE / rug-pull channel,
+# distinct from the curl|bash pipe form already caught by AGENT-MCP-001.
+#
+# Scoped to command + args (the launch path), NOT the env block (AGENT-MCP-004) and
+# NOT a remote HTTP MCP server's `url` transport field — so an ordinary vendor
+# endpoint (https://api.vendor.com/mcp) is never flagged. Only dedicated raw/paste
+# hosts and ROUTABLE PUBLIC IP literals trip it; loopback / private / link-local
+# IPs (local dev servers) and ordinary hostnames are excluded.
+_MCP_RAW_SOURCE_HOSTS = (
+    "raw.githubusercontent.com", "gist.githubusercontent.com", "gist.github.com",
+    "raw.githack.com", "rawcdn.githack.com",
+    "pastebin.com", "paste.ee", "hastebin.com", "dpaste.com", "dpaste.org",
+    "rentry.co", "rentry.org", "0bin.net", "ghostbin.com", "controlc.com",
+    "bpa.st", "ix.io", "sprunge.us", "paste.rs", "termbin.com",
+)
+# A URL inside a command/args token. Captures the host — a bracketed IPv6 literal or
+# an ordinary host[:port] — so we can classify it. `\b` lets it match inside
+# `git+https://…`. The host group stops before the port/path.
+_MCP_URL = re.compile(r"\bhttps?://(?:[^@/\s]*@)?(\[[0-9A-Fa-f:.]+\]|[^:/?#\s]+)", re.IGNORECASE)
+
+
+def _is_public_ip_literal(host: str) -> bool:
+    """True if `host` is a routable public IP literal (the remote-fetch smell).
+
+    `is_global` is True only for genuinely public addresses — it already excludes
+    loopback, private (RFC1918), link-local, CGNAT, documentation, reserved, and
+    multicast ranges (all local-dev or non-routable, not a remote-fetch smell). Only
+    a public IP, which carries no hostname / cert provenance, is the signal."""
+    h = host.strip().strip("[]")
+    try:
+        return ipaddress.ip_address(h).is_global
+    except ValueError:
+        return False
+
+
+MCP_REMOTE_SOURCE_RULE = AgentRule(
+    "AGENT-MCP-005", "MCP server launches code from a raw URL / gist / paste / IP literal",
+    FindingSeverity.HIGH, 8.5, None,
+    "The MCP server's launch command fetches code from an unversioned, "
+    "attacker-mutable source — raw.githubusercontent.com, a GitHub gist, a paste "
+    "service, or a bare public IP-literal host — instead of a pinned package from a "
+    "trusted registry or a vetted local file. Whatever bytes live at that URL when "
+    "the agent starts the server are what execute (e.g. `deno run <url>`, "
+    "`npx <tarball-url>`, `bunx <url>`): no version pin, no provenance, no review. "
+    "It is a supply-chain RCE / rug-pull channel — the source can change under you "
+    "after you trust it.",
+    "Don't launch an MCP server from a raw / gist / paste URL or a bare IP. Install "
+    "it from a trusted registry pinned to an exact version, or vendor and review the "
+    "code locally; reference servers by package name, not by a mutable URL.",
+)
+
 # n8n workflow exports
 N8N_RULES: List[AgentRule] = [
     AgentRule(
@@ -701,6 +762,7 @@ class AgentSupplyChainScanner(BaseScanner):
                     if m:
                         out.append(self._mk(rule, loc, "mcp-config", self._redact(m.group(0))))
             out += self._check_mcp_env_exfil(name, cfg, fp)
+            out += self._check_mcp_remote_source(name, cfg, fp)
         return out
 
     def _check_mcp_env_exfil(self, name: str, cfg: Dict[str, Any], fp: Path) -> List[ScanFinding]:
@@ -749,6 +811,38 @@ class AgentSupplyChainScanner(BaseScanner):
         uniq = [x for x in leaked if not (x in seen or seen.add(x))]
         snippet = "env forwards " + ", ".join(uniq[:6]) + " to unrelated server"
         return [self._mk(MCP_ENV_EXFIL_RULE, f"{fp} » server:{name}", "mcp-config", snippet)]
+
+    def _check_mcp_remote_source(self, name: str, cfg: Dict[str, Any], fp: Path) -> List[ScanFinding]:
+        """AGENT-MCP-005: server launches code from a raw URL / gist / paste / IP literal.
+
+        Inspects the server's command + args (the launch path) — not the env block
+        (AGENT-MCP-004) and not a remote HTTP server's `url` transport field. A URL
+        whose host is a dedicated raw-code / paste / gist service, or a routable
+        public IP literal, means the code that runs is fetched unversioned and
+        unvetted at launch — a supply-chain RCE / rug-pull vector. Loopback / private
+        / link-local IPs (local dev) and ordinary vendor hostnames (a remote MCP
+        endpoint like https://api.vendor.com/mcp passed to a proxy) are not flagged.
+        """
+        parts = [str(cfg.get("command", ""))]
+        args = cfg.get("args", [])
+        if isinstance(args, list):
+            parts += [str(a) for a in args]
+        joined = " ".join(p for p in parts if p)
+        if not joined:
+            return []
+        for m in _MCP_URL.finditer(joined):
+            raw_host = m.group(1)
+            host = raw_host.lower()
+            reason = None
+            if any(host == h or host.endswith("." + h) for h in _MCP_RAW_SOURCE_HOSTS):
+                reason = f"raw/paste source host {host}"
+            elif _is_public_ip_literal(raw_host):
+                reason = f"bare public IP literal {raw_host}"
+            if reason:
+                loc = f"{fp} » server:{name}"
+                snippet = f"{reason}: {self._redact(m.group(0))}"
+                return [self._mk(MCP_REMOTE_SOURCE_RULE, loc, "mcp-config", snippet)]
+        return []
 
     def _scan_n8n(self, fp: Path, text: str) -> List[ScanFinding]:
         findings = self._apply_rules(text, N8N_RULES + GENERIC_TEXT_RULES + self._extra(), fp, "n8n-workflow")
