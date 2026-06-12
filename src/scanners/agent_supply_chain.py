@@ -199,6 +199,67 @@ _FM_BYPASS_MODES_C: Set[str] = {"bypasspermissions", "bypass",
                                 "dangerouslyskippermissions", "yolo", "unrestricted"}
 
 
+# --- AGENT-PI-015: memory / persistence poisoning ------------------------------
+# Self-propagating prompt injection. The artifact instructs the agent to WRITE an
+# instruction into its own standing-context store — CLAUDE.md, AGENTS.md, a memory
+# file, .cursorrules, settings.json — so the directive auto-loads in every future
+# session. That converts a one-shot injection into a persistent backdoor: an agent
+# "worm" that re-arms itself each time the file is loaded.
+#
+# The dangerous part is not editing config per se (plenty of legitimate skills
+# configure the agent on request, and a notes/memory skill saves user-chosen facts
+# to a memory file). What makes it an attack is persisting a *covert* or *override*
+# behavioural directive. So we fire only when a "persist <self-reference> into
+# <memory/config target>" ACTION co-occurs — within a small window — with a
+# self-propagation PAYLOAD CUE: a covert "don't tell the user", an instruction
+# override, or a standing "from now on always …" coercion. A plain
+# "save this preference to your memory file so you remember it" carries no such
+# cue and is deliberately not flagged.
+_PI015_ACTION = _c(
+    # persist / write verb
+    r"\b(?:add|append|write|save|insert|store|persist|record|paste|copy|inject|embed|register|commit|put|place)\b"
+    r"[^\n]{0,40}?"
+    # a SELF-REFERENTIAL object — the instruction is persisting *itself* (this rule,
+    # the following, yourself, this directive). Distinguishes self-propagation from a
+    # skill writing an ordinary value ("add your API key to settings.json").
+    r"\b(?:this|these|that|it|yourself|the\s+following|the\s+above|the\s+below"
+    r"|(?:this|these|the)\s+(?:rule|instruction|directive|note|line|text|prompt|snippet|block|section|content|entry|memory|preference|behaviou?r)s?)\b"
+    r"[^\n]{0,60}?"
+    r"(?:"
+    # hard targets — concrete agent memory / instruction files (no qualifier needed)
+    r"(?:to|into|in|under|inside|onto|within)\s+(?:the\s+|your\s+|its\s+|my\s+|a\s+)?"
+    r"(?:(?:claude|agents?|gemini|copilot)[-_]?(?:instructions)?\.md"
+    r"|copilot-instructions(?:\.md)?"
+    r"|\.(?:cursor|windsurf|cline)rules"
+    r"|(?:\.mcp|mcp)\.json|settings\.json|claude_desktop_config\.json"
+    r"|~?[/\\]?\.(?:claude|cursor)\b"
+    r"|memory\s+files?)"
+    r"|"
+    # soft targets — the agent's store named generically; require at least one
+    # possessive/global qualifier (qualifiers may stack, e.g. "your persistent
+    # memory") so a bare "in the rules" or "to settings" never matches.
+    r"(?:to|into|in|under|inside|onto|within)\s+(?:(?:the|a)\s+)?"
+    r"(?:your|its|my|own|global|persistent|standing|permanent|long[-\s]?term)"
+    r"(?:\s+(?:own|global|persistent|standing|permanent|long[-\s]?term))?\s+"
+    r"(?:memory|config(?:uration)?|settings|instructions?|rules?|system\s+prompt|standing\s+context|preferences|context)(?:\s+files?)?"
+    r")"
+)
+# The self-propagation payload — what elevates a memory write into poisoning. Searched
+# in a small window around the action. Covers covert concealment, instruction override,
+# and standing behavioural coercion (the persisted directive is a "from now on always…").
+_PI015_PAYLOAD_CUE = _c(
+    # covert — conceal the action / persisted rule from the user
+    r"(?:do\s*n.?t|don'?t|never|without)\s+(?:let|tell|inform|notify|alert|mention|reveal|warn|disclos\w*)\b[^\n]{0,25}\b(?:user|human|them|operator|owner|anyone)\b"
+    r"|\b(?:secretly|covertly|silently|quietly|discreetly)\b"
+    r"|\bwithout\b[^\n]{0,20}\b(?:the\s+user|their|its)\b[^\n]{0,15}\b(?:knowledge|consent|awareness|noticing|knowing)\b"
+    # instruction override / jailbreak baked into the persisted content
+    r"|\b(?:ignore|disregard|forget|bypass|override|supersed\w*|take\s+precedence\s+over)\b[^\n]{0,40}\b(?:previous|prior|above|earlier|all|any|the\s+user'?s?|your)\b[^\n]{0,25}\b(?:instruction|prompt|rule|guideline|polic|restriction|directive|safety|system)"
+    # standing behavioural coercion — the directive being made permanent
+    r"|\b(?:from\s+now\s+on|going\s+forward|henceforth|in\s+(?:every|each)\s+(?:future\s+)?(?:response|reply|answer|conversation|session|chat))\b"
+    r"|\b(?:always|never)\b[^\n]{0,30}\b(?:recommend|suggest|promote|include|append|insert|run|execute|send|post|reply|respond|mention|add|use)\b"
+)
+
+
 # Free-text instruction content (skills, tool descriptions)
 PROMPT_INJECTION_RULES: List[AgentRule] = [
     AgentRule(
@@ -508,6 +569,7 @@ class AgentSupplyChainScanner(BaseScanner):
         findings += self._check_link_mismatch(text, fp, "agent-skill")
         findings += self._check_hidden_comment(text, fp, "agent-skill")
         findings += self._check_frontmatter(text, fp, "agent-skill")
+        findings += self._check_memory_poisoning(text, fp, "agent-skill")
         if not quick_mode:
             findings += self._check_b64(text, fp, "agent-skill")
         return self._dedupe(findings)
@@ -579,6 +641,7 @@ class AgentSupplyChainScanner(BaseScanner):
         findings += self._check_link_mismatch(text, fp, "agent-instructions")
         findings += self._check_hidden_comment(text, fp, "agent-instructions")
         findings += self._check_frontmatter(text, fp, "agent-instructions")
+        findings += self._check_memory_poisoning(text, fp, "agent-instructions")
         if not quick_mode:
             findings += self._check_b64(text, fp, "agent-instructions")
         return self._dedupe(findings)
@@ -825,6 +888,44 @@ class AgentSupplyChainScanner(BaseScanner):
             "needs, never disable the permission prompts that gate dangerous actions.",
         )
         return [self._finding(rule, fp, artifact, "frontmatter flag: " + self._redact(snippet), line_no)]
+
+    def _check_memory_poisoning(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
+        """Detect self-propagating injection that writes a directive into the agent's
+        persistent memory / instruction store.
+
+        Fires only when a "persist <self-reference> into <memory/config target>" action
+        (CLAUDE.md, AGENTS.md, a memory file, .cursorrules, settings.json, your memory,
+        …) co-occurs — within a small window — with a self-propagation payload cue:
+        covert concealment ('do not tell the user'), an instruction override, or a
+        standing 'from now on always …' coercion. That combination is the signature of
+        an agent "worm": a one-shot injection rewriting itself into the agent's config
+        so it auto-loads every future session. A memory/notes skill that merely saves
+        user-chosen facts carries no covert/override cue and is not flagged.
+        """
+        for am in _PI015_ACTION.finditer(text):
+            lo = max(0, am.start() - 200)
+            hi = min(len(text), am.end() + 220)
+            if not _PI015_PAYLOAD_CUE.search(text[lo:hi]):
+                continue
+            line_no = text.count("\n", 0, am.start()) + 1
+            snippet = "persist-to-standing-context: " + self._redact(am.group(0))
+            rule = AgentRule(
+                "AGENT-PI-015", "Memory / persistence poisoning (self-propagating instruction)",
+                FindingSeverity.HIGH, 8.5, None,
+                "An instruction directs the agent to write a directive into its own "
+                "persistent standing-context store (CLAUDE.md, AGENTS.md, a memory file, "
+                ".cursorrules, settings.json, …) so it auto-loads in future sessions, and "
+                "the persisted content carries a covert ('do not tell the user'), "
+                "instruction-override, or 'from now on always …' directive. This is "
+                "self-propagating prompt injection — a one-shot inject rewritten into the "
+                "agent's config to become a persistent backdoor that survives across sessions.",
+                "Never let a downloaded skill / instruction file write behavioural rules "
+                "into your memory or config. Remove the self-propagation directive; the "
+                "agent's CLAUDE.md / memory / settings should be changed only by the user, "
+                "never on instruction from an untrusted artifact.",
+            )
+            return [self._finding(rule, fp, artifact, snippet, line_no)]
+        return []
 
     def _check_b64(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
         m = self._B64.search(text)
