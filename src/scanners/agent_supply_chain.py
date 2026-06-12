@@ -13,7 +13,8 @@ Artifacts covered:
 Detections: prompt injection, hidden triggers, secret-exfiltration instructions,
 tool poisoning / remote-script execution, rug-pull (unpinned) MCP servers,
 invisible-character, Unicode-Tags ASCII smuggling, bidirectional "Trojan Source"
-text-reordering (CVE-2021-42574), and hardcoded credentials.
+text-reordering (CVE-2021-42574), HTML-comment-concealed instructions, and
+hardcoded credentials.
 Pattern-based and 100% offline, consistent with the rest of
 Shellockolm — a seatbelt you run *before* you install an untrusted skill or server.
 """
@@ -115,6 +116,51 @@ class AgentRule:
 
 def _c(p: str) -> re.Pattern:
     return re.compile(p, re.IGNORECASE)
+
+
+# An HTML/XML comment block. These render as nothing in any Markdown/HTML viewer,
+# so a human skimming a rendered skill or instruction file never sees the body —
+# but a model consuming the raw file reads it verbatim. Non-greedy + DOTALL so a
+# single comment can span multiple lines.
+_HTML_COMMENT = re.compile(r"<!--(.*?)-->", re.DOTALL)
+
+# Imperative-directive cues used to decide whether a comment is *instructing the
+# model* (the attack) versus merely *describing* something (the overwhelmingly
+# common benign case: TOC markers, prettier-ignore / markdownlint pragmas, TODOs,
+# license headers, region markers, explanatory notes). We deliberately require a
+# command-shaped signal — an override/jailbreak phrase, a directive aimed at a
+# named AI assistant, a "note to the AI", a covert "don't tell the user", an
+# exfil/execute pairing, or "from now on …" behaviour coercion — rather than
+# flagging every HTML comment, which would be almost all false positives.
+_COMMENT_DIRECTIVE = _c(
+    # instruction override / jailbreak / safety bypass
+    r"\b(?:ignore|disregard|forget|bypass|override|do\s+not\s+follow)\b[^\n]{0,40}"
+    r"\b(?:previous|prior|above|earlier|all|any|the|your)\b[^\n]{0,25}"
+    r"\b(?:instruction|prompt|rule|context|guideline|polic|restriction|directive|safety)"
+    # directive aimed at a named AI assistant
+    r"|\b(?:assistant|llm|chatgpt|copilot|claude|language\s+model|ai\s+assistant)\b"
+    r"[^\n]{0,30}\b(?:must|shall|always|never|do\s+not|don'?t|need\s+to|are\s+now)\b"
+    # an explicit "note / instructions to the AI / agent / you"
+    r"|\b(?:note|message|instruction|instructions|hint|reminder)\s+(?:to|for)\s+"
+    r"(?:the\s+)?(?:ai|assistant|model|agent|llm|reader|you|bot)\b"
+    # covert: hide the action from the user / human
+    r"|\b(?:do\s+not|don'?t|never)\b[^\n]{0,20}"
+    r"\b(?:tell|inform|mention|reveal|notify|warn|alert)\b[^\n]{0,20}"
+    r"\b(?:user|human|them|operator|owner|anyone)\b"
+    # conversational-behaviour coercion
+    r"|\b(?:always|never)\b[^\n]{0,25}\b(?:respond|reply|answer|comply|obey|disclose)\b"
+    r"|\b(?:from\s+now\s+on|going\s+forward|henceforth|starting\s+now|in\s+every\s+(?:response|reply|answer))\b"
+    # exfiltration verb + secret noun (note: ".env" starts with a non-word char, so
+    # it can't sit behind a leading \b — it gets its own alternative)
+    r"|\b(?:send|post|upload|exfiltrat\w*|transmit|forward|leak|email)\b[^\n]{0,45}"
+    r"(?:\b(?:secret|token|api[_-]?key|password|credential|environment\s+variable)\b|\.env\b)"
+    # execute the following / hidden command
+    r"|\b(?:execute|run|eval(?:uate)?)\b[^\n]{0,25}\b(?:the\s+following|this|below|hidden)\b"
+    r"[^\n]{0,15}\b(?:command|code|script|shell|instruction)"
+    # follow these / the hidden instructions
+    r"|\b(?:follow|obey|comply\s+with|adhere\s+to|apply)\b[^\n]{0,25}"
+    r"\b(?:these|the\s+following|the\s+below|the\s+hidden|the\s+secret)\b[^\n]{0,15}instruction"
+)
 
 
 # Free-text instruction content (skills, tool descriptions)
@@ -424,6 +470,7 @@ class AgentSupplyChainScanner(BaseScanner):
         findings += self._check_bidi(text, fp, "agent-skill")
         findings += self._check_confusables(text, fp, "agent-skill")
         findings += self._check_link_mismatch(text, fp, "agent-skill")
+        findings += self._check_hidden_comment(text, fp, "agent-skill")
         if not quick_mode:
             findings += self._check_b64(text, fp, "agent-skill")
         return self._dedupe(findings)
@@ -493,6 +540,7 @@ class AgentSupplyChainScanner(BaseScanner):
         findings += self._check_bidi(text, fp, "agent-instructions")
         findings += self._check_confusables(text, fp, "agent-instructions")
         findings += self._check_link_mismatch(text, fp, "agent-instructions")
+        findings += self._check_hidden_comment(text, fp, "agent-instructions")
         if not quick_mode:
             findings += self._check_b64(text, fp, "agent-instructions")
         return self._dedupe(findings)
@@ -636,6 +684,40 @@ class AgentSupplyChainScanner(BaseScanner):
                     "text should never name a domain other than the one it links to.",
                 )
                 return [self._finding(rule, fp, artifact, snippet, line_no)]
+        return []
+
+    def _check_hidden_comment(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
+        """Detect imperative instructions concealed inside an HTML comment.
+
+        `<!-- ... -->` blocks are invisible in any rendered Markdown/HTML view but are
+        read verbatim by a model that consumes the raw file. An attacker uses this to
+        slip directions (instruction overrides, 'do not tell the user', exfil/execute
+        commands, 'from now on ...') past a human who only skims the rendered skill or
+        instruction file. We flag a comment ONLY when its body carries an imperative
+        directive cue — a plain explanatory or tooling comment (TOC marker,
+        prettier-ignore, TODO, license header, region marker) is descriptive and never
+        trips the rule.
+        """
+        for cm in _HTML_COMMENT.finditer(text):
+            body = cm.group(1)
+            dm = _COMMENT_DIRECTIVE.search(body)
+            if not dm:
+                continue
+            abs_pos = cm.start(1) + dm.start()
+            line_no = text.count("\n", 0, abs_pos) + 1
+            snippet = "hidden in HTML comment: " + self._redact(dm.group(0))
+            rule = AgentRule(
+                "AGENT-PI-013", "Imperative instructions hidden in an HTML comment",
+                FindingSeverity.HIGH, 7.6, None,
+                "An HTML comment (<!-- ... -->) contains imperative instructions. The "
+                "comment is invisible in any rendered Markdown view but is read verbatim "
+                "by a model consuming the raw file — a stealth channel to smuggle "
+                "directions (instruction overrides, 'do not tell the user', exfiltration "
+                "or execute commands) past a human who only sees the rendered artifact.",
+                "Remove the comment or the directive inside it. Skill / instruction files "
+                "should never hide imperative instructions for the model in HTML comments.",
+            )
+            return [self._finding(rule, fp, artifact, snippet, line_no)]
         return []
 
     def _check_b64(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
