@@ -187,7 +187,7 @@ python src/cli.py shell
 | **n8n** | Ni8mare unauthenticated RCE, expression injection | CVE-2026-21858, CVE-2025-68613, CVE-2025-68668 |
 | **Supply Chain** | Shai-Hulud worm, eslint-config-prettier compromise | CVE-2025-54313 + 10 campaign CVEs |
 | **Clawdbot/Moltbot** | AI gateway credential leaks, OAuth piggybacking | 4 critical auth bypass patterns |
-| **🤖 Agent Supply Chain** | Prompt injection, secret-exfiltration & tool-poisoning in `SKILL.md` skills, MCP configs & n8n workflows; unpinned (rug-pull) MCP servers; invisible-char / Unicode-Tags ASCII smuggling | Agentic-era threat model (offline, pattern-based) |
+| **🤖 Agent Supply Chain** | Prompt injection, secret-exfiltration & tool-poisoning in `SKILL.md` skills, MCP configs, n8n workflows, slash commands & `settings.json` hooks; unpinned (rug-pull) MCP servers; auto-running hook RCE/exfil; invisible-char / Unicode-Tags ASCII smuggling | Agentic-era threat model (offline, pattern-based) |
 
 **Total: 32 unique CVEs tracked — plus the AI-agent coding supply chain**
 
@@ -202,10 +202,14 @@ Traditional scanners check *your dependencies*. The **agent scanner** checks the
 - **Agent skills** — `SKILL.md` / `*.skill.md` (Claude Code, Cursor, Windsurf, OpenClaw)
 - **MCP servers** — `mcp.json` / `*.mcp.json` / `claude_desktop_config.json`
 - **n8n workflows** — exported workflow JSON (Code/Function nodes, `eval`, hardcoded creds)
+- **Slash commands** — `.claude/commands/**/*.md` (the prompt files an agent runs on demand)
+- **Hook configs** — `.claude/settings.json` / `settings.local.json` `hooks` blocks (shell commands the agent auto-runs on lifecycle events)
 
 Detections: prompt injection / instruction override, hidden conditional triggers, **secret-exfiltration
 instructions**, tool poisoning / remote-script execution, **rug-pull (unpinned) MCP servers**,
-invisible-character and **Unicode-Tags ASCII smuggling**, and hardcoded credentials. 100% offline.
+invisible-character and **Unicode-Tags ASCII smuggling**, hardcoded credentials, and **auto-running
+hook commands that download-and-execute, run obfuscated payloads, or exfiltrate to out-of-band sinks**.
+100% offline.
 
 ```bash
 # Vet an untrusted skill or MCP config BEFORE you install it

@@ -9,6 +9,9 @@ Artifacts covered:
   - Agent skills:   SKILL.md / *.skill.md (Claude Code, Cursor, Windsurf, OpenClaw)
   - MCP servers:    mcp.json / *.mcp.json / claude_desktop_config.json
   - n8n workflows:  exported workflow JSON (Code/Function nodes, eval, hardcoded creds)
+  - Slash commands: .claude/commands/**/*.md (prompt files the agent runs on demand)
+  - Hook configs:   .claude/settings.json / settings.local.json `hooks` blocks
+                    (shell commands the agent auto-runs on lifecycle events)
 
 Detections: prompt injection, hidden triggers, secret-exfiltration instructions,
 tool poisoning / remote-script execution, rug-pull (unpinned) MCP servers,
@@ -777,19 +780,141 @@ PRO_RULES: List[AgentRule] = [
 ]
 
 
+# --- AGENT-HOOK-001/002/003: dangerous Claude Code hook commands ----------------
+# A Claude Code settings.json (project `.claude/settings.json`, `settings.local.json`,
+# or the user-level file) can register `hooks`: shell commands the agent runs
+# AUTOMATICALLY on lifecycle events (PreToolUse, PostToolUse, SessionStart, Stop, …)
+# with no per-invocation prompt. A settings.json shipped inside a cloned repo therefore
+# auto-executes whatever its hooks contain the moment the project is opened in the
+# agent — a zero-click supply-chain RCE / exfil channel. Legitimate hooks DO run
+# commands (formatters, linters, test runners), so co-occurrence of "a hook runs a
+# command" is far too broad; we flag ONLY commands whose shape is unambiguously
+# malicious and never appears in a real formatter/linter/test hook:
+#   HOOK-001  fetch-and-execute: a downloader piped/chained into an interpreter
+#             (curl … | bash), a PowerShell download cradle (Net.WebClient /
+#             DownloadString + iex), or a LOLBIN downloader (certutil -urlcache -f,
+#             bitsadmin /transfer).
+#   HOOK-002  obfuscated execution: encoded PowerShell (-enc/-ec/-encodedcommand),
+#             a base64 blob decoded and piped to a shell, or atob/FromBase64String /
+#             fromCharCode fed into eval/exec.
+#   HOOK-003  out-of-band exfiltration: the command contacts a request-capture / paste
+#             sink (webhook.site, *.ngrok.*, *.oast.*, interact.sh, pastebin, …) that
+#             never belongs in a build/format hook.
+# A destructive-command hook (rm -rf ~, mkfs, fork bomb) is caught by reusing the
+# shared AGENT-DESTRUCT-001 rule against the same command string. Hook commands are
+# extracted STRUCTURALLY from the parsed JSON (only string values under a `command`
+# key), so `matcher`/`type`/event-name metadata is never mistaken for a command, and
+# the dangerous patterns above mean a plain `prettier`/`eslint`/`pytest`/`git`
+# invocation — or a hook that curls localhost — never trips a rule.
+_HOOK_FETCH_EXEC = _c(
+    # a downloader piped into an interpreter:  curl … | bash    irm … | iex
+    r"(?:curl|wget|fetch|lwp-request|invoke-webrequest|iwr|invoke-restmethod|irm)\b"
+    r"[^\n]{0,200}\|\s*(?:sudo\s+)?"
+    r"(?:sh|bash|zsh|dash|ksh|python3?|node|deno|bun|ruby|perl|php|iex|invoke-expression)\b"
+    # PowerShell download cradle, either order of download + execute
+    r"|(?:downloadstring|downloadfile|downloaddata|net\.webclient)\b[^\n]{0,200}\b(?:iex|invoke-expression)\b"
+    r"|\b(?:iex|invoke-expression)\b[^\n]{0,200}(?:downloadstring|downloadfile|net\.webclient|https?://)"
+    # LOLBIN downloaders (no \b before a hyphen flag: a space->'-' gap is not a word boundary)
+    r"|certutil(?:\.exe)?\b[^\n]{0,160}-urlcache\b[^\n]{0,160}-f\b"
+    r"|bitsadmin(?:\.exe)?\b[^\n]{0,160}/transfer\b"
+)
+_HOOK_OBFUSCATED = _c(
+    # encoded PowerShell: -enc / -ec / -encodedcommand (requires the encoded form, so
+    # -ExecutionPolicy / -Command / -File never match)
+    r"(?:powershell|pwsh)(?:\.exe)?\b[^\n]{0,80}\s-e(?:c|nc|ncodedcommand)\b"
+    r"|FromBase64String\b"
+    # base64 blob decoded then piped to a shell
+    r"|\bbase64\s+(?:-d|--decode|-D)\b[^\n]{0,60}\|\s*(?:sh|bash|zsh|dash|python3?|node|perl)\b"
+    # JS/inline decode fed straight into eval/exec
+    r"|\b(?:atob|b64decode|fromCharCode)\s*\([^\n]{0,80}\b(?:eval|exec|Function|child_process|os\.system)\b"
+)
+_HOOK_OOB_EXFIL = _c(
+    r"\bhttps?://[^\s\"'`]*(?:"
+    r"webhook\.site|requestbin\.(?:com|net)|interact\.sh|burpcollaborator\.net|dnslog\.cn"
+    r"|[a-z0-9-]+\.requestcatcher\.com"
+    r"|[a-z0-9-]+\.ngrok(?:-free)?\.(?:io|app|dev)"
+    r"|[a-z0-9-]+\.oast\.(?:live|fun|site|online|pro|me)"
+    r"|pastebin\.com|hastebin\.com|paste\.ee"
+    r")"
+)
+
+HOOK_FETCH_EXEC_RULE = AgentRule(
+    "AGENT-HOOK-001", "Claude Code hook downloads and executes remote code",
+    FindingSeverity.CRITICAL, 9.4, _HOOK_FETCH_EXEC,
+    "A Claude Code settings.json `hooks` entry runs a command that fetches code from "
+    "the network and executes it — a downloader piped into an interpreter "
+    "(curl … | bash), a PowerShell download cradle (Net.WebClient/DownloadString + "
+    "iex), or a LOLBIN downloader (certutil -urlcache -f, bitsadmin /transfer). Hooks "
+    "fire automatically on agent lifecycle events with no per-invocation prompt, so a "
+    "settings.json shipped in a cloned repo is a zero-click remote-code-execution "
+    "channel that runs the moment the project is opened.",
+    "Remove the hook, or have it run only a pinned, vetted local script. A hook must "
+    "never download and execute remote code; review every command in a project's "
+    ".claude/settings.json before trusting it.",
+)
+HOOK_OBFUSCATED_RULE = AgentRule(
+    "AGENT-HOOK-002", "Claude Code hook runs an obfuscated / encoded payload",
+    FindingSeverity.HIGH, 8.6, _HOOK_OBFUSCATED,
+    "A Claude Code settings.json `hooks` command runs an obfuscated payload — encoded "
+    "PowerShell (-enc/-ec/-encodedcommand), a base64 blob decoded and piped to a "
+    "shell, or atob/FromBase64String/fromCharCode fed into eval/exec. An auto-running "
+    "hook has no legitimate reason to hide what it executes behind an encoding.",
+    "Remove the encoded/obfuscated command. A hook should run a readable, auditable "
+    "command; decode the payload and review it, and never let a downloaded settings.json "
+    "auto-run encoded code.",
+)
+HOOK_OOB_EXFIL_RULE = AgentRule(
+    "AGENT-HOOK-003", "Claude Code hook exfiltrates to an out-of-band sink",
+    FindingSeverity.HIGH, 8.2, _HOOK_OOB_EXFIL,
+    "A Claude Code settings.json `hooks` command contacts an out-of-band "
+    "request-capture or paste sink (webhook.site, *.ngrok.*, *.oast.*, interact.sh, "
+    "pastebin, …). A hook fires automatically on agent events, so this silently ships "
+    "whatever it can read — tool inputs/outputs, file contents, environment — to an "
+    "attacker-controlled endpoint.",
+    "Remove the out-of-band endpoint. A hook should post only to trusted first-party "
+    "services; request-capture and paste hosts never belong in a build/format hook.",
+)
+# Rules applied to each individual hook command string structurally extracted from the
+# settings file. DESTRUCT_RULE is reused so an auto-running destructive hook is caught.
+HOOK_COMMAND_RULES: List[AgentRule] = [
+    HOOK_FETCH_EXEC_RULE, HOOK_OBFUSCATED_RULE, HOOK_OOB_EXFIL_RULE, DESTRUCT_RULE,
+]
+
+# Pattern rules deliberately NOT applied to slash-command files. Command files are
+# model-facing prose like skills, but they carry dense legitimate imperative developer
+# instructions that these broad natural-language heuristics misread:
+#   AGENT-PI-002  "when the user runs/asks…" — the normal way a command states its trigger
+#   AGENT-PI-006  a bare "silently"/"covertly" — e.g. "do NOT silently continue" (a quality note)
+#   AGENT-PRO-001 "<read/fetch> … then <do/run>" — e.g. "read the changed files then run tests"
+#   AGENT-PRO-002 "replace/override … function/command" — e.g. SQL "CREATE OR REPLACE FUNCTION"
+#   AGENT-DESTRUCT-001  documented `rm -rf`/`mkfs` examples in command help/teaching text
+# Calibration over 916 real marketplace command files (incl. official Anthropic
+# commands) showed these produce only false positives on commands; every high-precision
+# structural / stealth-channel check and the unambiguous malicious-content rules still
+# apply, and skills / instruction files keep the full set unchanged.
+_COMMAND_EXCLUDED_RULE_IDS: Set[str] = {
+    "AGENT-PI-002", "AGENT-PI-006", "AGENT-PRO-001", "AGENT-PRO-002", "AGENT-DESTRUCT-001",
+}
+
+
 class AgentSupplyChainScanner(BaseScanner):
     """Scans agent skills, MCP configs, and n8n workflows for agentic-era threats."""
 
     NAME = "agent"
     DESCRIPTION = (
-        "Scans the AI-agent coding supply chain (skills, MCP configs, n8n workflows) "
-        "for prompt injection, secret exfiltration, and tool poisoning"
+        "Scans the AI-agent coding supply chain (skills, MCP configs, n8n workflows, "
+        "slash commands, settings.json hooks) for prompt injection, secret "
+        "exfiltration, tool poisoning, and auto-running hook RCE"
     )
     CVE_IDS: List[str] = []
-    SUPPORTED_PACKAGES = ["agent-skill", "mcp-config", "n8n-workflow"]
+    SUPPORTED_PACKAGES = ["agent-skill", "mcp-config", "n8n-workflow", "agent-command", "claude-settings"]
 
     SKILL_NAMES = {"skill.md"}
     MCP_NAMES = {"mcp.json", ".mcp.json", "claude_desktop_config.json"}
+    # Claude Code settings files whose `hooks` block registers shell commands the
+    # agent auto-runs on lifecycle events — scanned for dangerous hook commands when
+    # they live inside a `.claude` tree (project or user-level).
+    SETTINGS_NAMES = {"settings.json", "settings.local.json"}
     # AI instruction files that agents read as standing context — prime
     # prompt-injection targets (Claude Code, Cursor, Windsurf, Copilot, Cline, Gemini).
     INSTRUCTION_NAMES = {
@@ -839,14 +964,16 @@ class AgentSupplyChainScanner(BaseScanner):
 
         targets = [root] if root.is_file() else list(self._walk(root, recursive, max_depth))
 
-        skills = mcps = workflows = instrs = 0
+        skills = mcps = workflows = instrs = commands = settings = 0
         for fp in targets:
             name = fp.name.lower()
             is_skill = name in self.SKILL_NAMES or name.endswith(".skill.md")
             is_mcp = name in self.MCP_NAMES or name.endswith(".mcp.json")
             is_instr = name in self.INSTRUCTION_NAMES
+            is_command = self._is_command_file(fp)
+            is_settings = name in self.SETTINGS_NAMES and self._under_claude(fp)
             is_json = name.endswith(".json")
-            if not (is_skill or is_mcp or is_instr or is_json):
+            if not (is_skill or is_mcp or is_instr or is_command or is_json):
                 continue
 
             try:
@@ -865,6 +992,12 @@ class AgentSupplyChainScanner(BaseScanner):
             elif is_instr:
                 instrs += 1
                 result.findings.extend(self._scan_instructions(fp, text, quick_mode))
+            elif is_command:
+                commands += 1
+                result.findings.extend(self._scan_command(fp, text, quick_mode))
+            elif is_settings:
+                settings += 1
+                result.findings.extend(self._scan_settings(fp, text))
             elif is_json and '"nodes"' in text and '"connections"' in text:
                 workflows += 1
                 result.findings.extend(self._scan_n8n(fp, text))
@@ -875,6 +1008,8 @@ class AgentSupplyChainScanner(BaseScanner):
             "mcp_configs_scanned": mcps,
             "n8n_workflows_scanned": workflows,
             "instruction_files_scanned": instrs,
+            "commands_scanned": commands,
+            "claude_settings_scanned": settings,
         })
         return result
 
@@ -883,6 +1018,27 @@ class AgentSupplyChainScanner(BaseScanner):
         return res.findings
 
     # ---------------------------------------------------------------- internals
+
+    @staticmethod
+    def _under_claude(fp: Path) -> bool:
+        """True if any path component is a `.claude` directory — used to confine
+        settings.json hook scanning to real Claude Code config (project or user
+        level) so an unrelated settings.json (e.g. .vscode/settings.json) is ignored."""
+        return ".claude" in [p.lower() for p in fp.parts]
+
+    @staticmethod
+    def _is_command_file(fp: Path) -> bool:
+        """A Claude Code slash-command file: a Markdown file under a `commands/`
+        directory inside a `.claude` tree (`.claude/commands/**/*.md`, project or
+        user-level, including namespaced subdirectories). Requiring a `.claude`
+        ancestor keeps an unrelated `commands/` folder from being treated as agent
+        artifacts."""
+        if fp.suffix.lower() != ".md":
+            return False
+        parts = [p.lower() for p in fp.parts]
+        if "commands" not in parts:
+            return False
+        return ".claude" in parts[:parts.index("commands")]
 
     def _walk(self, root: Path, recursive: bool, max_depth: int) -> Generator[Path, None, None]:
         def rec(current: Path, depth: int):
@@ -905,20 +1061,58 @@ class AgentSupplyChainScanner(BaseScanner):
 
         yield from rec(root, 0)
 
-    def _scan_skill(self, fp: Path, text: str, quick_mode: bool) -> List[ScanFinding]:
-        findings = self._apply_rules(text, PROMPT_INJECTION_RULES + GENERIC_TEXT_RULES + self._extra(), fp, "agent-skill")
-        findings += self._check_invisible(text, fp, "agent-skill")
-        findings += self._check_tag_smuggling(text, fp, "agent-skill")
-        findings += self._check_bidi(text, fp, "agent-skill")
-        findings += self._check_confusables(text, fp, "agent-skill")
-        findings += self._check_link_mismatch(text, fp, "agent-skill")
-        findings += self._check_hidden_comment(text, fp, "agent-skill")
-        findings += self._check_frontmatter(text, fp, "agent-skill")
-        findings += self._check_memory_poisoning(text, fp, "agent-skill")
-        findings += self._check_staged_payload(text, fp, "agent-skill")
+    def _scan_text_artifact(self, fp: Path, text: str, quick_mode: bool, artifact: str,
+                            rules: Optional[List[AgentRule]] = None) -> List[ScanFinding]:
+        """Run the free-text detection suite over a prose artifact.
+
+        Skills, AI instruction files, and slash-command files are all model-facing
+        prose that an agent reads as instructions, so they share one detection path —
+        a pattern rule set plus every stealth-channel check (invisible chars,
+        Unicode-Tags smuggling, bidi, confusables, link mismatch, hidden comments,
+        frontmatter bypass, memory poisoning, staged payloads). `rules` overrides the
+        default pattern set (commands pass a calibrated high-precision subset); the
+        structural checks below are high-precision and run for every prose artifact.
+        """
+        if rules is None:
+            rules = PROMPT_INJECTION_RULES + GENERIC_TEXT_RULES + self._extra()
+        findings = self._apply_rules(text, rules, fp, artifact)
+        findings += self._check_invisible(text, fp, artifact)
+        findings += self._check_tag_smuggling(text, fp, artifact)
+        findings += self._check_bidi(text, fp, artifact)
+        findings += self._check_confusables(text, fp, artifact)
+        findings += self._check_link_mismatch(text, fp, artifact)
+        findings += self._check_hidden_comment(text, fp, artifact)
+        findings += self._check_frontmatter(text, fp, artifact)
+        findings += self._check_memory_poisoning(text, fp, artifact)
+        findings += self._check_staged_payload(text, fp, artifact)
         if not quick_mode:
-            findings += self._check_b64(text, fp, "agent-skill")
+            findings += self._check_b64(text, fp, artifact)
         return self._dedupe(findings)
+
+    def _scan_skill(self, fp: Path, text: str, quick_mode: bool) -> List[ScanFinding]:
+        return self._scan_text_artifact(fp, text, quick_mode, "agent-skill")
+
+    def _scan_command(self, fp: Path, text: str, quick_mode: bool) -> List[ScanFinding]:
+        """Scan a Claude Code slash-command file (.claude/commands/**/*.md).
+
+        A command file's Markdown body becomes a prompt the agent executes on demand,
+        so it is a prime prompt-injection / exfiltration target — the same threat
+        surface as a skill or instruction file. It runs the high-precision structural /
+        stealth-channel checks (invisible chars, Unicode-Tags smuggling, bidi,
+        confusables, link mismatch, hidden comments, frontmatter bypass, memory
+        poisoning, staged payloads) plus the unambiguous malicious-content rules, but
+        EXCLUDES the broad natural-language instruction-shape heuristics (see
+        _COMMAND_EXCLUDED_RULE_IDS): command files legitimately contain dense imperative
+        developer prose — "when the user runs this command…", "read the changed files
+        then run the tests", "CREATE OR REPLACE FUNCTION", "do NOT silently continue",
+        documented `rm -rf` examples — that those heuristics misread. Calibration over
+        916 real marketplace command files (incl. official Anthropic commands) showed
+        the excluded rules produce only false positives there. Skills and instruction
+        files are unaffected and keep the full rule set.
+        """
+        rules = [r for r in (PROMPT_INJECTION_RULES + GENERIC_TEXT_RULES + self._extra())
+                 if r.id not in _COMMAND_EXCLUDED_RULE_IDS]
+        return self._scan_text_artifact(fp, text, quick_mode, "agent-command", rules)
 
     def _scan_mcp(self, fp: Path, text: str) -> List[ScanFinding]:
         findings = self._check_invisible(text, fp, "mcp-config")
@@ -1133,19 +1327,84 @@ class AgentSupplyChainScanner(BaseScanner):
         return []
 
     def _scan_instructions(self, fp: Path, text: str, quick_mode: bool) -> List[ScanFinding]:
-        findings = self._apply_rules(text, PROMPT_INJECTION_RULES + GENERIC_TEXT_RULES + self._extra(), fp, "agent-instructions")
-        findings += self._check_invisible(text, fp, "agent-instructions")
-        findings += self._check_tag_smuggling(text, fp, "agent-instructions")
-        findings += self._check_bidi(text, fp, "agent-instructions")
-        findings += self._check_confusables(text, fp, "agent-instructions")
-        findings += self._check_link_mismatch(text, fp, "agent-instructions")
-        findings += self._check_hidden_comment(text, fp, "agent-instructions")
-        findings += self._check_frontmatter(text, fp, "agent-instructions")
-        findings += self._check_memory_poisoning(text, fp, "agent-instructions")
-        findings += self._check_staged_payload(text, fp, "agent-instructions")
-        if not quick_mode:
-            findings += self._check_b64(text, fp, "agent-instructions")
+        return self._scan_text_artifact(fp, text, quick_mode, "agent-instructions")
+
+    def _scan_settings(self, fp: Path, text: str) -> List[ScanFinding]:
+        """Scan a Claude Code settings.json for dangerous auto-running hook commands.
+
+        A settings.json `hooks` block registers shell commands the agent runs
+        automatically on lifecycle events with no per-invocation prompt, so a
+        settings.json shipped in a cloned repo can auto-execute attacker code. We
+        structurally extract every hook `command` string and flag only the
+        unambiguously dangerous shapes (fetch-and-execute, obfuscated/encoded
+        payloads, out-of-band exfil, destructive commands) — ordinary
+        formatter/linter/test hooks never match. The universal stealth-character
+        checks (invisible / Unicode-Tags / bidi) also run.
+        """
+        findings = self._check_hook_commands(fp, text)
+        findings += self._check_invisible(text, fp, "claude-settings")
+        findings += self._check_tag_smuggling(text, fp, "claude-settings")
+        findings += self._check_bidi(text, fp, "claude-settings")
         return self._dedupe(findings)
+
+    def _check_hook_commands(self, fp: Path, text: str) -> List[ScanFinding]:
+        """AGENT-HOOK-001/002/003: dangerous shell commands in a settings.json `hooks` block.
+
+        Parses the settings file, walks the `hooks` subtree, and matches each
+        structurally-extracted hook command against the dangerous-command rule set
+        (fetch-and-execute, obfuscated payload, out-of-band exfil, destructive). Only
+        string values under a `command` key are inspected, so matcher/type/event
+        metadata is never treated as a command; a file that isn't valid JSON or has no
+        `hooks` block yields nothing.
+        """
+        try:
+            data = json.loads(text)
+        except (ValueError, TypeError):
+            return []
+        if not isinstance(data, dict):
+            return []
+        hooks = data.get("hooks")
+        if not isinstance(hooks, (dict, list)):
+            return []
+        out: List[ScanFinding] = []
+        for command, where in self._iter_hook_commands(hooks):
+            loc = f"{fp} » {where}"
+            for rule in HOOK_COMMAND_RULES:
+                if rule.pattern is None:
+                    continue
+                m = rule.pattern.search(command)
+                if m:
+                    out.append(self._mk(rule, loc, "claude-settings", self._redact(m.group(0))))
+        return out
+
+    @staticmethod
+    def _iter_hook_commands(hooks: Any) -> List[tuple]:
+        """Yield (command, location) for every hook command string in a `hooks` tree.
+
+        Tolerant of the nested Claude Code matcher-group schema (event -> [ {matcher,
+        hooks:[{type:"command", command:"…"}]} ]) and of simpler shapes. Only string
+        values stored under a `command` key are collected, so `matcher` / `type` /
+        event-name metadata can never be misread as a command to scan.
+        """
+        out: List[tuple] = []
+
+        def walk(node: Any, path: str) -> None:
+            if isinstance(node, dict):
+                for k, v in node.items():
+                    if k == "command" and isinstance(v, str) and v.strip():
+                        out.append((v, path))
+                    else:
+                        walk(v, f"{path}.{k}")
+            elif isinstance(node, list):
+                for i, v in enumerate(node):
+                    walk(v, f"{path}[{i}]")
+
+        if isinstance(hooks, dict):
+            for event, v in hooks.items():
+                walk(v, f"hooks.{event}")
+        else:
+            walk(hooks, "hooks")
+        return out
 
     def _apply_rules(self, text: str, rules: List[AgentRule], fp: Path, artifact: str) -> List[ScanFinding]:
         findings = []
