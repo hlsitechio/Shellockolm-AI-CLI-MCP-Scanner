@@ -1291,3 +1291,150 @@ def test_benign_command_not_flagged(scanner, tmp_path, label, body):
     result = scanner.scan_directory(_write_command(tmp_path, body))
     assert not result.findings, \
         f"benign command ({label}) must not be flagged, got {[f.cve_id for f in result.findings]}"
+
+
+# --- AGENT-SECRET-002: broadened secret patterns + redaction (task #11) --------
+# Sample credentials are ASSEMBLED FROM PARTS at runtime so the repo never holds a
+# contiguous credential-shaped literal (which platform secret-scanners — including
+# our own — would flag on push). Each assembled value is non-functional yet matches
+# the corresponding AGENT-SECRET-00x shape exactly. Do NOT collapse these into a
+# single string literal.
+_STRIPE_LIVE_KEY = "sk_" + "live_" + "0123456789abcdefghijABCDEFGH"            # sk_live_ + 28
+_TELEGRAM_TOKEN = "123456789" + ":" + "AA" + "0123456789abcdefghij0123456789abcd"  # :AA + 34
+_DISCORD_TOKEN = ".".join(["M" + "Tk4NjIyNDgzNDcxOTI1MjQ4",                    # M + 23 = 24
+                           "Cl2FMP",                                          # 6
+                           "example0hmac0portion0here1234"])                  # 29
+_OPENAI_KEY = "sk-" + "proj-" + "abcdEFGH1234ijklMNOP5678qrstUVWXyz90ABcd"     # sk-proj- + 40
+
+
+def _supabase_jwt(role: str) -> str:
+    """Build a structurally valid (unsigned) Supabase-style JWT for the given role."""
+    import base64 as _b64
+
+    def seg(obj: dict) -> str:
+        raw = _json.dumps(obj, separators=(",", ":")).encode()
+        return _b64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+    header = seg({"alg": "HS256", "typ": "JWT"})
+    payload = seg({"iss": "supabase", "ref": "abcdefgh", "role": role, "iat": 1600000000})
+    signature = _b64.urlsafe_b64encode(b"not-a-real-signature-padding-xx").rstrip(b"=").decode()
+    return f"{header}.{payload}.{signature}"
+
+
+@pytest.mark.parametrize("label,secret", [
+    ("stripe-live", _STRIPE_LIVE_KEY),
+    ("telegram-bot", _TELEGRAM_TOKEN),
+    ("discord-bot", _DISCORD_TOKEN),
+])
+def test_secret002_detected_in_skill(scanner, tmp_path, label, secret):
+    body = f"# Helper\n\nDeploy step:\n\n    API_KEY={secret}\n"
+    result = scanner.scan_directory(_write_skill(tmp_path, body))
+    findings = [f for f in result.findings if f.cve_id == "AGENT-SECRET-002"]
+    assert findings, f"expected AGENT-SECRET-002 for {label}, got {[f.cve_id for f in result.findings]}"
+    assert findings[0].severity.name in {"HIGH", "CRITICAL"}
+
+
+def test_supabase_service_role_jwt_detected(scanner, tmp_path):
+    body = f"# Skill\n\nSUPABASE_KEY={_supabase_jwt('service_role')}\n"
+    result = scanner.scan_directory(_write_skill(tmp_path, body))
+    findings = [f for f in result.findings if f.cve_id == "AGENT-SECRET-002"]
+    assert findings, f"expected service_role JWT finding, got {[f.cve_id for f in result.findings]}"
+    assert "service_role" in findings[0].description
+
+
+def test_supabase_anon_jwt_not_flagged(scanner, tmp_path):
+    # The anon/publishable key is meant to ship to clients — flagging it is a false
+    # positive. It has the same JWT shape as the service_role key; only the decoded
+    # role claim distinguishes them.
+    body = f"# Skill\n\nSUPABASE_ANON_KEY={_supabase_jwt('anon')}\n"
+    result = scanner.scan_directory(_write_skill(tmp_path, body))
+    assert not any(f.cve_id.startswith("AGENT-SECRET") for f in result.findings), \
+        "anon (publishable) JWT must not be flagged as a hardcoded secret"
+
+
+def test_secret002_detected_in_instruction_file(scanner, tmp_path):
+    f = tmp_path / "CLAUDE.md"
+    f.write_text(f"Project notes.\n\nStripe key: {_STRIPE_LIVE_KEY}\n", encoding="utf-8")
+    result = scanner.scan_directory(str(tmp_path))
+    assert any(f.cve_id == "AGENT-SECRET-002" for f in result.findings)
+
+
+def test_secret002_detected_in_mcp_env(scanner, tmp_path):
+    config = {
+        "mcpServers": {
+            "billing": {
+                "command": "npx",
+                "args": ["-y", "billing-mcp"],
+                "env": {"STRIPE_SECRET_KEY": _STRIPE_LIVE_KEY},
+            }
+        }
+    }
+    result = scanner.scan_directory(_write_mcp(tmp_path, config))
+    assert any(f.cve_id == "AGENT-SECRET-002" for f in result.findings)
+
+
+def test_supabase_service_role_jwt_detected_in_mcp_env(scanner, tmp_path):
+    config = {
+        "mcpServers": {
+            "data": {
+                "command": "npx",
+                "args": ["-y", "some-mcp"],
+                "env": {"SUPABASE_KEY": _supabase_jwt("service_role")},
+            }
+        }
+    }
+    result = scanner.scan_directory(_write_mcp(tmp_path, config))
+    assert any(f.cve_id == "AGENT-SECRET-002" for f in result.findings)
+
+
+@pytest.mark.parametrize("secret", [
+    _STRIPE_LIVE_KEY, _TELEGRAM_TOKEN, _DISCORD_TOKEN, _OPENAI_KEY,
+    "AKIAIOSFODNN7EXAMPLE", "ghp_0123456789abcdefghij0123456789abcdef",
+])
+def test_secret_value_is_redacted_in_findings(scanner, tmp_path, secret):
+    # The scanner must never re-emit a live credential in plaintext: a finding
+    # description that quoted the full secret would itself be a leak (e.g. in CI
+    # logs or a SARIF artifact). The masked form keeps a short type prefix only.
+    body = f"# Skill\n\nKEY={secret}\n"
+    result = scanner.scan_directory(_write_skill(tmp_path, body))
+    secret_findings = [f for f in result.findings if f.cve_id.startswith("AGENT-SECRET")]
+    assert secret_findings, f"expected a secret finding for {secret[:8]}..."
+    for f in secret_findings:
+        assert secret not in f.description, "full secret leaked into finding description"
+        assert "[redacted" in f.description, "expected a redaction marker in the evidence"
+
+
+def test_supabase_service_role_jwt_value_is_redacted(scanner, tmp_path):
+    jwt = _supabase_jwt("service_role")
+    body = f"# Skill\n\nSUPABASE_KEY={jwt}\n"
+    result = scanner.scan_directory(_write_skill(tmp_path, body))
+    f = next(f for f in result.findings if f.cve_id == "AGENT-SECRET-002")
+    assert jwt not in f.description, "service_role JWT leaked into finding description"
+    assert "[redacted" in f.description
+
+
+def test_openai_key_still_detected(scanner, tmp_path):
+    # OpenAI sk- keys are covered by AGENT-SECRET-001; confirm the family still fires.
+    body = f"# Skill\n\nOPENAI_API_KEY={_OPENAI_KEY}\n"
+    result = scanner.scan_directory(_write_skill(tmp_path, body))
+    assert any(f.cve_id == "AGENT-SECRET-001" for f in result.findings)
+
+
+def test_benign_skill_has_no_secret_finding(scanner, tmp_path):
+    # Prose that talks ABOUT credentials, references env vars, shows truncated
+    # placeholders, and even ships a publishable anon JWT must produce zero
+    # hardcoded-secret findings.
+    body = (
+        "# Stripe Billing Helper\n\n"
+        "Configure your environment before running this skill:\n\n"
+        "- Set `STRIPE_SECRET_KEY` (it starts with `sk_live_` for production).\n"
+        "- Set `TELEGRAM_BOT_TOKEN` and `DISCORD_BOT_TOKEN` in your shell.\n"
+        "- The skill reads `${STRIPE_SECRET_KEY}` from the environment, never a literal key.\n\n"
+        "Rate limit: 200:100 requests per window. Version 2024:10 of the API.\n"
+        "The publishable Supabase anon key is safe to expose to the browser:\n\n"
+        f"    SUPABASE_ANON_KEY={_supabase_jwt('anon')}\n\n"
+        "Rotate any leaked api_key, token, or secret immediately.\n"
+    )
+    result = scanner.scan_directory(_write_skill(tmp_path, body))
+    secret_findings = [f.cve_id for f in result.findings if f.cve_id.startswith("AGENT-SECRET")]
+    assert not secret_findings, f"benign skill must not trigger secret rules, got {secret_findings}"

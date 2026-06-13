@@ -23,6 +23,7 @@ Pattern-based and 100% offline, consistent with the rest of
 Shellockolm — a seatbelt you run *before* you install an untrusted skill or server.
 """
 
+import base64
 import ipaddress
 import json
 import re
@@ -117,6 +118,11 @@ class AgentRule:
     pattern: Optional[re.Pattern]
     description: str
     remediation: str
+    # When True, the rule's match IS a live credential — its evidence is masked
+    # (_mask_secret) before it reaches a finding so the scanner never re-emits the
+    # secret in plaintext. Non-secret rules keep their full (truncated) evidence so
+    # a reviewer can read the actual injection text.
+    secret: bool = False
 
 
 def _c(p: str) -> re.Pattern:
@@ -458,7 +464,51 @@ SECRET_RULE = AgentRule(
     _c(r"(AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|xox[baprs]-[A-Za-z0-9-]{10,}|sk-(ant-|proj-)?[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_\-]{35})"),
     "A hardcoded API key/token is embedded in the artifact, exposing it to anyone who installs it.",
     "Move secrets to environment variables or a secret manager, and rotate the exposed credential.",
+    secret=True,
 )
+# AGENT-SECRET-002: broadened high-value credential patterns. Each alternative is a
+# provider-specific, structurally distinctive prefix so the rule stays near-zero
+# false-positive on benign prose:
+#   • Stripe live secret / restricted key  sk_live_… / rk_live_… (24+ key body)
+#   • Telegram bot token                    <8-10 digit bot id>:AA<35 base64url>
+#   • Discord bot token                     <M|N|O base64-id>.<6>.<27-38> HMAC token
+# OpenAI sk- keys are already covered by AGENT-SECRET-001; the Supabase
+# service_role JWT (which bypasses Row-Level Security) needs a decode to tell it
+# apart from the publishable anon key, so it is handled by _check_jwt_secrets below
+# and reported under this same rule id.
+SECRET2_RULE = AgentRule(
+    "AGENT-SECRET-002", "Hardcoded high-value credential in agent artifact",
+    FindingSeverity.HIGH, 8.0,
+    _c(
+        r"("
+        r"[sr]k_live_[0-9A-Za-z]{24,}"                                            # Stripe live/restricted key
+        r"|\b[0-9]{8,10}:AA[A-Za-z0-9_-]{30,40}"                                  # Telegram bot token
+        r"|\b[MNO][A-Za-z0-9_-]{23,25}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,38}"   # Discord bot token
+        r")"
+    ),
+    "A hardcoded high-value API key, bot token, or service credential is embedded "
+    "in the artifact, exposing it to anyone who installs it.",
+    "Move secrets to environment variables or a secret manager, and rotate the "
+    "exposed credential immediately.",
+    secret=True,
+)
+
+# A JWT (header.payload.signature, each base64url). Supabase issues its API keys as
+# JWTs: the SERVICE_ROLE key bypasses Row-Level Security and is a server secret,
+# while the ANON/publishable key is safe to ship to clients. They are
+# indistinguishable by shape, so we decode the payload and flag only the
+# service_role variant — see _check_jwt_secrets.
+_JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}")
+_JWT_SERVICE_ROLE = re.compile(r'"role"\s*:\s*"service_role"')
+
+
+def _b64url_decode(segment: str) -> Optional[str]:
+    """Decode a base64url JWT segment to text, or None if it isn't valid base64url."""
+    try:
+        pad = "=" * (-len(segment) % 4)
+        return base64.urlsafe_b64decode(segment + pad).decode("utf-8", "replace")
+    except (ValueError, TypeError):
+        return None
 URL_EXFIL_RULE = AgentRule(
     "AGENT-EXFIL-002", "Secret referenced in an outbound URL / markdown image",
     FindingSeverity.CRITICAL, 9.0,
@@ -480,7 +530,7 @@ WEBHOOK_EXFIL_RULE = AgentRule(
     "References a paste bin, chat webhook, or out-of-band collaborator endpoint — common exfiltration sinks for stolen data.",
     "Remove the endpoint. Agent artifacts should not post to paste/webhook/OOB services.",
 )
-GENERIC_TEXT_RULES: List[AgentRule] = [EXFIL_RULE, URL_EXFIL_RULE, WEBHOOK_EXFIL_RULE, OBF_RULE, SECRET_RULE, DESTRUCT_RULE]
+GENERIC_TEXT_RULES: List[AgentRule] = [EXFIL_RULE, URL_EXFIL_RULE, WEBHOOK_EXFIL_RULE, OBF_RULE, SECRET_RULE, SECRET2_RULE, DESTRUCT_RULE]
 
 # MCP server configs
 MCP_RULES: List[AgentRule] = [
@@ -1085,6 +1135,7 @@ class AgentSupplyChainScanner(BaseScanner):
         findings += self._check_frontmatter(text, fp, artifact)
         findings += self._check_memory_poisoning(text, fp, artifact)
         findings += self._check_staged_payload(text, fp, artifact)
+        findings += self._check_jwt_secrets(text, fp, artifact)
         if not quick_mode:
             findings += self._check_b64(text, fp, artifact)
         return self._dedupe(findings)
@@ -1159,11 +1210,13 @@ class AgentSupplyChainScanner(BaseScanner):
                 parts += [f"{k}={v}" for k, v in env.items()]
             joined = " ".join(p for p in parts if p)
             loc = f"{fp} » server:{name}"
-            for rule in MCP_RULES + [SECRET_RULE, EXFIL_RULE]:
+            for rule in MCP_RULES + [SECRET_RULE, SECRET2_RULE, EXFIL_RULE]:
                 if rule.pattern:
                     m = rule.pattern.search(joined)
                     if m:
-                        out.append(self._mk(rule, loc, "mcp-config", self._redact(m.group(0))))
+                        evidence = self._mask_secret(m.group(0)) if rule.secret else self._redact(m.group(0))
+                        out.append(self._mk(rule, loc, "mcp-config", evidence))
+            out += self._check_jwt_secrets(joined, fp, "mcp-config", loc_override=loc)
             out += self._check_mcp_env_exfil(name, cfg, fp)
             out += self._check_mcp_remote_source(name, cfg, fp)
         return out
@@ -1318,7 +1371,7 @@ class AgentSupplyChainScanner(BaseScanner):
             nname, host, ev = direct
             snippet = f"node {nname!r} embeds a hardcoded key in an outbound request to external host {host}"
             return [self._mk(N8N_CRED_EXFIL_RULE, f"{fp} » node:{nname}", "n8n-workflow",
-                             f"{snippet} ({self._redact(ev)})")]
+                             f"{snippet} ({self._mask_secret(ev)})")]
         if cred_node is not None and oob_sink is not None:
             sink_name, sink_host = oob_sink
             snippet = (f"credential read in node {cred_node!r} paired with POST to "
@@ -1415,7 +1468,8 @@ class AgentSupplyChainScanner(BaseScanner):
             if not m:
                 continue
             line_no = text.count("\n", 0, m.start()) + 1
-            findings.append(self._finding(rule, fp, artifact, self._redact(m.group(0)), line_no))
+            evidence = self._mask_secret(m.group(0)) if rule.secret else self._redact(m.group(0))
+            findings.append(self._finding(rule, fp, artifact, evidence, line_no))
         return findings
 
     def _check_invisible(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
@@ -1797,10 +1851,47 @@ class AgentSupplyChainScanner(BaseScanner):
         finding.raw_data["line"] = line_no
         return finding
 
+    def _check_jwt_secrets(self, text: str, fp: Path, artifact: str,
+                           loc_override: Optional[str] = None) -> List[ScanFinding]:
+        """AGENT-SECRET-002 (Supabase service_role JWT).
+
+        Supabase API keys are JWTs that are identical in shape; only the decoded
+        `role` claim tells the RLS-bypassing SERVICE_ROLE secret apart from the
+        publishable ANON key. We decode each JWT payload and flag ONLY a
+        service_role token — so a hardcoded anon key (safe to ship) and ordinary
+        example JWTs never trip the rule.
+        """
+        out: List[ScanFinding] = []
+        for m in _JWT_RE.finditer(text):
+            decoded = _b64url_decode(m.group(0).split(".")[1])
+            if decoded is None or not _JWT_SERVICE_ROLE.search(decoded):
+                continue
+            snippet = "Supabase service_role JWT (RLS-bypassing): " + self._mask_secret(m.group(0))
+            if loc_override is not None:
+                out.append(self._mk(SECRET2_RULE, loc_override, artifact, snippet))
+            else:
+                line_no = text.count("\n", 0, m.start()) + 1
+                out.append(self._finding(SECRET2_RULE, fp, artifact, snippet, line_no))
+        return out
+
     @staticmethod
     def _redact(s: str) -> str:
         s = " ".join(s.split())
         return s[:97] + "..." if len(s) > 100 else s
+
+    @staticmethod
+    def _mask_secret(value: str) -> str:
+        """Mask a detected credential so the scanner never echoes it in plaintext.
+
+        Keeps only a 4-char leading prefix (enough to recognise the credential
+        *type* — AKIA, ghp_, sk_l(ive), eyJ…) plus the total length, dropping the
+        secret body entirely. A reviewer can locate and identify the leak without
+        the output itself becoming a second copy of the credential.
+        """
+        v = "".join(value.split())
+        if len(v) <= 8:
+            return "[redacted]"
+        return f"{v[:4]}…[redacted, {len(v)} chars]"
 
     @staticmethod
     def _dedupe(findings: List[ScanFinding]) -> List[ScanFinding]:
