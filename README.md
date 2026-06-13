@@ -145,6 +145,9 @@ python src/cli.py scan -s npm ./suspicious-package
 # Export to JSON for CI/CD
 python src/cli.py scan . -o security-report.json
 
+# Machine-readable JSON to stdout (CI mode) — pipe straight to jq
+python src/cli.py scan -s agent --json ./skills | jq '.summary'
+
 # Live probe a URL for exploits
 python src/cli.py live https://target.com
 
@@ -252,6 +255,51 @@ appears in the JSON report (`-o report.json`) and is shown inline for any non-`h
 scanners' findings (CVE/secret matches) are deterministic and default to `high`, so a threshold never
 hides them.
 
+**Machine-readable JSON (`--json`, CI mode).** `--json` writes **one** JSON document to *stdout* and
+suppresses every other line (no banner, progress, panels, or summary — errors go to *stderr*), so it
+pipes straight into `jq` or a CI step. Exit code is `1` when any finding is reported, `0` when clean.
+The schema is a stable contract: within a `schema_version` major, fields are only **added**, never
+renamed or removed.
+
+```jsonc
+{
+  "schema_version": "1.0",
+  "tool":    { "name": "shellockolm", "version": "3.0.0" },
+  "scan": {
+    "time": "2026-06-13T12:08:49",   // ISO-8601, local time
+    "target": "/abs/path/scanned",
+    "min_confidence": "low",          // the --min-confidence in effect
+    "scanners": ["agent"],            // scanner names that ran
+    "duration_seconds": 0.0139
+  },
+  "summary": {
+    "total_findings": 1,
+    "by_severity": { "critical": 0, "high": 1, "medium": 0, "low": 0, "info": 0 },
+    "findings_suppressed": 0,          // dropped by a .shellockolmignore rule allowlist
+    "findings_below_confidence": 0     // hidden by --min-confidence
+  },
+  "findings": [                        // sorted CRITICAL → INFO
+    {
+      "id": "AGENT-PI-007",            // CVE id, or AGENT-* rule id for agent findings
+      "title": "ASCII smuggling via Unicode Tags block",
+      "severity": "HIGH",              // CRITICAL | HIGH | MEDIUM | LOW | INFO
+      "confidence": "high",            // high | medium | low
+      "cvss_score": 8.2,
+      "scanner": "agent",
+      "file_path": "…/SKILL.md:3",
+      "package": "agent-skill",
+      "version": "n/a",
+      "patched_version": null,
+      "description": "…",
+      "remediation": "…"
+    }
+  ],
+  "errors": [ /* { "scanner": "...", "message": "..." } */ ]
+}
+```
+
+Add `-o report.json` alongside `--json` to also persist the identical document to a file.
+
 </details>
 
 <details>
@@ -298,15 +346,16 @@ Finds leaked credentials in code, configs, and environment files:
 
 ```yaml
 # GitHub Actions
-- name: Security Scan
+- name: Vet agent skills/MCP (fails the build on any finding)
   run: |
     pip install -r requirements.txt
-    python src/cli.py scan . -o results.json
+    python src/cli.py scan -s agent --json --min-confidence high ./skills | tee results.json
 ```
 
+- **`--json` stdout mode** — one stable, documented JSON document for `jq`/CI piping
 - **SARIF export** for GitHub Code Scanning
-- **JSON reports** for automated processing
-- **Exit codes** for build failures on criticals
+- **JSON reports** (`-o results.json`) for automated processing
+- **Exit codes** — non-zero when findings are reported, so the build fails
 - **Watch mode** for continuous monitoring
 
 </details>

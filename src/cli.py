@@ -582,6 +582,100 @@ def print_finding(finding: ScanFinding, verbose: bool = False, show_context: boo
         console.print(f"[command]└─ {finding.remediation}[/command]")
 
 
+# Stable schema version for `scan --json` (CI machine-readable output).
+# Bump the MAJOR only on a breaking change; fields may be ADDED within a major
+# without a bump. The schema is documented in the README ("Machine-readable JSON").
+JSON_SCHEMA_VERSION = "1.0"
+
+_SEVERITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
+
+
+def _severity_str(finding) -> str:
+    """Normalize a finding's severity to an UPPERCASE string."""
+    sev = finding.severity
+    return (sev.value if hasattr(sev, "value") else str(sev)).upper()
+
+
+def build_json_report(
+    results: List[ScanResult],
+    *,
+    target: str,
+    min_confidence: Optional[str] = None,
+    scanners: Optional[List[str]] = None,
+) -> dict:
+    """Assemble the stable, machine-readable scan document (``schema_version`` 1.0).
+
+    Emitted by ``scan --json`` for CI pipelines. The shape is a contract: within a
+    given major ``schema_version`` fields are only ADDED, never renamed or removed.
+    Findings are sorted CRITICAL→INFO for deterministic output. The full schema is
+    documented in the README.
+    """
+    by_severity = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+    pairs = []  # (result, finding, severity_str)
+    for r in results:
+        for f in r.findings:
+            sev = _severity_str(f)
+            key = sev.lower()
+            if key in by_severity:
+                by_severity[key] += 1
+            pairs.append((r, f, sev))
+
+    pairs.sort(key=lambda t: _SEVERITY_ORDER.get(t[2], 5))
+
+    findings_json = [
+        {
+            # For CVE scanners this is the CVE id; for the agent scanner it is the
+            # AGENT-* rule id. Always the stable identifier for the detection.
+            "id": f.cve_id,
+            "title": f.title,
+            "severity": sev,
+            "confidence": getattr(f, "confidence", "high"),
+            "cvss_score": f.cvss_score,
+            "scanner": r.scanner_name,
+            "file_path": f.file_path,
+            "package": f.package,
+            "version": f.version,
+            "patched_version": f.patched_version,
+            "description": f.description,
+            "remediation": f.remediation,
+        }
+        for (r, f, sev) in pairs
+    ]
+
+    errors = [
+        {"scanner": r.scanner_name, "message": str(e)}
+        for r in results
+        for e in r.errors
+    ]
+
+    return {
+        "schema_version": JSON_SCHEMA_VERSION,
+        "tool": {"name": "shellockolm", "version": __version__},
+        "scan": {
+            "time": datetime.now().isoformat(),
+            "target": target,
+            "min_confidence": min_confidence,
+            "scanners": list(scanners) if scanners is not None
+            else sorted({r.scanner_name for r in results}),
+            "duration_seconds": round(sum(r.duration_seconds for r in results), 4),
+        },
+        "summary": {
+            "total_findings": len(findings_json),
+            "by_severity": by_severity,
+            # Findings removed by a .shellockolmignore rule allowlist.
+            "findings_suppressed": sum(
+                r.stats.get("findings_suppressed", 0) for r in results
+            ),
+            # Findings hidden by the --min-confidence threshold.
+            "findings_below_confidence": sum(
+                r.stats.get("findings_below_confidence", 0) for r in results
+            ),
+        },
+        "findings": findings_json,
+        "errors": errors,
+    }
+
+
 def print_summary(results: List[ScanResult], output_json: Optional[str] = None):
     """Print scan summary with actionable tips"""
     total_findings = sum(len(r.findings) for r in results)
@@ -690,6 +784,11 @@ def scan(
     max_depth: int = typer.Option(10, "--depth", "-d", help="Maximum directory depth"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed findings"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Save JSON report to file"),
+    json_output: bool = typer.Option(
+        False, "--json",
+        help="Emit one machine-readable JSON document to stdout (CI mode); "
+             "suppresses all human output. Schema is documented in the README.",
+    ),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
     quick: bool = typer.Option(False, "--quick", help="Quick mode: only check package versions (fast!)"),
     min_confidence: str = typer.Option(
@@ -708,8 +807,14 @@ def scan(
         shellockolm scan -s react ./            # Use only React scanner
         shellockolm scan -s agent ./SKILL.md    # Vet an AI agent skill/MCP before you install it
         shellockolm scan -o report.json ./      # Export to JSON
+        shellockolm scan -s agent --json ./      # Machine-readable JSON to stdout (CI mode)
         shellockolm scan --quick ./             # Quick scan (package versions only)
     """
+    # --json is CI mode: only the single JSON document may reach stdout, so all
+    # human/rich output (banner, progress, findings, panels, summary) is suppressed.
+    if json_output:
+        quiet = True
+
     if not quiet and not _from_menu:
         print_banner()
     if not quiet:
@@ -717,15 +822,27 @@ def scan(
 
     # Validate path
     if not Path(path).exists():
-        console.print(f"[danger]Error: Path does not exist: {path}[/danger]")
+        msg = f"Error: Path does not exist: {path}"
+        if json_output:
+            # Keep stdout a clean JSON channel; surface the error on stderr.
+            print(msg, file=sys.stderr)
+        else:
+            console.print(f"[danger]{msg}[/danger]")
         raise typer.Exit(1)
 
     # Normalize/validate the confidence threshold (agent-scan only; other scanners'
     # findings are "high" by default and pass any threshold).
     min_confidence = (min_confidence or "low").strip().lower()
     if min_confidence not in {"low", "medium", "high"}:
-        console.print(f"[danger]Unknown --min-confidence: {min_confidence}[/danger]")
-        console.print("[info]Choose one of: low, medium, high[/info]")
+        if json_output:
+            print(
+                f"Unknown --min-confidence: {min_confidence} "
+                "(choose one of: low, medium, high)",
+                file=sys.stderr,
+            )
+        else:
+            console.print(f"[danger]Unknown --min-confidence: {min_confidence}[/danger]")
+            console.print("[info]Choose one of: low, medium, high[/info]")
         raise typer.Exit(1)
 
     results: List[ScanResult] = []
@@ -733,8 +850,15 @@ def scan(
     # Get scanners to run
     if scanner:
         if scanner not in SCANNER_REGISTRY:
-            console.print(f"[danger]Unknown scanner: {scanner}[/danger]")
-            console.print(f"[info]Available: {', '.join(SCANNER_REGISTRY.keys())}[/info]")
+            if json_output:
+                print(
+                    f"Unknown scanner: {scanner} "
+                    f"(available: {', '.join(SCANNER_REGISTRY.keys())})",
+                    file=sys.stderr,
+                )
+            else:
+                console.print(f"[danger]Unknown scanner: {scanner}[/danger]")
+                console.print(f"[info]Available: {', '.join(SCANNER_REGISTRY.keys())}[/info]")
             raise typer.Exit(1)
         scanners_to_run = [get_scanner(scanner)]
     else:
@@ -791,7 +915,8 @@ def scan(
         )
 
         for finding in sorted_findings:
-            print_finding(finding, verbose)
+            if not json_output:
+                print_finding(finding, verbose)
             # Log each finding to session
             if session_logger:
                 session_logger.log_finding({
@@ -831,7 +956,26 @@ def scan(
             f"{min_confidence} (raise sensitivity with --min-confidence low)[/dim]"
         )
 
-    print_summary(results, output)
+    if json_output:
+        # CI mode: assemble the stable JSON document and write ONLY it to stdout
+        # (plain print → no rich markup; ensure_ascii keeps the stream pipe-safe).
+        report = build_json_report(
+            results,
+            target=str(Path(path).resolve()),
+            min_confidence=min_confidence,
+            scanners=[s.NAME for s in scanners_to_run],
+        )
+        json_str = json.dumps(report, indent=2)
+        print(json_str)
+        if output:
+            try:
+                with open(output, "w", encoding="utf-8") as fh:
+                    fh.write(json_str)
+            except OSError as e:
+                # Never corrupt the stdout JSON contract; report file errors on stderr.
+                print(f"shellockolm: could not write {output}: {e}", file=sys.stderr)
+    else:
+        print_summary(results, output)
 
     # Log summary to session
     if session_logger:
