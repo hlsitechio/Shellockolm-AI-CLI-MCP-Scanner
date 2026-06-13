@@ -947,6 +947,57 @@ _COMMAND_EXCLUDED_RULE_IDS: Set[str] = {
 }
 
 
+# --- Severity-context boost (composite scoring) --------------------------------
+# A prompt-injection finding is the attacker's *intent* (an instruction the agent
+# would obey); a data-exfiltration sink in the SAME artifact is the *means* (a
+# channel to ship stolen data off-box). Either alone is a finding; both together
+# in one file is a fully-armed data-theft skill — materially worse than the sum,
+# because the injection now has a wired-up egress path. So in a finalize pass we
+# raise each PI finding that is co-located with an exfil sink one severity notch
+# (capped at CRITICAL). This adds NO new false positives by construction: it only
+# re-weights findings whose two constituent rules BOTH already fired (each having
+# passed its own zero-FP calibration), and it never lowers a severity.
+#
+# INJECTION rules = the intent. Every AGENT-PI-* rule, plus the two PRO injection
+# rules (indirect-injection-via-fetch and tool/skill shadowing).
+_PRO_INJECTION_IDS: Set[str] = {"AGENT-PRO-001", "AGENT-PRO-002"}
+
+# EXFIL-SINK rules = the means: a high-precision, attacker-controlled data-egress
+# channel, or a credential/context exfiltration path. (The MCP/n8n/hook sinks live
+# on structured artifacts that PI text rules never scan, so they can only ever
+# co-locate via the shared base file — which the grouping below already requires —
+# never spuriously across artifact types.)
+#
+# AGENT-EXFIL-001 ("credential value piped to a network sink") is DELIBERATELY NOT
+# a composite sink: its pattern (curl/https + $X_KEY/process.env) is also the exact
+# shape of an ordinary AUTHENTICATED API request — `curl -H "Authorization: Bearer
+# $API_KEY"`, `axios.post(`${GRAPH_API}/${process.env.TOKEN}`)` — which appears in
+# benign skills (calibration over ~2,700 real skills hit varlock, a secrets-handling
+# skill, and whatsapp-cloud-api this way). Using it to escalate would amplify those
+# pre-existing broad-heuristic findings to CRITICAL on benign files. The sinks below
+# (a secret smuggled into an outbound URL, a paste/webhook/OOB host, a context
+# exfil, the structured credential-egress rules) are unambiguous attacker egress.
+_EXFIL_SINK_IDS: Set[str] = {
+    "AGENT-EXFIL-002",   # secret referenced in an outbound URL / markdown image
+    "AGENT-EXFIL-003",   # paste / webhook / out-of-band service
+    "AGENT-PRO-003",     # conversation / context exfiltration
+    "AGENT-MCP-004",     # broad host credential forwarded to an unrelated MCP server
+    "AGENT-N8N-002",     # n8n credential read paired with an exfil sink
+    "AGENT-HOOK-003",    # Claude Code hook exfiltrates to an out-of-band sink
+}
+
+# Low → high ordering used to move a finding up exactly one notch.
+_SEVERITY_LADDER: List[FindingSeverity] = [
+    FindingSeverity.INFO, FindingSeverity.LOW, FindingSeverity.MEDIUM,
+    FindingSeverity.HIGH, FindingSeverity.CRITICAL,
+]
+
+
+def _is_injection_rule(rule_id: str) -> bool:
+    """True if a finding's rule represents an injected instruction (attack intent)."""
+    return rule_id.startswith("AGENT-PI-") or rule_id in _PRO_INJECTION_IDS
+
+
 class AgentSupplyChainScanner(BaseScanner):
     """Scans agent skills, MCP configs, and n8n workflows for agentic-era threats."""
 
@@ -1051,6 +1102,10 @@ class AgentSupplyChainScanner(BaseScanner):
             elif is_json and '"nodes"' in text and '"connections"' in text:
                 workflows += 1
                 result.findings.extend(self._scan_n8n(fp, text))
+
+        # Composite scoring: escalate PI findings that share a file with an exfil
+        # sink. Runs before finalize_result so the summary counts reflect the boost.
+        self._apply_composite_severity(result.findings)
 
         result = self.finalize_result(result)
         result.stats.update({
@@ -1892,6 +1947,57 @@ class AgentSupplyChainScanner(BaseScanner):
         if len(v) <= 8:
             return "[redacted]"
         return f"{v[:4]}…[redacted, {len(v)} chars]"
+
+    @staticmethod
+    def _artifact_key(file_path: str) -> str:
+        """Normalize a finding's `file_path` down to the underlying artifact file.
+
+        Findings label their location differently per artifact type — text rules use
+        `<path>:<line>`, structured rules use `<path> » server:<name>` / `» node:…`.
+        Stripping both suffixes lets findings in the same file group together. A
+        trailing `:<digits>` is removed (the line number) while a Windows drive
+        colon (`G:\\…`) is preserved because it is never at end-of-string.
+        """
+        base = file_path.split(" » ", 1)[0]
+        return re.sub(r":\d+$", "", base)
+
+    def _apply_composite_severity(self, findings: List[ScanFinding]) -> None:
+        """Severity-context boost: raise a PI finding one notch when an exfil sink
+        is present in the same artifact (see module notes above). Mutates in place;
+        never lowers a severity; annotates what changed for an auditor."""
+        sink_files = {
+            self._artifact_key(f.file_path)
+            for f in findings if f.cve_id in _EXFIL_SINK_IDS
+        }
+        if not sink_files:
+            return
+        last = len(_SEVERITY_LADDER) - 1
+        for f in findings:
+            if not _is_injection_rule(f.cve_id):
+                continue
+            if self._artifact_key(f.file_path) not in sink_files:
+                continue
+            f.raw_data["composite_exfil_sink"] = True
+            try:
+                idx = _SEVERITY_LADDER.index(f.severity)
+            except ValueError:
+                continue
+            if idx < last:
+                f.raw_data["original_severity"] = f.severity.value
+                f.raw_data["severity_boosted"] = True
+                f.severity = _SEVERITY_LADDER[idx + 1]
+                f.cvss_score = min(10.0, round(f.cvss_score + 0.5, 1))
+                f.description += (
+                    " [Composite risk: a data-exfiltration sink occurs in the same "
+                    "artifact — the injected instruction has a wired-up egress path, "
+                    "so severity was raised one level.]"
+                )
+            else:
+                f.raw_data["severity_boosted"] = False
+                f.description += (
+                    " [Composite risk: a data-exfiltration sink occurs in the same "
+                    "artifact (severity already CRITICAL).]"
+                )
 
     @staticmethod
     def _dedupe(findings: List[ScanFinding]) -> List[ScanFinding]:
