@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > Older history (2.0.0 and earlier) lives in [docs/CHANGELOG.md](docs/CHANGELOG.md).
 
+## [Unreleased]
+
+### Added
+- **`scan` exit-code contract + `--fail-on` gate.** Exit codes are now documented
+  and stable — `0` clean, `1` findings, `2` usage/operational error — and
+  `--fail-on critical|high|medium|low|info` gates the build on severity (exit `1`
+  only when a finding at or above that level is present), with `--fail-on none` for
+  report-only runs. A finding below the gate is announced rather than silently
+  passed. Usage errors (bad path, unknown scanner, unknown flag value) now exit `2`
+  instead of `1`, so a flag typo can't masquerade as a clean run. Documented in the
+  README with an 18-test suite (`tests/test_cli_exit_codes.py`).
+
 ## [3.0.0] - 2026-06-10
 
 A correctness, security, and packaging hardening pass. The headline fix:

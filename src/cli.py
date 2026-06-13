@@ -596,6 +596,46 @@ def _severity_str(finding) -> str:
     return (sev.value if hasattr(sev, "value") else str(sev)).upper()
 
 
+# Documented process exit codes for `scan` (the CI contract):
+#   0 = clean   — no findings, or no finding at/above the --fail-on threshold
+#   1 = findings — at least one finding gates the build (see --fail-on)
+#   2 = error    — usage/operational failure (bad path, unknown scanner/flag value)
+EXIT_OK = 0
+EXIT_FINDINGS = 1
+EXIT_ERROR = 2
+
+# --fail-on values that mean "never fail the build on findings" (report-only).
+_FAIL_ON_NEVER = {"none", "never", "off"}
+# Every accepted --fail-on value: a severity name or a report-only alias.
+_FAIL_ON_CHOICES = {"critical", "high", "medium", "low", "info"} | _FAIL_ON_NEVER
+
+
+def _findings_gate_failure(all_findings, fail_on: Optional[str]) -> bool:
+    """Whether the scan should exit ``EXIT_FINDINGS`` given the ``--fail-on`` gate.
+
+    * ``fail_on is None`` — legacy default: ANY finding fails the build.
+    * ``fail_on`` in :data:`_FAIL_ON_NEVER` — report-only: findings never fail.
+    * otherwise — fail only when a finding's severity is at or above the named
+      threshold (CRITICAL is the most severe, INFO the least).
+
+    ``fail_on`` is expected pre-validated/normalized; an unknown value defaults to
+    failing (never silently passes) but the CLI rejects it with ``EXIT_ERROR`` first.
+    """
+    if not all_findings:
+        return False
+    if fail_on is None:
+        return True
+    fo = fail_on.strip().lower()
+    if fo in _FAIL_ON_NEVER:
+        return False
+    threshold = _SEVERITY_ORDER.get(fo.upper())
+    if threshold is None:
+        return True
+    return any(
+        _SEVERITY_ORDER.get(_severity_str(f), 5) <= threshold for f in all_findings
+    )
+
+
 def build_json_report(
     results: List[ScanResult],
     *,
@@ -822,6 +862,13 @@ def scan(
         help="Minimum agent-scan detection confidence to report: low|medium|high "
              "(low=show all; high=structural/signature matches only)",
     ),
+    fail_on: Optional[str] = typer.Option(
+        None, "--fail-on",
+        help="Gate the exit code on severity: exit 1 only when a finding at or above "
+             "this level is present (critical|high|medium|low|info), or 'none' to "
+             "never fail on findings (report-only). Default: any finding exits 1. "
+             "Usage/operational errors always exit 2.",
+    ),
     _from_menu: bool = False,  # Internal: skip banner when called from menu
 ):
     """
@@ -834,7 +881,11 @@ def scan(
         shellockolm scan -s agent ./SKILL.md    # Vet an AI agent skill/MCP before you install it
         shellockolm scan -o report.json ./      # Export to JSON
         shellockolm scan -s agent --json ./      # Machine-readable JSON to stdout (CI mode)
+        shellockolm scan -s agent --fail-on high ./  # Exit 1 only on HIGH+ findings
         shellockolm scan --quick ./             # Quick scan (package versions only)
+
+    Exit codes: 0 = clean (no finding at/above --fail-on), 1 = findings gate the
+    build, 2 = usage/operational error (bad path, unknown scanner or flag value).
     """
     # --json is CI mode: only the single JSON document may reach stdout, so all
     # human/rich output (banner, progress, findings, panels, summary) is suppressed.
@@ -854,7 +905,7 @@ def scan(
             print(msg, file=sys.stderr)
         else:
             console.print(f"[danger]{msg}[/danger]")
-        raise typer.Exit(1)
+        raise typer.Exit(EXIT_ERROR)
 
     # Normalize/validate the confidence threshold (agent-scan only; other scanners'
     # findings are "high" by default and pass any threshold).
@@ -869,7 +920,23 @@ def scan(
         else:
             console.print(f"[danger]Unknown --min-confidence: {min_confidence}[/danger]")
             console.print("[info]Choose one of: low, medium, high[/info]")
-        raise typer.Exit(1)
+        raise typer.Exit(EXIT_ERROR)
+
+    # Normalize/validate the --fail-on severity gate (a bad value is a usage error,
+    # so it exits EXIT_ERROR, never the findings code).
+    if fail_on is not None:
+        fail_on = fail_on.strip().lower()
+        if fail_on not in _FAIL_ON_CHOICES:
+            msg = (
+                f"Unknown --fail-on: {fail_on} "
+                "(choose one of: critical, high, medium, low, info, none)"
+            )
+            if json_output:
+                print(msg, file=sys.stderr)
+            else:
+                console.print(f"[danger]{msg}[/danger]")
+                console.print("[info]Choose one of: critical, high, medium, low, info, none[/info]")
+            raise typer.Exit(EXIT_ERROR)
 
     results: List[ScanResult] = []
 
@@ -885,7 +952,7 @@ def scan(
             else:
                 console.print(f"[danger]Unknown scanner: {scanner}[/danger]")
                 console.print(f"[info]Available: {', '.join(SCANNER_REGISTRY.keys())}[/info]")
-            raise typer.Exit(1)
+            raise typer.Exit(EXIT_ERROR)
         scanners_to_run = [get_scanner(scanner)]
     else:
         scanners_to_run = get_all_scanners()
@@ -1035,9 +1102,23 @@ def scan(
         duration = sum(r.duration_seconds for r in results)
         session_logger.log_summary(total_findings, critical, high, duration)
 
-    # Exit with error if vulnerabilities found
-    if all_findings:
-        raise typer.Exit(1)
+    # Exit-code contract (documented): 0 clean, 1 findings (per --fail-on), 2 error.
+    # A bare finding count no longer decides the code: the --fail-on gate does, so
+    # CI can choose to fail only on HIGH+ (or never, for a report-only run).
+    gate_fail = _findings_gate_failure(all_findings, fail_on)
+    if all_findings and not gate_fail and not quiet:
+        # Findings exist but the gate keeps the exit at 0 — say so, never silently.
+        if fail_on in _FAIL_ON_NEVER:
+            console.print(
+                "[dim]✔ Exit 0: --fail-on none (report-only; findings do not fail "
+                "the build)[/dim]"
+            )
+        else:
+            console.print(
+                f"[dim]✔ Exit 0: no finding at or above --fail-on {fail_on}[/dim]"
+            )
+    if gate_fail:
+        raise typer.Exit(EXIT_FINDINGS)
 
 
 # ─────────────────────────────────────────────────────────────────

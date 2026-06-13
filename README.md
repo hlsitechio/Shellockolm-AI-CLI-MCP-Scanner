@@ -257,9 +257,29 @@ hides them.
 
 **Machine-readable JSON (`--json`, CI mode).** `--json` writes **one** JSON document to *stdout* and
 suppresses every other line (no banner, progress, panels, or summary — errors go to *stderr*), so it
-pipes straight into `jq` or a CI step. Exit code is `1` when any finding is reported, `0` when clean.
-The schema is a stable contract: within a `schema_version` major, fields are only **added**, never
-renamed or removed.
+pipes straight into `jq` or a CI step. The exit code follows the contract below (default: any finding
+exits `1`). The schema is a stable contract: within a `schema_version` major, fields are only **added**,
+never renamed or removed.
+
+**Exit codes (`scan`).** Documented and stable, so CI can branch on them:
+
+| Code | Meaning |
+|------|---------|
+| `0`  | Clean — no findings, or no finding at/above the `--fail-on` threshold |
+| `1`  | Findings gate the build (default: **any** finding; or per `--fail-on`) |
+| `2`  | Usage/operational error — bad path, unknown scanner, or unknown flag value |
+
+`--fail-on critical|high|medium|low|info` gates the build on severity: it exits `1` only when a finding
+at or **above** that level is present (so `--fail-on high` fails on HIGH/CRITICAL but passes on
+MEDIUM/LOW). `--fail-on none` is report-only — findings are still reported but never fail the build.
+With no `--fail-on`, any finding exits `1`. A finding present but below the gate is announced (never
+silently passed). Invalid input always exits `2`, never `1`, so a flag typo can't masquerade as a clean
+run.
+
+```bash
+shellockolm scan -s agent --fail-on high ./skills   # fail the build only on HIGH+ findings
+shellockolm scan -s agent --fail-on none ./skills   # report findings but always exit 0
+```
 
 ```jsonc
 {
@@ -375,7 +395,7 @@ Finds leaked credentials in code, configs, and environment files:
 - **`--json` stdout mode** — one stable, documented JSON document for `jq`/CI piping
 - **SARIF export** for GitHub Code Scanning
 - **JSON reports** (`-o results.json`) for automated processing
-- **Exit codes** — non-zero when findings are reported, so the build fails
+- **Exit codes** — `0` clean / `1` findings / `2` error, with `--fail-on <severity>` to gate the build by severity (`none` = report-only)
 - **Watch mode** for continuous monitoring
 
 </details>
