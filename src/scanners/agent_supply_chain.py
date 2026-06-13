@@ -18,7 +18,8 @@ tool poisoning / remote-script execution, rug-pull (unpinned) MCP servers,
 raw-URL / gist / paste / IP-literal MCP launch sources,
 invisible-character, Unicode-Tags ASCII smuggling, bidirectional "Trojan Source"
 text-reordering (CVE-2021-42574), HTML-comment-concealed instructions,
-permission/safety-bypass flags in skill frontmatter, and hardcoded credentials.
+permission/safety-bypass flags in skill frontmatter, spoofed harness tool-output /
+system-reminder framing tokens, and hardcoded credentials.
 Pattern-based and 100% offline, consistent with the rest of
 Shellockolm — a seatbelt you run *before* you install an untrusted skill or server.
 """
@@ -379,6 +380,46 @@ _PI016_SUSPICIOUS_PATH = re.compile(
     r"|^/"                         # POSIX absolute
     r"|(?:^|[\\/])\.[\w-]"         # a hidden dot-segment (.hidden/, foo/.ssh/)
 )
+
+
+# --- AGENT-PI-017: spoofed harness tool-output / system-reminder markers --------
+# An agent's runtime wraps privileged, higher-trust content in structural framing
+# tokens the model is trained to treat as coming from the HARNESS, not from user
+# content: `<system-reminder>` blocks the runtime injects, and the tool-use framing
+# (`<function_calls>` / `<invoke name="…">` / `<function_results>`, and the
+# `<tool_use>` / `<tool_result>` content-block tags). An artifact that EMBEDS one of
+# these raw tags is spoofing that boundary — it can fabricate a "system reminder"
+# the model obeys, or forge a tool *result* (claiming a check passed / a command
+# succeeded / a file is safe) or a tool *call* to steer the agent's next action.
+# This is distinct from AGENT-PI-009 (forged chat-template control tokens like
+# `<|im_start|>` / `<<SYS>>` / `[INST]`): those spoof a chat ROLE boundary, while
+# these spoof HARNESS/tool-runtime output.
+#
+# The tag must appear RAW to spoof — wrapped in inline backticks (`<system-reminder>`)
+# or HTML-escaped (`&lt;system-reminder&gt;`) it is a documentation reference, and the
+# model reads it as a quoted string, not as live framing. Escaped forms can't match
+# (no literal `<`); inline-backtick and fenced-code-block contexts are suppressed by
+# the gate so a skill that legitimately *documents* the format is never flagged. The
+# `tool_*` family requires a `_`/`-` separator so ordinary camelCase identifiers
+# (`Vec<ToolCall>`, a JSX `<ToolResult/>`) never match. Calibrated to ZERO false
+# positives across 8,909 real skill/instruction/command files (the one raw hit was a
+# genuine leaked tool-call transcript embedded in a published command template).
+_PI017_TOKEN = re.compile(
+    r"<\s*/?\s*"
+    r"(?:"
+    r"system[-_]reminder"                                            # harness system reminder
+    r"|antml:(?:function_calls|invoke|parameter|function_results)"   # literal internal namespace
+    r"|function[-_]?calls?"                                          # tool-call framing
+    r"|function[-_]?results?"                                        # tool-result framing
+    r"|tool[_-]use"                                                  # <tool_use> content block
+    r"|tool[_-]results?"                                             # <tool_result> content block
+    r"|invoke"                                                       # <invoke name="…">
+    r")"
+    r"(?=[\s/>=]|$)",
+    re.IGNORECASE,
+)
+# Fenced code block (``` … ``` or ~~~ … ~~~) — content shown as a literal example.
+_PI017_FENCE = re.compile(r"(?:^|\n)[ \t]*(```+|~~~+)[^\n]*\n.*?\n[ \t]*\1", re.DOTALL)
 
 
 # Free-text instruction content (skills, tool descriptions)
@@ -1190,6 +1231,7 @@ class AgentSupplyChainScanner(BaseScanner):
         findings += self._check_frontmatter(text, fp, artifact)
         findings += self._check_memory_poisoning(text, fp, artifact)
         findings += self._check_staged_payload(text, fp, artifact)
+        findings += self._check_tool_output_spoof(text, fp, artifact)
         findings += self._check_jwt_secrets(text, fp, artifact)
         if not quick_mode:
             findings += self._check_b64(text, fp, artifact)
@@ -1867,6 +1909,57 @@ class AgentSupplyChainScanner(BaseScanner):
                 "the agent to obey instructions in a hidden, out-of-tree, or concealed file.",
             )
             snippet = f"staged cross-file payload ({reason}): " + self._redact(cue)
+            return [self._finding(rule, fp, artifact, snippet, line_no)]
+        return []
+
+    def _check_tool_output_spoof(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
+        """AGENT-PI-017: spoofed harness tool-output / system-reminder markers.
+
+        Flags a model-facing artifact that embeds a RAW harness framing token —
+        `<system-reminder>`, the tool-use framing (`<function_calls>` /
+        `<invoke name="…">` / `<function_results>`), or the `<tool_use>` /
+        `<tool_result>` content-block tags. These tokens denote runtime-injected,
+        higher-trust content; embedding one in an artifact spoofs that boundary to
+        fabricate a system reminder, forge a tool result ("the scan passed", "the
+        command succeeded"), or forge a tool call that steers the agent's next move.
+
+        Documentation references are NOT flagged: an HTML-escaped form
+        (`&lt;system-reminder&gt;`) can't match (no literal `<`), and a token inside
+        inline backticks or a fenced code block is suppressed by the gate — a skill
+        that legitimately explains the tool-call format reads as a quoted string, not
+        live framing.
+        """
+        fences = [(m.start(), m.end()) for m in _PI017_FENCE.finditer(text)]
+        for m in _PI017_TOKEN.finditer(text):
+            pos = m.start()
+            # Suppress fenced-code examples (literal illustration of the format).
+            if any(a <= pos < b for a, b in fences):
+                continue
+            # Suppress inline-code references: an odd backtick count before the match
+            # on its own line means the token sits inside `...` inline code.
+            line_start = text.rfind("\n", 0, pos) + 1
+            if text[line_start:pos].count("`") % 2 == 1:
+                continue
+            line_no = text.count("\n", 0, pos) + 1
+            rule = AgentRule(
+                "AGENT-PI-017", "Spoofed harness tool-output / system-reminder marker",
+                FindingSeverity.HIGH, 8.5, None,
+                "The artifact embeds a raw harness framing token (a <system-reminder> "
+                "block, or tool-use framing such as <function_calls> / <invoke> / "
+                "<function_results> / <tool_use> / <tool_result>). The agent runtime "
+                "uses these to wrap privileged, higher-trust content it injects itself; "
+                "an artifact that emits one spoofs that boundary — it can fabricate a "
+                "'system reminder' the model treats as authoritative, forge a tool "
+                "result (claiming a check passed, a command succeeded, or a file is "
+                "safe) to mislead the agent, or forge a tool call to drive its next "
+                "action. (A backticked or fenced reference that merely documents the "
+                "format is not flagged.)",
+                "Remove the tag. Skill / instruction / command files are plain content "
+                "and must never emit harness tool-output or system-reminder framing; "
+                "show the format inside a code fence or inline backticks if you need to "
+                "document it.",
+            )
+            snippet = "spoofed harness marker: " + self._redact(m.group(0).strip())
             return [self._finding(rule, fp, artifact, snippet, line_no)]
         return []
 
