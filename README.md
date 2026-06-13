@@ -234,6 +234,24 @@ AGENT-MCP-004,AGENT-HOOK-001 vendor/**  # several rules, one shared path scope
 Path-pattern lines (e.g. `node_modules/`, `*.min.js`) keep working exactly as before — only lines
 whose first token is an uppercase rule ID are read as suppressions.
 
+**Tuning by detection confidence.** Every finding carries a `confidence` of `high`, `medium`, or
+`low` — *separate from* its severity. `high` means a structural / signature / decoded-secret match (a
+deterministic true positive: Unicode-Tags smuggling, a hardcoded key, a forged role token, a paste/
+webhook sink). `medium`/`low` mark the broader natural-language heuristics that match the real attack
+phrasing but can also fire on benign prose (e.g. a generic "when the user does X…" trigger is `low`).
+Filter with `--min-confidence`:
+
+```bash
+python src/cli.py scan -s agent ./skills                      # low (default): every finding
+python src/cli.py scan -s agent ./skills --min-confidence medium  # drop the broadest heuristics
+python src/cli.py scan -s agent ./skills --min-confidence high     # structural/signature matches only — a high-signal CI gate
+```
+
+Findings hidden by the threshold are reported as a count (never silently dropped), `confidence`
+appears in the JSON report (`-o report.json`) and is shown inline for any non-`high` finding. Other
+scanners' findings (CVE/secret matches) are deterministic and default to `high`, so a threshold never
+hides them.
+
 </details>
 
 <details>

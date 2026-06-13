@@ -49,6 +49,14 @@ class ScanFinding:
     references: List[str] = field(default_factory=list)
     remediation: Optional[str] = None
     detection_method: str = "lockfile"  # lockfile, live, manifest
+    # Detection certainty, distinct from severity (impact). "high" = a structural /
+    # signature / decoded-secret match that is a deterministic true positive;
+    # "medium"/"low" = a broader natural-language heuristic that can occasionally
+    # match benign prose. Defaults to "high" so non-agent findings (CVE matches,
+    # secrets, etc.) — which are deterministic — are never filtered by a confidence
+    # threshold. Surfaced in output and filterable via the agent scanner's
+    # min_confidence / the CLI's --min-confidence.
+    confidence: str = "high"
     raw_data: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -107,6 +115,7 @@ class ScanResult:
                     "file_path": f.file_path,
                     "description": f.description,
                     "exploit_difficulty": f.exploit_difficulty,
+                    "confidence": f.confidence,
                     "remediation": f.remediation,
                 }
                 for f in self.findings

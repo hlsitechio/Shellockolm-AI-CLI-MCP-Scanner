@@ -124,6 +124,32 @@ class AgentRule:
     # secret in plaintext. Non-secret rules keep their full (truncated) evidence so
     # a reviewer can read the actual injection text.
     secret: bool = False
+    # Detection certainty (independent of severity). "high" — a structural parse,
+    # invisible-character / signature, or decoded-secret match: a deterministic true
+    # positive. "medium" — a natural-language phrasing heuristic that matches the
+    # real attack shape but can occasionally fire on benign prose. "low" — the
+    # broadest heuristics (e.g. a generic "when the user does X" conditional). Most
+    # rules — every structural / stealth-channel check built inline — keep the
+    # default "high"; only the broad-NL constant rules below set a lower value.
+    # Surfaced on findings and used by min_confidence / --min-confidence filtering.
+    confidence: str = "high"
+
+
+# Confidence ordering, low → high. Used to compare a finding's confidence against a
+# requested minimum threshold (min_confidence / --min-confidence). An unknown value
+# is treated as the lowest tier so it is never silently dropped by a strict filter.
+_CONFIDENCE_ORDER: Dict[str, int] = {"low": 0, "medium": 1, "high": 2}
+
+
+def _confidence_rank(value: str) -> int:
+    """Numeric rank for a confidence label (unknown → lowest)."""
+    return _CONFIDENCE_ORDER.get(str(value).strip().lower(), 0)
+
+
+def _normalize_confidence(value: str) -> str:
+    """Canonicalize a confidence label to one of low|medium|high (unknown → 'low')."""
+    v = str(value).strip().lower()
+    return v if v in _CONFIDENCE_ORDER else "low"
 
 
 def _c(p: str) -> re.Pattern:
@@ -430,6 +456,7 @@ PROMPT_INJECTION_RULES: List[AgentRule] = [
         _c(r"\b(ignore|disregard|forget)\b[^\n]{0,40}\b(previous|prior|above|earlier|all)\b[^\n]{0,25}\b(instruction|prompt|rule|context|message)"),
         "Language that tries to override the agent's prior instructions — a classic prompt-injection pattern.",
         "Remove the override. A skill should describe a capability, not redirect the agent.",
+        confidence="medium",
     ),
     AgentRule(
         "AGENT-PI-002", "Hidden conditional trigger",
@@ -437,6 +464,7 @@ PROMPT_INJECTION_RULES: List[AgentRule] = [
         _c(r"\bwhen\b[^\n]{0,30}\b(the\s+)?user\b[^\n]{0,40}\b(open|visit|navigat|run|install|paste|type|ask|send)"),
         "A 'when the user does X, do Y' trigger — used so a skill acts only under conditions that evade review.",
         "Review the conditional behavior; legitimate skills rarely need hidden user-activity triggers.",
+        confidence="low",
     ),
     AgentRule(
         "AGENT-PI-003", "Secret-exfiltration instruction",
@@ -458,6 +486,7 @@ PROMPT_INJECTION_RULES: List[AgentRule] = [
         _c(r"\bsilently\b|\bcovertly\b|(do\s?n.?t|don't|never|without)\s+(let|tell|inform|notify|alert|mention)[^\n]{0,25}(user|human|them|operator|owner)|without[^\n]{0,15}(knowing|noticing)|keep\s+(this|it)\s+(secret|hidden|quiet)"),
         "Instructs the agent to act covertly or hide what it's doing from the user — a hallmark of a malicious skill.",
         "Remove. Legitimate skills never ask the agent to conceal its actions from the user.",
+        confidence="medium",
     ),
     AgentRule(
         "AGENT-PI-008", "Embedded directive block (MCP tool poisoning)",
@@ -491,6 +520,10 @@ EXFIL_RULE = AgentRule(
     _c(r"(curl|wget|fetch|axios|https?://)[^\n]{0,80}(\$[A-Z][A-Z0-9_]*(KEY|TOKEN|SECRET)|process\.env|os\.environ)"),
     "Code/text that sends an environment secret to a remote endpoint.",
     "Remove the network call or the secret reference. Never transmit env secrets to third-party URLs.",
+    # medium: this shape (a network call referencing $X_KEY/process.env) is also that
+    # of an ordinary AUTHENTICATED API request, so it can fire on benign secret-handling
+    # skills — the reason it is deliberately excluded from the composite-severity sinks.
+    confidence="medium",
 )
 OBF_RULE = AgentRule(
     "AGENT-OBF-001", "Obfuscated payload (base64 decode then execute)",
@@ -563,6 +596,10 @@ DESTRUCT_RULE = AgentRule(
     _c(r"(rm\s+-rf\s+[~/*]|\bmkfs\.|:\(\)\s*\{\s*:\|:|del\s+/[fsq]|format\s+[a-z]:|>\s*/dev/sd)"),
     "A destructive filesystem/disk command is embedded — an agent that runs it could wipe data.",
     "Remove destructive commands; agent artifacts should never instruct mass deletion or disk formatting.",
+    # medium: a destructive command can also appear as a documented example / teaching
+    # snippet in legitimate skill or command prose (the reason it is excluded from
+    # command-file scanning), so the literal match is not always a true positive.
+    confidence="medium",
 )
 WEBHOOK_EXFIL_RULE = AgentRule(
     "AGENT-EXFIL-003", "Exfiltration to a paste / webhook / out-of-band service",
@@ -588,6 +625,10 @@ MCP_RULES: List[AgentRule] = [
         _c(r"\b(npx|uvx|pipx\s+run|bunx)\b[^\n]{0,60}(@latest|-y\b|--yes\b)"),
         "The MCP server is launched from an unpinned/auto-confirmed remote package — vulnerable to rug-pulls (the package mutating after you trust it).",
         "Pin the MCP server package to an exact version and review updates before bumping.",
+        # medium: an unpinned `npx … @latest`/`-y` launch is a real rug-pull risk but is
+        # also an extremely common, intentional way to run an MCP server — not by itself
+        # evidence of malice.
+        confidence="medium",
     ),
     AgentRule(
         "AGENT-MCP-003", "Dangerous execution primitive in MCP config",
@@ -595,6 +636,10 @@ MCP_RULES: List[AgentRule] = [
         _c(r"\b(eval|exec|child_process|os\.system|subprocess|rm\s+-rf|powershell\s+-enc|-encodedcommand)\b"),
         "The MCP configuration invokes a dangerous execution primitive.",
         "Audit the command — an MCP server should run a known binary, not arbitrary eval/exec.",
+        # medium: a bare eval/exec/subprocess keyword in a config is worth surfacing but
+        # can occur in a legitimate launcher path, so it warrants review rather than a
+        # high-certainty verdict.
+        confidence="medium",
     ),
 ]
 
@@ -853,6 +898,10 @@ PRO_RULES: List[AgentRule] = [
         _c(r"\b(fetch|read|load|open|visit|retrieve|download)\b[^\n]{0,50}\b(then|and)\b[^\n]{0,40}\b(follow|do|execute|obey|apply|run|perform)\b"),
         "Instructs the agent to fetch external content and then follow instructions inside it — indirect (second-order) prompt injection.",
         "Treat fetched content as untrusted data, never as instructions. Remove the 'then follow' directive.",
+        # medium: a broad "<fetch/read> … then <do/run>" phrasing heuristic — it matches
+        # benign developer prose ("read the changed files then run the tests"), hence its
+        # exclusion from command-file scanning.
+        confidence="medium",
     ),
     AgentRule(
         "AGENT-PRO-002", "Tool / skill shadowing or redefinition",
@@ -860,6 +909,10 @@ PRO_RULES: List[AgentRule] = [
         _c(r"\b(override|replace|shadow|supersede|redefine|take\s+precedence\s+over|instead\s+of)\b[^\n]{0,30}\b(tool|function|command|skill|server|capability)\b"),
         "Claims to override or replace another tool/skill — tool shadowing, used to hijack a trusted tool's behavior.",
         "Audit the redefinition. Skills should not silently supersede other tools.",
+        # medium: "replace/override … function/command" also matches legitimate prose and
+        # code (e.g. SQL "CREATE OR REPLACE FUNCTION"), so it is a review signal, not a
+        # certain hijack.
+        confidence="medium",
     ),
     AgentRule(
         "AGENT-PRO-003", "Conversation / context exfiltration",
@@ -1096,6 +1149,7 @@ class AgentSupplyChainScanner(BaseScanner):
         recursive: bool = True,
         max_depth: int = 10,
         quick_mode: bool = False,
+        min_confidence: str = "low",
     ) -> ScanResult:
         result = self.create_result(path, scan_type="local")
         root = Path(path)
@@ -1153,6 +1207,11 @@ class AgentSupplyChainScanner(BaseScanner):
         # is removed regardless of any boost it received.
         suppressed = self._apply_rule_suppressions(result.findings, root)
 
+        # Confidence threshold: optionally drop findings below the requested minimum
+        # detection certainty (low → medium → high). Runs last so the count reflects
+        # what survives suppression. Default "low" keeps everything.
+        below_conf = self._apply_confidence_filter(result.findings, min_confidence)
+
         result = self.finalize_result(result)
         result.stats.update({
             "skills_scanned": skills,
@@ -1162,8 +1221,26 @@ class AgentSupplyChainScanner(BaseScanner):
             "commands_scanned": commands,
             "claude_settings_scanned": settings,
             "findings_suppressed": suppressed,
+            "findings_below_confidence": below_conf,
+            "min_confidence": _normalize_confidence(min_confidence),
         })
         return result
+
+    @staticmethod
+    def _apply_confidence_filter(findings: List[ScanFinding], min_confidence: str) -> int:
+        """Drop findings whose confidence is below `min_confidence`.
+
+        Mutates `findings` in place; returns the number removed. A threshold of
+        "low" (the default) or an unrecognized value keeps every finding.
+        """
+        threshold = _confidence_rank(_normalize_confidence(min_confidence))
+        if threshold <= 0:
+            return 0
+        kept = [f for f in findings if _confidence_rank(f.confidence) >= threshold]
+        removed = len(findings) - len(kept)
+        if removed:
+            findings[:] = kept
+        return removed
 
     def _apply_rule_suppressions(self, findings: List[ScanFinding], root: Path) -> int:
         """Remove findings suppressed by `.shellockolmignore` rule-ID directives.
@@ -2038,6 +2115,7 @@ class AgentSupplyChainScanner(BaseScanner):
             references=[],
             remediation=rule.remediation,
             detection_method="agent-scan",
+            confidence=rule.confidence,
             raw_data={"rule": rule.id, "artifact": artifact},
         )
 

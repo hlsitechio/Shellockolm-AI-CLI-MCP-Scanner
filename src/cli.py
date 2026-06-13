@@ -69,18 +69,22 @@ def _is_safe_npm_version(version: str) -> bool:
     return bool(version) and bool(_NPM_VERSION_RE.match(version))
 
 
-def _run_scanner(s, path, *, recursive=True, max_depth=10, quick=False):
-    """Run a scanner's scan_directory, passing quick_mode only if it's supported.
+def _run_scanner(s, path, *, recursive=True, max_depth=10, quick=False, min_confidence=None):
+    """Run a scanner's scan_directory, passing optional kwargs only when supported.
 
-    Not all scanners accept ``quick_mode`` (supply-chain, n8n and clawdbot don't).
-    Rather than catch a blanket ``TypeError`` (which would also swallow real bugs
-    inside a scanner), we inspect the signature and only pass the kwarg when the
-    scanner actually declares it.
+    Not all scanners accept ``quick_mode`` (supply-chain, n8n and clawdbot don't),
+    and only the agent scanner accepts ``min_confidence``. Rather than catch a
+    blanket ``TypeError`` (which would also swallow real bugs inside a scanner), we
+    inspect the signature and only pass a kwarg when the scanner actually declares
+    it. A scanner without ``min_confidence`` (whose findings default to "high"
+    confidence) is therefore never affected by the threshold.
     """
     sig = inspect.signature(s.scan_directory)
     kwargs = {"recursive": recursive, "max_depth": max_depth}
     if quick and "quick_mode" in sig.parameters:
         kwargs["quick_mode"] = True
+    if min_confidence and "min_confidence" in sig.parameters:
+        kwargs["min_confidence"] = min_confidence
     return s.scan_directory(path, **kwargs)
 
 
@@ -549,7 +553,12 @@ def print_finding(finding: ScanFinding, verbose: bool = False, show_context: boo
     console.print(f"[path]│  File: {finding.file_path}[/path]")
     console.print(f"[info]│  Package: {finding.package} @ {finding.version}[/info]")
     console.print(f"[success]│  Fix: {finding.patched_version or 'See remediation'}[/success]")
-    console.print(f"[warning]│  CVSS: {finding.cvss_score} | Difficulty: {finding.exploit_difficulty}[/warning]")
+    # Surface detection confidence when it is not the default "high" (a heuristic
+    # match worth weighing) or always in verbose mode; routine high-confidence CVE
+    # findings stay uncluttered.
+    conf = getattr(finding, "confidence", "high")
+    conf_note = f" | Confidence: {conf.upper()}" if (verbose or conf != "high") else ""
+    console.print(f"[warning]│  CVSS: {finding.cvss_score}{conf_note} | Difficulty: {finding.exploit_difficulty}[/warning]")
 
     # Show context message
     if ctx and ctx.message:
@@ -652,6 +661,7 @@ def print_summary(results: List[ScanResult], output_json: Optional[str] = None):
                         "patched_version": f.patched_version,
                         "file_path": f.file_path,
                         "description": f.description,
+                        "confidence": getattr(f, "confidence", "high"),
                         "remediation": f.remediation,
                     }
                     for f in r.findings
@@ -682,6 +692,11 @@ def scan(
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Save JSON report to file"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
     quick: bool = typer.Option(False, "--quick", help="Quick mode: only check package versions (fast!)"),
+    min_confidence: str = typer.Option(
+        "low", "--min-confidence",
+        help="Minimum agent-scan detection confidence to report: low|medium|high "
+             "(low=show all; high=structural/signature matches only)",
+    ),
     _from_menu: bool = False,  # Internal: skip banner when called from menu
 ):
     """
@@ -703,6 +718,14 @@ def scan(
     # Validate path
     if not Path(path).exists():
         console.print(f"[danger]Error: Path does not exist: {path}[/danger]")
+        raise typer.Exit(1)
+
+    # Normalize/validate the confidence threshold (agent-scan only; other scanners'
+    # findings are "high" by default and pass any threshold).
+    min_confidence = (min_confidence or "low").strip().lower()
+    if min_confidence not in {"low", "medium", "high"}:
+        console.print(f"[danger]Unknown --min-confidence: {min_confidence}[/danger]")
+        console.print("[info]Choose one of: low, medium, high[/info]")
         raise typer.Exit(1)
 
     results: List[ScanResult] = []
@@ -730,7 +753,8 @@ def scan(
         if not quiet:
             progress.update(current=i, item=s.NAME)
 
-        result = _run_scanner(s, path, recursive=recursive, max_depth=max_depth, quick=quick)
+        result = _run_scanner(s, path, recursive=recursive, max_depth=max_depth,
+                              quick=quick, min_confidence=min_confidence)
         results.append(result)
 
         # Track findings by severity
@@ -797,6 +821,14 @@ def scan(
         console.print(
             f"[dim]🔇 {total_suppressed} finding(s) suppressed by "
             f".shellockolmignore rule allowlist[/dim]"
+        )
+
+    # Surface findings hidden by the confidence threshold so it is never silent.
+    total_below_conf = sum(r.stats.get("findings_below_confidence", 0) for r in results)
+    if total_below_conf and not quiet:
+        console.print(
+            f"[dim]🔅 {total_below_conf} finding(s) below --min-confidence "
+            f"{min_confidence} (raise sensitivity with --min-confidence low)[/dim]"
         )
 
     print_summary(results, output)
