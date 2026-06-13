@@ -6,6 +6,7 @@ Your Security Detective with a graphical interface
 🔍 Elementary security for complex codebases
 """
 
+import io
 import sys
 import tkinter as tk
 

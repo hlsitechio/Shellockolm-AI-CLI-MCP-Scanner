@@ -73,18 +73,62 @@ Changelog = "https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/blob/m
 [project.scripts]
 shellockolm = "cli:main"
 shellockolm-scan = "cli:main"
+shellockolm-mcp = "mcp_server:run"
 # Legacy commands (deprecated, kept for backwards compatibility)
 shellockolm-fix = "auto_fix:main"
 shellockolm-patch = "mass_patcher:main"
 shellockolm-malware = "malware_scanner:main"
 shellockolm-github = "github_scanner:main"
 
+# ---------------------------------------------------------------------------
+# Packaging: FLAT install from src/.
+#
+# The source uses flat imports (e.g. `import compat`, `from scanners import ...`,
+# `from vulnerability_database import ...`) with NO `shellockolm.` namespace and
+# NO sys.path manipulation. We therefore install every loose module in src/ as a
+# top-level importable name (py-modules) and let packages.find pick up the
+# `scanners` subpackage (which has an __init__.py). The console-script entry
+# points (cli:main, mcp_server:run, etc.) resolve against these flat names.
+# ---------------------------------------------------------------------------
 [tool.setuptools]
-packages = ["shellockolm"]
-package-dir = {"shellockolm" = "src"}
+package-dir = {"" = "src"}
+py-modules = [
+    "cli",
+    "compat",
+    "scanner",
+    "server",
+    "vulnerability_database",
+    "scan",
+    "scan_simple",
+    "auto_fix",
+    "mass_patcher",
+    "malware_analyzer",
+    "malware_scanner",
+    "secrets_scanner",
+    "security_score",
+    "remediation",
+    "github_actions",
+    "github_advisory",
+    "github_scanner",
+    "ignore_handler",
+    "watch_mode",
+    "progress_tracker",
+    "context_intelligence",
+    "sarif_output",
+    "sbom_generator",
+    "configure_mcp",
+    "dependency_tree",
+    "lockfile_analyzer",
+    "npm_audit",
+    "mcp_server",
+    "gui",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.setuptools.package-data]
-"*" = ["*.md", "*.txt"]
+"*" = ["*.txt"]
 
 [tool.black]
 line-length = 88
@@ -96,7 +140,9 @@ testpaths = ["tests"]
 python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
-addopts = "-v --cov=. --cov-report=html --cov-report=term"
+# Coverage is intentionally NOT in default addopts so the suite runs without
+# pytest-cov installed. Run coverage explicitly with: pytest --cov=src
+addopts = "-v"
 
 [tool.mypy]
 python_version = "3.10"

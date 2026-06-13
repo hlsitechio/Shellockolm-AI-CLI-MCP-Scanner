@@ -18,7 +18,7 @@
 
 ### 🪟 Windows
 ```powershell
-iex (irm https://raw.githubusercontent.com/hlsitechio/shellockolm/main/scripts/install.ps1)
+iex (irm https://raw.githubusercontent.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/main/scripts/install.ps1)
 ```
 **Or:** [Download ZIP](https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/archive/refs/heads/main.zip) → Double-click `scripts/setup.bat`
 
@@ -26,21 +26,21 @@ iex (irm https://raw.githubusercontent.com/hlsitechio/shellockolm/main/scripts/i
 
 ### 🐧 Ubuntu / Debian / Mint
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/scripts/install-debian.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/main/scripts/install-debian.sh | bash
 ```
 
 ---
 
 ### 🏔️ Arch / Manjaro
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/scripts/install-arch.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/main/scripts/install-arch.sh | bash
 ```
 
 ---
 
 ### 🍎 macOS
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/main/scripts/install.sh | bash
 ```
 
 ---
@@ -124,9 +124,10 @@ curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/scripts
 ┌─────────────────────────────────────────────────────────────┐
 │  Shellockolm - Security Detective v1.0                      │
 ├─────────────────────────────────────────────────────────────┤
-│  1   Full Scan           → All 7 scanners, 32 CVEs          │
+│  1   Full Scan           → All 8 scanners, 32 CVEs          │
 │  2   React Scanner       → Server Components RCE            │
 │  3   Next.js Scanner     → Middleware bypass                │
+│  7a  Agent Scanner       → Vet skills/MCP before install   │
 │  17  Deep Malware Scan   → RCE payloads, cryptominers       │
 │  23  Scan for Secrets    → 50+ patterns, high entropy       │
 │  X   QuickFix            → Auto-patch all vulnerabilities   │
@@ -138,17 +139,26 @@ curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/scripts
 # Full security audit
 python src/cli.py scan .
 
-# Scan before installing npm package
-python src/cli.py scan --scanner npm ./suspicious-package
+# Scan before installing npm package (-s is short for --scanner)
+python src/cli.py scan -s npm ./suspicious-package
 
 # Export to JSON for CI/CD
 python src/cli.py scan . -o security-report.json
+
+# Machine-readable JSON to stdout (CI mode) — pipe straight to jq
+python src/cli.py scan -s agent --json ./skills | jq '.summary'
 
 # Live probe a URL for exploits
 python src/cli.py live https://target.com
 
 # Hunt for a specific CVE
 python src/cli.py info CVE-2025-55182
+
+# List CVEs in one category (-c is short for --category)
+python src/cli.py cves -c nextjs
+
+# Launch the interactive shell (also opens when run with no args)
+python src/cli.py shell
 ```
 
 ---
@@ -169,7 +179,7 @@ python src/cli.py info CVE-2025-55182
 ## 🛠️ Complete Features
 
 <details>
-<summary><strong>📊 7 Specialized Scanners</strong></summary>
+<summary><strong>📊 8 Specialized Scanners</strong></summary>
 
 | Scanner | What It Detects | CVEs Covered |
 |---------|----------------|--------------|
@@ -180,8 +190,115 @@ python src/cli.py info CVE-2025-55182
 | **n8n** | Ni8mare unauthenticated RCE, expression injection | CVE-2026-21858, CVE-2025-68613, CVE-2025-68668 |
 | **Supply Chain** | Shai-Hulud worm, eslint-config-prettier compromise | CVE-2025-54313 + 10 campaign CVEs |
 | **Clawdbot/Moltbot** | AI gateway credential leaks, OAuth piggybacking | 4 critical auth bypass patterns |
+| **🤖 Agent Supply Chain** | Prompt injection, secret-exfiltration & tool-poisoning in `SKILL.md` skills, MCP configs, n8n workflows, slash commands & `settings.json` hooks; unpinned (rug-pull) MCP servers; auto-running hook RCE/exfil; invisible-char / Unicode-Tags ASCII smuggling | Agentic-era threat model (offline, pattern-based) |
 
-**Total: 32 unique CVEs tracked**
+**Total: 32 unique CVEs tracked — plus the AI-agent coding supply chain**
+
+</details>
+
+<details>
+<summary><strong>🤖 Agent Supply-Chain Scanner — vet a skill before you install it</strong></summary>
+
+Traditional scanners check *your dependencies*. The **agent scanner** checks the artifacts that feed
+**instructions and tools to your AI coding agent** — where the new attack surface lives:
+
+- **Agent skills** — `SKILL.md` / `*.skill.md` (Claude Code, Cursor, Windsurf, OpenClaw)
+- **MCP servers** — `mcp.json` / `*.mcp.json` / `claude_desktop_config.json`
+- **n8n workflows** — exported workflow JSON (Code/Function nodes, `eval`, hardcoded creds)
+- **Slash commands** — `.claude/commands/**/*.md` (the prompt files an agent runs on demand)
+- **Hook configs** — `.claude/settings.json` / `settings.local.json` `hooks` blocks (shell commands the agent auto-runs on lifecycle events)
+
+Detections: prompt injection / instruction override, hidden conditional triggers, **secret-exfiltration
+instructions**, tool poisoning / remote-script execution, **rug-pull (unpinned) MCP servers**,
+invisible-character and **Unicode-Tags ASCII smuggling**, hardcoded credentials, and **auto-running
+hook commands that download-and-execute, run obfuscated payloads, or exfiltrate to out-of-band sinks**.
+100% offline.
+
+```bash
+# Vet an untrusted skill or MCP config BEFORE you install it
+python src/cli.py scan -s agent ./some-skill/SKILL.md
+python src/cli.py scan -s agent ./claude_desktop_config.json
+```
+
+Also available as the `scan` MCP tool (pass `scanner: "agent"`) so an agent can vet a skill mid-session.
+
+**Suppressing accepted findings.** Drop a `.shellockolmignore` at your repo root to allowlist
+findings your team has reviewed and accepted — by rule ID, optionally scoped to a path glob
+(gitignore-style). Suppressed findings are removed from results and reported as a count, so the
+allowlist is never silent:
+
+```gitignore
+# .shellockolmignore
+AGENT-PI-013                 # suppress this rule everywhere
+AGENT-PI-016 docs/skills/**  # suppress it only under a path glob
+AGENT-MCP-004,AGENT-HOOK-001 vendor/**  # several rules, one shared path scope
+```
+
+Path-pattern lines (e.g. `node_modules/`, `*.min.js`) keep working exactly as before — only lines
+whose first token is an uppercase rule ID are read as suppressions.
+
+**Tuning by detection confidence.** Every finding carries a `confidence` of `high`, `medium`, or
+`low` — *separate from* its severity. `high` means a structural / signature / decoded-secret match (a
+deterministic true positive: Unicode-Tags smuggling, a hardcoded key, a forged role token, a paste/
+webhook sink). `medium`/`low` mark the broader natural-language heuristics that match the real attack
+phrasing but can also fire on benign prose (e.g. a generic "when the user does X…" trigger is `low`).
+Filter with `--min-confidence`:
+
+```bash
+python src/cli.py scan -s agent ./skills                      # low (default): every finding
+python src/cli.py scan -s agent ./skills --min-confidence medium  # drop the broadest heuristics
+python src/cli.py scan -s agent ./skills --min-confidence high     # structural/signature matches only — a high-signal CI gate
+```
+
+Findings hidden by the threshold are reported as a count (never silently dropped), `confidence`
+appears in the JSON report (`-o report.json`) and is shown inline for any non-`high` finding. Other
+scanners' findings (CVE/secret matches) are deterministic and default to `high`, so a threshold never
+hides them.
+
+**Machine-readable JSON (`--json`, CI mode).** `--json` writes **one** JSON document to *stdout* and
+suppresses every other line (no banner, progress, panels, or summary — errors go to *stderr*), so it
+pipes straight into `jq` or a CI step. Exit code is `1` when any finding is reported, `0` when clean.
+The schema is a stable contract: within a `schema_version` major, fields are only **added**, never
+renamed or removed.
+
+```jsonc
+{
+  "schema_version": "1.0",
+  "tool":    { "name": "shellockolm", "version": "3.0.0" },
+  "scan": {
+    "time": "2026-06-13T12:08:49",   // ISO-8601, local time
+    "target": "/abs/path/scanned",
+    "min_confidence": "low",          // the --min-confidence in effect
+    "scanners": ["agent"],            // scanner names that ran
+    "duration_seconds": 0.0139
+  },
+  "summary": {
+    "total_findings": 1,
+    "by_severity": { "critical": 0, "high": 1, "medium": 0, "low": 0, "info": 0 },
+    "findings_suppressed": 0,          // dropped by a .shellockolmignore rule allowlist
+    "findings_below_confidence": 0     // hidden by --min-confidence
+  },
+  "findings": [                        // sorted CRITICAL → INFO
+    {
+      "id": "AGENT-PI-007",            // CVE id, or AGENT-* rule id for agent findings
+      "title": "ASCII smuggling via Unicode Tags block",
+      "severity": "HIGH",              // CRITICAL | HIGH | MEDIUM | LOW | INFO
+      "confidence": "high",            // high | medium | low
+      "cvss_score": 8.2,
+      "scanner": "agent",
+      "file_path": "…/SKILL.md:3",
+      "package": "agent-skill",
+      "version": "n/a",
+      "patched_version": null,
+      "description": "…",
+      "remediation": "…"
+    }
+  ],
+  "errors": [ /* { "scanner": "...", "message": "..." } */ ]
+}
+```
+
+Add `-o report.json` alongside `--json` to also persist the identical document to a file.
 
 </details>
 
@@ -193,7 +310,7 @@ python src/cli.py info CVE-2025-55182
 - **Backdoors** - Reverse shells, command injection
 - **Data exfiltration** - Suspicious HTTP requests
 - **Typosquatting** - Packages mimicking popular libraries
-- **100+ detection patterns** hand-tuned for JavaScript/Node.js
+- **70+ detection patterns** hand-tuned for JavaScript/Node.js
 
 </details>
 
@@ -229,15 +346,16 @@ Finds leaked credentials in code, configs, and environment files:
 
 ```yaml
 # GitHub Actions
-- name: Security Scan
+- name: Vet agent skills/MCP (fails the build on any finding)
   run: |
     pip install -r requirements.txt
-    python src/cli.py scan . -o results.json
+    python src/cli.py scan -s agent --json --min-confidence high ./skills | tee results.json
 ```
 
+- **`--json` stdout mode** — one stable, documented JSON document for `jq`/CI piping
 - **SARIF export** for GitHub Code Scanning
-- **JSON reports** for automated processing
-- **Exit codes** for build failures on criticals
+- **JSON reports** (`-o results.json`) for automated processing
+- **Exit codes** — non-zero when findings are reported, so the build fails
 - **Watch mode** for continuous monitoring
 
 </details>
@@ -245,7 +363,7 @@ Finds leaked credentials in code, configs, and environment files:
 <details>
 <summary><strong>📋 60+ Interactive Commands</strong></summary>
 
-**Scanning**: Full scan, React, Next.js, npm, Node.js, n8n, supply chain, custom  
+**Scanning**: Full scan, React, Next.js, npm, Node.js, n8n, supply chain, agent skills/MCP, custom  
 **Malware**: Deep scan, quarantine, package removal, code cleaning  
 **Secrets**: Scan all files, .env targeting, high-entropy detection  
 **Live Probing**: Test URLs for exploitable vulnerabilities  
@@ -275,6 +393,13 @@ python src/cli.py scan ~/my-nextjs-app --scanner nextjs
 python src/cli.py shell
 > 1b  # Pre-Download Check
 > suspicious-package-name
+```
+
+### 🤖 Vet an AI agent skill / MCP server before installing it
+```bash
+# Point it at a SKILL.md, an mcp.json, or an exported n8n workflow
+python src/cli.py scan -s agent ./some-skill/SKILL.md
+python src/cli.py scan -s agent ./claude_desktop_config.json
 ```
 
 ### 🚨 Hunt for a specific CVE
@@ -332,7 +457,7 @@ The scanner sits **outside the blast radius** of the ecosystem it's auditing.
 
 | Command | Name | What It Does |
 |---------|------|-------------|
-| `1` | Full Scan | Runs all 7 scanners on a directory to detect 32 CVEs across React, Next.js, Node.js, npm, n8n, supply chain, and Clawdbot/Moltbot. |
+| `1` | Full Scan | Runs all 8 scanners on a directory to detect 32 CVEs across React, Next.js, Node.js, npm, n8n, supply chain, and Clawdbot/Moltbot — plus the AI-agent supply chain. |
 | `1a` | Scan ALL npm | Auto-discovers and scans every npm project on your system by finding all `package.json` files. |
 | `1b` | Pre-Download Check | Sandbox-installs an npm package to a temp directory, scans it for malware and vulns, then destroys the sandbox. |
 | `1c` | Deep Scan | Version checks + code pattern analysis + config inspection — shows step-by-step HOW each vulnerability is detected. |
@@ -344,6 +469,7 @@ The scanner sits **outside the blast radius** of the ecosystem it's auditing.
 | `5` | Node.js Runtime | Scan for Node.js runtime vulnerabilities from the January 2026 security release. |
 | `6` | n8n Scanner | Scan for n8n workflow automation vulns including Ni8mare unauthenticated RCE. |
 | `7` | Supply Chain | Detect Shai-Hulud worm campaign, eslint-config-prettier compromise, malicious install scripts. |
+| `7a` | 🤖 Agent Supply Chain | Vet `SKILL.md` skills, MCP configs, and n8n workflows **before you install them** — prompt injection, secret-exfiltration instructions, tool poisoning, rug-pull (unpinned) MCP servers, and invisible-char / Unicode-Tags ASCII smuggling. 100% offline. |
 
 ### Live Probing
 
@@ -361,7 +487,7 @@ The scanner sits **outside the blast radius** of the ecosystem it's auditing.
 | `12` | Critical Only | Filter to show only CRITICAL severity CVEs (CVSS 9.0+). |
 | `13` | Bug Bounty | List CVEs that are high-value bug bounty targets — critical severity or with public PoCs. |
 | `14` | CVE Details | Get full details on a specific CVE: description, affected versions, patches, references. |
-| `15` | List Scanners | Show all 7 scanners with their descriptions, CVE coverage, and capabilities. |
+| `15` | List Scanners | Show all 8 scanners with their descriptions, CVE coverage, and capabilities. |
 
 ### Malware Analysis
 
@@ -447,6 +573,7 @@ Found a bug? Have a feature request? Want to add CVE coverage?
 MIT License — See [LICENSE](LICENSE)
 
 **📚 More Documentation:**
+- [🤖 Agent Supply-Chain Scanner Guide](docs/AGENT_SCANNER.md)
 - [Installation Guide](docs/INSTALL.md)
 - [Quick Start](docs/QUICKSTART.md)
 - [Fast Install Reference](docs/FAST_INSTALL.md)

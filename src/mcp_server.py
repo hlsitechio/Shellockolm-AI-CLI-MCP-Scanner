@@ -22,11 +22,17 @@ Covers 32 CVEs across:
 """
 
 import asyncio
+import inspect
+import ipaddress
 import json
+import os
+import socket
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from datetime import datetime
+from urllib.parse import urlparse
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
@@ -105,6 +111,78 @@ def format_scan_results(results: List[ScanResult]) -> str:
         output += format_finding(finding) + "\n---\n\n"
 
     return output
+
+
+def _is_blocked_ip(ip_str: str) -> bool:
+    """Return True if an IP address is loopback, private, link-local, or otherwise
+    not safe to fetch (SSRF protection)."""
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        # Not a parseable IP — treat as unsafe (can't validate it)
+        return True
+
+    return (
+        ip.is_loopback        # 127.0.0.0/8, ::1
+        or ip.is_private      # 10/8, 172.16/12, 192.168/16, fc00::/7, etc.
+        or ip.is_link_local   # 169.254.0.0/16 (incl. 169.254.169.254 metadata), fe80::/10
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified  # 0.0.0.0, ::
+    )
+
+
+def check_ssrf_safety(url: str) -> Optional[str]:
+    """Validate a URL against SSRF attacks.
+
+    Rejects loopback, RFC1918 private ranges, and link-local addresses
+    (including the cloud metadata IP 169.254.169.254). Resolves the hostname
+    and checks the resolved IP too.
+
+    Returns an error message string if the URL is unsafe, or None if it's allowed.
+    """
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return f"Error: could not parse URL '{url}'"
+
+    hostname = parsed.hostname
+    if not hostname:
+        return f"Error: URL '{url}' has no host component"
+
+    # Block obvious loopback hostnames before resolution
+    if hostname.lower() in {"localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback"}:
+        return (
+            f"Error: URL '{url}' is blocked for SSRF safety "
+            "(loopback/localhost addresses are not allowed)."
+        )
+
+    # If the hostname is itself a literal IP, check it directly
+    try:
+        ipaddress.ip_address(hostname)
+        if _is_blocked_ip(hostname):
+            return (
+                f"Error: URL '{url}' is blocked for SSRF safety "
+                "(loopback/private/link-local address)."
+            )
+        return None
+    except ValueError:
+        pass  # Not a literal IP — resolve the hostname below
+
+    # Resolve the hostname and validate the resolved IP
+    try:
+        resolved_ip = socket.gethostbyname(hostname)
+    except socket.gaierror:
+        return f"Error: could not resolve host '{hostname}' for URL '{url}'."
+
+    if _is_blocked_ip(resolved_ip):
+        return (
+            f"Error: URL '{url}' is blocked for SSRF safety. "
+            f"Host '{hostname}' resolves to a loopback/private/link-local "
+            f"address ({resolved_ip})."
+        )
+
+    return None
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -367,80 +445,104 @@ async def handle_call_tool(
 ) -> list[types.TextContent | types.ImageContent | types.EmbeddedResource]:
     """Handle tool execution"""
 
+    # Guard against clients sending null params (e.g. JSON-RPC params: null)
+    arguments = arguments or {}
+
     if name == "find_packages":
-        import subprocess
-        
         path = arguments.get("path", ".")
         recursive = arguments.get("recursive", True)
         include_node_modules = arguments.get("include_node_modules", False)
         max_depth = arguments.get("max_depth", 3)
-        
+
         if not Path(path).exists():
             return [types.TextContent(type="text", text=f"❌ Path does not exist: {path}")]
-        
+
         start_time = datetime.now()
-        
-        # Build PowerShell command for fast package discovery
-        exclude_filter = "" if include_node_modules else "| Where-Object { $_.FullName -notmatch '\\\\node_modules\\\\' }"
-        
-        ps_command = f"""
-        Get-ChildItem -Path '{path}' -Filter 'package.json' -Recurse -Depth {max_depth} -ErrorAction SilentlyContinue -File {exclude_filter} | 
-        Select-Object -ExpandProperty FullName
-        """
-        
+
+        # Caps to keep the tool fast and bounded
+        MAX_RESULTS = 500
+        MAX_PACKAGE_JSON_BYTES = 1_000_000  # skip reading package.json files > 1MB
+
+        # Directories to prune during the walk (cross-platform, no shell)
+        prune_dirs = {".git", ".svn", ".hg", "__pycache__", "dist", "build",
+                      ".next", ".nuxt"}
+        if not include_node_modules:
+            prune_dirs.add("node_modules")
+
+        root = Path(path).resolve()
+        root_depth = len(root.parts)
+
+        packages: List[str] = []
+        truncated = False
+
         try:
-            result = subprocess.run(
-                ["powershell", "-Command", ps_command],
-                capture_output=True,
-                text=True,
-                timeout=60
-            )
-            
-            packages = [p.strip() for p in result.stdout.strip().split('\n') if p.strip()]
-            duration = (datetime.now() - start_time).total_seconds()
-            
-            # Extract package info
-            package_list = []
-            for pkg_path in packages[:100]:  # Limit to first 100 for performance
-                try:
-                    with open(pkg_path, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                        package_list.append({
-                            "name": data.get("name", "unknown"),
-                            "version": data.get("version", "unknown"),
-                            "path": pkg_path
-                        })
-                except Exception:
+            for dirpath, dirnames, filenames in os.walk(root):
+                # Enforce max_depth relative to the root
+                current_depth = len(Path(dirpath).parts) - root_depth
+                if current_depth >= max_depth:
+                    # Don't descend any deeper
+                    dirnames[:] = []
+                elif not recursive:
+                    # Non-recursive: only inspect the top-level directory
+                    dirnames[:] = []
+
+                # Prune excluded directories in-place so os.walk skips them
+                dirnames[:] = [d for d in dirnames if d not in prune_dirs]
+
+                if "package.json" in filenames:
+                    packages.append(str(Path(dirpath) / "package.json"))
+                    if len(packages) >= MAX_RESULTS:
+                        truncated = True
+                        break
+        except Exception as e:
+            return [types.TextContent(type="text", text=f"❌ Error finding packages: {e}")]
+
+        duration = (datetime.now() - start_time).total_seconds()
+
+        # Extract package info (cap individual reads)
+        package_list = []
+        for pkg_path in packages:
+            try:
+                if os.path.getsize(pkg_path) > MAX_PACKAGE_JSON_BYTES:
                     package_list.append({
-                        "name": "unknown",
+                        "name": "unknown (file too large)",
                         "version": "unknown",
                         "path": pkg_path
                     })
-            
-            output = f"""# Package Discovery Results
+                    continue
+                with open(pkg_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    data = json.load(f)
+                    package_list.append({
+                        "name": data.get("name", "unknown"),
+                        "version": data.get("version", "unknown"),
+                        "path": pkg_path
+                    })
+            except Exception:
+                package_list.append({
+                    "name": "unknown",
+                    "version": "unknown",
+                    "path": pkg_path
+                })
+
+        output = f"""# Package Discovery Results
 
 ## Summary
-- **Total packages found**: {len(packages)}
+- **Total packages found**: {len(packages)}{' (capped)' if truncated else ''}
 - **Search time**: {duration:.2f}s
 - **Excluded node_modules**: {not include_node_modules}
 - **Max depth**: {max_depth}
 
-## Packages (showing first 100)
+## Packages
 """
-            
-            for pkg in package_list:
-                output += f"\n- **{pkg['name']}** @ {pkg['version']}\n  `{pkg['path']}`"
-            
-            if len(packages) > 100:
-                output += f"\n\n... and {len(packages) - 100} more packages"
-            
-            return [types.TextContent(type="text", text=output)]
-            
-        except subprocess.TimeoutExpired:
-            return [types.TextContent(type="text", text="❌ Package search timed out (>60s). Try reducing max_depth or path scope.")]
-        except Exception as e:
-            return [types.TextContent(type="text", text=f"❌ Error finding packages: {e}")]
-    
+
+        for pkg in package_list:
+            output += f"\n- **{pkg['name']}** @ {pkg['version']}\n  `{pkg['path']}`"
+
+        if truncated:
+            output += f"\n\n... result list capped at {MAX_RESULTS} packages. Narrow the path or reduce max_depth to see more."
+
+        return [types.TextContent(type="text", text=output)]
+
     elif name == "quick_scan":
         path = arguments.get("path", ".")
         recursive = arguments.get("recursive", True)
@@ -467,19 +569,22 @@ async def handle_call_tool(
         else:
             scanners = get_all_scanners()
         
-        # Quick scan mode: Pass quick_mode=True to scanners
+        # Quick scan mode: Pass quick_mode=True only to scanners that accept it.
+        # Use an explicit signature check rather than catching TypeError so that
+        # genuine TypeErrors raised *inside* a scanner propagate instead of being
+        # masked by a silent full re-scan.
         for s in scanners:
             try:
-                result = s.scan_directory(
-                    path, 
-                    recursive=recursive,
-                    quick_mode=True  # ← THIS IS THE KEY!
-                )
-                results.append(result)
-            except TypeError:
-                # Scanner doesn't support quick_mode yet, use regular scan
+                sig = inspect.signature(s.scan_directory)
+                supports_quick = "quick_mode" in sig.parameters
+            except (TypeError, ValueError):
+                supports_quick = False
+
+            if supports_quick:
+                result = s.scan_directory(path, recursive=recursive, quick_mode=True)
+            else:
                 result = s.scan_directory(path, recursive=recursive)
-                results.append(result)
+            results.append(result)
         
         output += format_scan_results(results)
         
@@ -522,8 +627,17 @@ async def handle_call_tool(
         scanner_name = arguments.get("scanner", "all")
         timeout = arguments.get("timeout", 10)
 
+        # Validate required field before using it (avoid AttributeError on None)
+        if not url or not isinstance(url, str):
+            return [types.TextContent(type="text", text="❌ Error: 'url' is required")]
+
         if not url.startswith(("http://", "https://")):
             url = f"https://{url}"
+
+        # SSRF guard: reject loopback / private / link-local (cloud metadata) targets
+        ssrf_error = check_ssrf_safety(url)
+        if ssrf_error:
+            return [types.TextContent(type="text", text=f"❌ {ssrf_error}")]
 
         results: List[ScanResult] = []
         output = f"# Live Probe Results for {url}\n\n"
@@ -686,14 +800,49 @@ async def handle_call_tool(
 
         json_output = json.dumps(report, indent=2)
 
-        if output_path:
-            Path(output_path).write_text(json_output)
-            return [types.TextContent(
-                type="text",
-                text=f"✅ Report saved to: {output_path}\n\n```json\n{json_output[:2000]}...\n```"
-            )]
+        # Build a compact summary so we never blow up the context with a full dump.
+        summary_text = (
+            f"## Report Summary\n"
+            f"- **Target**: {report['target']}\n"
+            f"- **Scan time**: {report['scan_time']}\n"
+            f"- **Total findings**: {report['total_findings']}\n"
+            f"- **Critical**: {report['summary']['critical']}\n"
+            f"- **High**: {report['summary']['high']}\n"
+            f"- **Medium**: {report['summary']['medium']}\n"
+            f"- **Low**: {report['summary']['low']}\n"
+        )
 
-        return [types.TextContent(type="text", text=f"```json\n{json_output}\n```")]
+        # Resolve the destination. Default to a temp reports dir rather than
+        # trusting a model-supplied write-anywhere path. If output_path is given,
+        # resolve it (so relative/.. paths are normalized) before writing.
+        reports_dir = Path(tempfile.gettempdir()) / "shellockolm" / "reports"
+        if output_path:
+            dest = Path(output_path).expanduser().resolve()
+        else:
+            reports_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            dest = reports_dir / f"shellockolm_report_{timestamp}.json"
+
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(json_output, encoding="utf-8")
+        except OSError as e:
+            # If we can't write the requested path, fall back to the temp reports dir.
+            reports_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            dest = reports_dir / f"shellockolm_report_{timestamp}.json"
+            dest.write_text(json_output, encoding="utf-8")
+            summary_text += f"\n⚠️ Could not write to requested path ({e}); saved to temp dir instead.\n"
+
+        return [types.TextContent(
+            type="text",
+            text=(
+                f"✅ Report saved to: {dest}\n\n"
+                f"{summary_text}\n"
+                f"_Full JSON written to file above. Inline preview (truncated):_\n\n"
+                f"```json\n{json_output[:2000]}{'...' if len(json_output) > 2000 else ''}\n```"
+            )
+        )]
 
     raise ValueError(f"Unknown tool: {name}")
 
@@ -706,7 +855,7 @@ async def main():
             write_stream,
             InitializationOptions(
                 server_name="shellockolm",
-                server_version="2.0.0",
+                server_version="3.0.0",
                 capabilities=server.get_capabilities(
                     notification_options=NotificationOptions(),
                     experimental_capabilities={},
@@ -715,5 +864,10 @@ async def main():
         )
 
 
-if __name__ == "__main__":
+def run():
+    """Console-script entry point (e.g. `shellockolm-mcp`). Launches the server."""
     asyncio.run(main())
+
+
+if __name__ == "__main__":
+    run()

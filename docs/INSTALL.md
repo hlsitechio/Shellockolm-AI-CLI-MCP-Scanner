@@ -8,7 +8,7 @@ Multiple ways to install Shellockolm - choose what works best for you.
 
 ### Method 1: Remote Install (from anywhere)
 ```powershell
-iex (irm https://raw.githubusercontent.com/hlsitechio/shellockolm/main/install.ps1)
+iex (irm https://raw.githubusercontent.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/main/scripts/install.ps1)
 ```
 
 This will:
@@ -35,7 +35,7 @@ cd shellockolm
 
 ### One-Liner
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/main/scripts/install.sh | bash
 ```
 
 ### Manual Install

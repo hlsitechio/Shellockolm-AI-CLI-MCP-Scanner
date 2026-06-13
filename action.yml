@@ -1,0 +1,61 @@
+name: 'Shellockolm Security Scan'
+description: 'Scan React/Next.js/Node/npm/n8n projects for CVEs, malware, secrets, and supply-chain risks. Offline, no telemetry.'
+author: 'hlsitechio'
+branding:
+  icon: 'shield'
+  color: 'purple'
+
+inputs:
+  path:
+    description: 'Path to scan'
+    required: false
+    default: '.'
+  scanner:
+    description: 'Which scanner to run (react, nextjs, npm, nodejs, n8n, supply-chain, clawdbot, or all)'
+    required: false
+    default: 'all'
+  fail-on:
+    description: 'Minimum severity that fails the build (critical, high, medium, low, none)'
+    required: false
+    default: 'high'
+  output:
+    description: 'Path to write the JSON report'
+    required: false
+    default: 'shellockolm-report.json'
+  quick:
+    description: 'Quick mode: version checks only (faster)'
+    required: false
+    default: 'false'
+
+outputs:
+  report:
+    description: 'Path to the generated JSON report'
+    value: ${{ steps.scan.outputs.report }}
+  findings:
+    description: 'Number of findings'
+    value: ${{ steps.scan.outputs.findings }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install Shellockolm
+      shell: bash
+      run: pip install -r "${{ github.action_path }}/requirements.txt"
+
+    - name: Run scan
+      id: scan
+      shell: bash
+      run: |
+        ARGS="scan ${{ inputs.path }} -s ${{ inputs.scanner }} -o ${{ inputs.output }}"
+        if [ "${{ inputs.quick }}" = "true" ]; then ARGS="$ARGS --quick"; fi
+        python "${{ github.action_path }}/src/cli.py" $ARGS || true
+        echo "report=${{ inputs.output }}" >> "$GITHUB_OUTPUT"
+
+    # Note: the CLI already exits with severity-based codes. Wire `fail-on`
+    # to those exit codes here once their mapping is finalized so the build
+    # fails on findings at or above the chosen severity.

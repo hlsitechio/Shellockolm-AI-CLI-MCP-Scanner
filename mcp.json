@@ -8,8 +8,8 @@
   "author": "hlsitechio",
   "license": "MIT",
   "server": {
-    "command": "python",
-    "args": ["src/mcp_server.py"],
+    "command": "shellockolm-mcp",
+    "args": [],
     "env": {}
   },
   "capabilities": {

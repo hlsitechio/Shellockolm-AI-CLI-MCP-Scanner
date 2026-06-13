@@ -15,12 +15,139 @@ import sys
 import json
 import os
 import re
+import inspect
+import tempfile
 from pathlib import Path
 from typing import Optional, List
 from datetime import datetime
 from io import StringIO
 
 import compat  # noqa: F401 — Windows UTF-8 stdout fix (must be early)
+
+# ─────────────────────────────────────────────────────────────────
+# VERSION
+# ─────────────────────────────────────────────────────────────────
+try:
+    from importlib.metadata import version as _pkg_version
+
+    __version__ = _pkg_version("shellockolm")
+except Exception:
+    __version__ = "3.0.0"
+
+
+# ─────────────────────────────────────────────────────────────────
+# CROSS-PLATFORM TEMP PATH HELPER
+# ─────────────────────────────────────────────────────────────────
+def _shellockolm_tmp(*parts) -> Path:
+    """Return a Shellockolm temp path under the OS temp dir (cross-platform).
+
+    Replaces hardcoded POSIX ``/tmp/shellockolm/...`` literals so the tool
+    behaves correctly on Windows (where ``/tmp`` resolves onto the current
+    drive root).
+    """
+    return Path(tempfile.gettempdir()) / "shellockolm" / Path(*parts)
+
+
+# ─────────────────────────────────────────────────────────────────
+# PACKAGE / VERSION VALIDATION (defence against command injection)
+# ─────────────────────────────────────────────────────────────────
+# Package and version strings originate from scanned (attacker-controlled)
+# package.json data. Before they are ever passed to a subprocess we validate
+# them against strict allow-lists so a crafted value cannot smuggle shell
+# metacharacters or extra arguments.
+_NPM_PACKAGE_RE = re.compile(r"^(@[\w.-]+/)?[\w.-]+$")
+_NPM_VERSION_RE = re.compile(r"^[\w.\-+]+$")
+
+
+def _is_safe_npm_package(name: str) -> bool:
+    """True if ``name`` is a syntactically safe npm package identifier."""
+    return bool(name) and bool(_NPM_PACKAGE_RE.match(name))
+
+
+def _is_safe_npm_version(version: str) -> bool:
+    """True if ``version`` is a syntactically safe (semver-ish) version string."""
+    return bool(version) and bool(_NPM_VERSION_RE.match(version))
+
+
+def _run_scanner(s, path, *, recursive=True, max_depth=10, quick=False, min_confidence=None):
+    """Run a scanner's scan_directory, passing optional kwargs only when supported.
+
+    Not all scanners accept ``quick_mode`` (supply-chain, n8n and clawdbot don't),
+    and only the agent scanner accepts ``min_confidence``. Rather than catch a
+    blanket ``TypeError`` (which would also swallow real bugs inside a scanner), we
+    inspect the signature and only pass a kwarg when the scanner actually declares
+    it. A scanner without ``min_confidence`` (whose findings default to "high"
+    confidence) is therefore never affected by the threshold.
+    """
+    sig = inspect.signature(s.scan_directory)
+    kwargs = {"recursive": recursive, "max_depth": max_depth}
+    if quick and "quick_mode" in sig.parameters:
+        kwargs["quick_mode"] = True
+    if min_confidence and "min_confidence" in sig.parameters:
+        kwargs["min_confidence"] = min_confidence
+    return s.scan_directory(path, **kwargs)
+
+
+# ─────────────────────────────────────────────────────────────────
+# CROSS-PLATFORM PROJECT DISCOVERY
+# ─────────────────────────────────────────────────────────────────
+# Directories that are never worth descending into when hunting for
+# package.json files.
+_DISCOVERY_PRUNE_DIRS = {"node_modules", ".git", ".hg", ".svn", "venv", ".venv"}
+
+
+def _find_package_json(root, max_depth: int = 6):
+    """Recursively find package.json files under ``root`` (pure Python).
+
+    Cross-platform replacement for ``find <root> -maxdepth N -name package.json
+    -type f`` which does not exist (or behaves differently) on Windows. Prunes
+    node_modules/.git etc. and honours ``max_depth`` (relative to ``root``).
+
+    Returns a list of project directories (the parent of each package.json).
+    """
+    root = Path(root)
+    projects = []
+    root_depth = len(root.parts)
+    for dirpath, dirnames, filenames in os.walk(root):
+        # Prune unwanted directories in-place so os.walk skips them.
+        dirnames[:] = [d for d in dirnames if d not in _DISCOVERY_PRUNE_DIRS]
+
+        # Enforce max depth relative to the root.
+        current_depth = len(Path(dirpath).parts) - root_depth
+        if current_depth >= max_depth:
+            dirnames[:] = []
+
+        if "package.json" in filenames:
+            projects.append(str(Path(dirpath)))
+    return projects
+
+
+def _default_search_roots():
+    """Return platform-aware default roots to scan for npm projects.
+
+    On Windows we use the user home, the current directory, and available drive
+    roots (instead of POSIX-only ``/mnt`` and ``/opt``). On POSIX we keep the
+    historical roots.
+    """
+    home_dir = Path.home()
+    roots = [
+        home_dir / ".npm",
+        home_dir / "node_modules",
+        home_dir / "projects",
+        home_dir / "code",
+        home_dir / "dev",
+    ]
+
+    if sys.platform == "win32":
+        # Common Windows dev locations plus the current working directory.
+        roots.append(home_dir / "source")
+        roots.append(home_dir / "Documents")
+        roots.append(Path.cwd())
+    else:
+        roots.append(Path("/mnt"))
+        roots.append(Path("/opt"))
+
+    return roots
 
 try:
     import typer
@@ -173,7 +300,7 @@ class SingleLineProgress:
 class SessionLogger:
     """Logs all scans and recon operations to session files"""
 
-    LOG_DIR = Path("/tmp/shellockolm/sessions")
+    LOG_DIR = _shellockolm_tmp("sessions")
 
     def __init__(self):
         self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -316,7 +443,7 @@ def get_random_tip():
         "CVE-2025-29927 is a critical Next.js bypass",
         "Check for supply chain attacks with scanner #7",
         "Use '-s react' to scan only React CVEs",
-        "Session logs saved in /tmp/shellockolm/",
+        f"Session logs saved in {_shellockolm_tmp()}",
         "Run 'shellockolm cves -s critical' for high priority",
         "Use [17] Deep Scan to find malware in node_modules",
         "Quarantine suspicious files before investigating",
@@ -357,15 +484,15 @@ def print_banner(show_full: bool = True):
     # Add session info if available
     session_line = ""
     if session_logger:
-        session_line = f"\n[dim]📝 Session: {session_logger.session_id} | Log: /tmp/shellockolm/sessions/[/dim]"
+        session_line = f"\n[dim]📝 Session: {session_logger.session_id} | Log: {_shellockolm_tmp('sessions')}[/dim]"
 
     info_content = f"""[bold bright_white]Welcome back, {username}![/bold bright_white]
 [dim]{date_str} • {time_str}[/dim]
 
 [bright_cyan]AI MCP Tool & Python CVE Scanner[/bright_cyan]
-[dim]React • Next.js • Node.js • n8n • npm • Supply Chain • Clawdbot[/dim]
+[dim]React • Next.js • Node.js • n8n • npm • Supply Chain • Clawdbot • Agent Skills/MCP[/dim]
 
-[bright_green]✓ 32 CVEs  ✓ 7 Scanners  ✓ Malware  ✓ Secrets  ✓ Auto-Fix[/bright_green]
+[bright_green]✓ 32 CVEs  ✓ 8 Scanners  ✓ Malware  ✓ Secrets  ✓ Auto-Fix[/bright_green]
 [link=https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner][bright_blue]🔗 github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner[/bright_blue][/link]
 ────────────────────────────────────────────────────────────────────
 [bright_yellow]💡 Tip:[/bright_yellow] {tip}{session_line}"""
@@ -426,7 +553,12 @@ def print_finding(finding: ScanFinding, verbose: bool = False, show_context: boo
     console.print(f"[path]│  File: {finding.file_path}[/path]")
     console.print(f"[info]│  Package: {finding.package} @ {finding.version}[/info]")
     console.print(f"[success]│  Fix: {finding.patched_version or 'See remediation'}[/success]")
-    console.print(f"[warning]│  CVSS: {finding.cvss_score} | Difficulty: {finding.exploit_difficulty}[/warning]")
+    # Surface detection confidence when it is not the default "high" (a heuristic
+    # match worth weighing) or always in verbose mode; routine high-confidence CVE
+    # findings stay uncluttered.
+    conf = getattr(finding, "confidence", "high")
+    conf_note = f" | Confidence: {conf.upper()}" if (verbose or conf != "high") else ""
+    console.print(f"[warning]│  CVSS: {finding.cvss_score}{conf_note} | Difficulty: {finding.exploit_difficulty}[/warning]")
 
     # Show context message
     if ctx and ctx.message:
@@ -448,6 +580,100 @@ def print_finding(finding: ScanFinding, verbose: bool = False, show_context: boo
         console.print(f"[command]└─ {finding.remediation}[/command]")
     else:
         console.print(f"[command]└─ {finding.remediation}[/command]")
+
+
+# Stable schema version for `scan --json` (CI machine-readable output).
+# Bump the MAJOR only on a breaking change; fields may be ADDED within a major
+# without a bump. The schema is documented in the README ("Machine-readable JSON").
+JSON_SCHEMA_VERSION = "1.0"
+
+_SEVERITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
+
+
+def _severity_str(finding) -> str:
+    """Normalize a finding's severity to an UPPERCASE string."""
+    sev = finding.severity
+    return (sev.value if hasattr(sev, "value") else str(sev)).upper()
+
+
+def build_json_report(
+    results: List[ScanResult],
+    *,
+    target: str,
+    min_confidence: Optional[str] = None,
+    scanners: Optional[List[str]] = None,
+) -> dict:
+    """Assemble the stable, machine-readable scan document (``schema_version`` 1.0).
+
+    Emitted by ``scan --json`` for CI pipelines. The shape is a contract: within a
+    given major ``schema_version`` fields are only ADDED, never renamed or removed.
+    Findings are sorted CRITICAL→INFO for deterministic output. The full schema is
+    documented in the README.
+    """
+    by_severity = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+    pairs = []  # (result, finding, severity_str)
+    for r in results:
+        for f in r.findings:
+            sev = _severity_str(f)
+            key = sev.lower()
+            if key in by_severity:
+                by_severity[key] += 1
+            pairs.append((r, f, sev))
+
+    pairs.sort(key=lambda t: _SEVERITY_ORDER.get(t[2], 5))
+
+    findings_json = [
+        {
+            # For CVE scanners this is the CVE id; for the agent scanner it is the
+            # AGENT-* rule id. Always the stable identifier for the detection.
+            "id": f.cve_id,
+            "title": f.title,
+            "severity": sev,
+            "confidence": getattr(f, "confidence", "high"),
+            "cvss_score": f.cvss_score,
+            "scanner": r.scanner_name,
+            "file_path": f.file_path,
+            "package": f.package,
+            "version": f.version,
+            "patched_version": f.patched_version,
+            "description": f.description,
+            "remediation": f.remediation,
+        }
+        for (r, f, sev) in pairs
+    ]
+
+    errors = [
+        {"scanner": r.scanner_name, "message": str(e)}
+        for r in results
+        for e in r.errors
+    ]
+
+    return {
+        "schema_version": JSON_SCHEMA_VERSION,
+        "tool": {"name": "shellockolm", "version": __version__},
+        "scan": {
+            "time": datetime.now().isoformat(),
+            "target": target,
+            "min_confidence": min_confidence,
+            "scanners": list(scanners) if scanners is not None
+            else sorted({r.scanner_name for r in results}),
+            "duration_seconds": round(sum(r.duration_seconds for r in results), 4),
+        },
+        "summary": {
+            "total_findings": len(findings_json),
+            "by_severity": by_severity,
+            # Findings removed by a .shellockolmignore rule allowlist.
+            "findings_suppressed": sum(
+                r.stats.get("findings_suppressed", 0) for r in results
+            ),
+            # Findings hidden by the --min-confidence threshold.
+            "findings_below_confidence": sum(
+                r.stats.get("findings_below_confidence", 0) for r in results
+            ),
+        },
+        "findings": findings_json,
+        "errors": errors,
+    }
 
 
 def print_summary(results: List[ScanResult], output_json: Optional[str] = None):
@@ -529,6 +755,7 @@ def print_summary(results: List[ScanResult], output_json: Optional[str] = None):
                         "patched_version": f.patched_version,
                         "file_path": f.file_path,
                         "description": f.description,
+                        "confidence": getattr(f, "confidence", "high"),
                         "remediation": f.remediation,
                     }
                     for f in r.findings
@@ -557,7 +784,18 @@ def scan(
     max_depth: int = typer.Option(10, "--depth", "-d", help="Maximum directory depth"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed findings"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Save JSON report to file"),
+    json_output: bool = typer.Option(
+        False, "--json",
+        help="Emit one machine-readable JSON document to stdout (CI mode); "
+             "suppresses all human output. Schema is documented in the README.",
+    ),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
+    quick: bool = typer.Option(False, "--quick", help="Quick mode: only check package versions (fast!)"),
+    min_confidence: str = typer.Option(
+        "low", "--min-confidence",
+        help="Minimum agent-scan detection confidence to report: low|medium|high "
+             "(low=show all; high=structural/signature matches only)",
+    ),
     _from_menu: bool = False,  # Internal: skip banner when called from menu
 ):
     """
@@ -567,8 +805,16 @@ def scan(
         shellockolm scan                        # Scan current directory
         shellockolm scan /path/to/project       # Scan specific path
         shellockolm scan -s react ./            # Use only React scanner
+        shellockolm scan -s agent ./SKILL.md    # Vet an AI agent skill/MCP before you install it
         shellockolm scan -o report.json ./      # Export to JSON
+        shellockolm scan -s agent --json ./      # Machine-readable JSON to stdout (CI mode)
+        shellockolm scan --quick ./             # Quick scan (package versions only)
     """
+    # --json is CI mode: only the single JSON document may reach stdout, so all
+    # human/rich output (banner, progress, findings, panels, summary) is suppressed.
+    if json_output:
+        quiet = True
+
     if not quiet and not _from_menu:
         print_banner()
     if not quiet:
@@ -576,7 +822,27 @@ def scan(
 
     # Validate path
     if not Path(path).exists():
-        console.print(f"[danger]Error: Path does not exist: {path}[/danger]")
+        msg = f"Error: Path does not exist: {path}"
+        if json_output:
+            # Keep stdout a clean JSON channel; surface the error on stderr.
+            print(msg, file=sys.stderr)
+        else:
+            console.print(f"[danger]{msg}[/danger]")
+        raise typer.Exit(1)
+
+    # Normalize/validate the confidence threshold (agent-scan only; other scanners'
+    # findings are "high" by default and pass any threshold).
+    min_confidence = (min_confidence or "low").strip().lower()
+    if min_confidence not in {"low", "medium", "high"}:
+        if json_output:
+            print(
+                f"Unknown --min-confidence: {min_confidence} "
+                "(choose one of: low, medium, high)",
+                file=sys.stderr,
+            )
+        else:
+            console.print(f"[danger]Unknown --min-confidence: {min_confidence}[/danger]")
+            console.print("[info]Choose one of: low, medium, high[/info]")
         raise typer.Exit(1)
 
     results: List[ScanResult] = []
@@ -584,8 +850,15 @@ def scan(
     # Get scanners to run
     if scanner:
         if scanner not in SCANNER_REGISTRY:
-            console.print(f"[danger]Unknown scanner: {scanner}[/danger]")
-            console.print(f"[info]Available: {', '.join(SCANNER_REGISTRY.keys())}[/info]")
+            if json_output:
+                print(
+                    f"Unknown scanner: {scanner} "
+                    f"(available: {', '.join(SCANNER_REGISTRY.keys())})",
+                    file=sys.stderr,
+                )
+            else:
+                console.print(f"[danger]Unknown scanner: {scanner}[/danger]")
+                console.print(f"[info]Available: {', '.join(SCANNER_REGISTRY.keys())}[/info]")
             raise typer.Exit(1)
         scanners_to_run = [get_scanner(scanner)]
     else:
@@ -604,7 +877,8 @@ def scan(
         if not quiet:
             progress.update(current=i, item=s.NAME)
 
-        result = s.scan_directory(path, recursive=recursive, max_depth=max_depth)
+        result = _run_scanner(s, path, recursive=recursive, max_depth=max_depth,
+                              quick=quick, min_confidence=min_confidence)
         results.append(result)
 
         # Track findings by severity
@@ -641,7 +915,8 @@ def scan(
         )
 
         for finding in sorted_findings:
-            print_finding(finding, verbose)
+            if not json_output:
+                print_finding(finding, verbose)
             # Log each finding to session
             if session_logger:
                 session_logger.log_finding({
@@ -665,7 +940,42 @@ def scan(
                 border_style="bright_green",
             ))
 
-    print_summary(results, output)
+    # Surface allowlisted findings so the suppression is never silent.
+    total_suppressed = sum(r.stats.get("findings_suppressed", 0) for r in results)
+    if total_suppressed and not quiet:
+        console.print(
+            f"[dim]🔇 {total_suppressed} finding(s) suppressed by "
+            f".shellockolmignore rule allowlist[/dim]"
+        )
+
+    # Surface findings hidden by the confidence threshold so it is never silent.
+    total_below_conf = sum(r.stats.get("findings_below_confidence", 0) for r in results)
+    if total_below_conf and not quiet:
+        console.print(
+            f"[dim]🔅 {total_below_conf} finding(s) below --min-confidence "
+            f"{min_confidence} (raise sensitivity with --min-confidence low)[/dim]"
+        )
+
+    if json_output:
+        # CI mode: assemble the stable JSON document and write ONLY it to stdout
+        # (plain print → no rich markup; ensure_ascii keeps the stream pipe-safe).
+        report = build_json_report(
+            results,
+            target=str(Path(path).resolve()),
+            min_confidence=min_confidence,
+            scanners=[s.NAME for s in scanners_to_run],
+        )
+        json_str = json.dumps(report, indent=2)
+        print(json_str)
+        if output:
+            try:
+                with open(output, "w", encoding="utf-8") as fh:
+                    fh.write(json_str)
+            except OSError as e:
+                # Never corrupt the stdout JSON contract; report file errors on stderr.
+                print(f"shellockolm: could not write {output}: {e}", file=sys.stderr)
+    else:
+        print_summary(results, output)
 
     # Log summary to session
     if session_logger:
@@ -976,7 +1286,7 @@ def scanners(_from_menu: bool = False):
 @app.command()
 def version():
     """Show version information"""
-    console.print("[title]Shellockolm v2.0.0[/title]")
+    console.print(f"[title]Shellockolm v{__version__}[/title]")
     console.print("[subtitle]Security Detective for React, Next.js, Node.js & npm[/subtitle]")
     console.print("[info]https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner[/info]")
 
@@ -998,7 +1308,7 @@ MENU_CATEGORIES = {
             {
                 "id": "1",
                 "name": "Full Scan",
-                "description": "Run ALL 7 scanners on a directory to detect 32 CVEs across React, Next.js, Node.js, npm packages, n8n, supply chain, and Clawdbot/Moltbot.",
+                "description": "Run ALL 8 scanners on a directory to detect 32 CVEs across React, Next.js, Node.js, npm packages, n8n, supply chain, and Clawdbot/Moltbot — plus the AI-agent supply chain (skills, MCP configs, n8n workflows).",
                 "action": "scan",
                 "requires_input": "path",
                 "input_prompt": "Enter path to scan (or . for current dir): ",
@@ -1091,6 +1401,14 @@ MENU_CATEGORIES = {
                 "requires_input": "path",
                 "input_prompt": "Enter path to scan: ",
             },
+            {
+                "id": "7a",
+                "name": "Agent Supply-Chain Scanner",
+                "description": "🤖 Scan the AI-agent coding supply chain BEFORE you install it: SKILL.md skills, MCP server configs, and n8n workflows for prompt injection, secret-exfiltration instructions, tool poisoning, unpinned (rug-pull) MCP servers, and invisible-character / Unicode-Tags ASCII smuggling. 100% offline.",
+                "action": "scan -s agent",
+                "requires_input": "path",
+                "input_prompt": "Enter path to a skill/MCP config/workflow to scan: ",
+            },
         ]
     },
     "live_recon": {
@@ -1157,7 +1475,7 @@ MENU_CATEGORIES = {
             {
                 "id": "15",
                 "name": "List Scanners",
-                "description": "Show all 7 available scanners with their descriptions, CVE coverage, and live scan capability.",
+                "description": "Show all 8 available scanners with their descriptions, CVE coverage, and live scan capability.",
                 "action": "scanners",
                 "requires_input": None,
             },
@@ -1243,16 +1561,16 @@ MENU_CATEGORIES = {
             },
             {
                 "id": "24",
-                "name": "Scan .env Files",
-                "description": "Specifically scan .env files for exposed secrets and credentials. Checks for hardcoded API keys and sensitive values.",
+                "name": "Scan for Secrets (incl. .env)",
+                "description": "Run the full secrets scan, which includes .env files. Detects hardcoded API keys, tokens, and credentials (same engine as [23]).",
                 "action": "secrets-env",
                 "requires_input": "path",
                 "input_prompt": "Enter project path: ",
             },
             {
                 "id": "25",
-                "name": "High Entropy Scan",
-                "description": "Use entropy-based detection to find random strings that may be secrets. Catches unknown API key formats.",
+                "name": "Secrets Scan (with entropy)",
+                "description": "Run the full secrets scan, which already includes entropy-based detection of random strings (unknown key formats). Same engine as [23].",
                 "action": "secrets-entropy",
                 "requires_input": "path",
                 "input_prompt": "Enter path to scan: ",
@@ -1279,8 +1597,8 @@ MENU_CATEGORIES = {
             },
             {
                 "id": "28",
-                "name": "Quick Security Check",
-                "description": "Fast security assessment without deep scanning. Good for CI/CD pipelines and quick checks.",
+                "name": "Security Score (alias)",
+                "description": "Generate the A-F security grade. Runs the same comprehensive analysis as [27] (vulnerabilities, malware, secrets, dependencies, configuration).",
                 "action": "security-quick",
                 "requires_input": "path",
                 "input_prompt": "Enter project path: ",
@@ -1657,6 +1975,7 @@ def show_main_menu():
     t1.add_row("[cyan][1c][/cyan] Deep", "[yellow][14][/yellow] Details", "[red][20][/red] Remove", "[magenta][26][/magenta] Report", "[blue][32][/blue] Rollback")
     t1.add_row("[cyan][1d][/cyan] CVE Hunter", "[yellow][15][/yellow] By Pkg", "[red][21][/red] Cleanup", "", "[bright_red][ X][/bright_red] QuickFix")
     t1.add_row("[cyan][1e][/cyan] Custom", "[yellow][16][/yellow] Export", "[red][22][/red] Report", "", "[green][ F][/green] FixWizard")
+    t1.add_row("[bright_green][7a][/bright_green] 🤖 Agent", "", "", "", "")
     console.print(t1)
 
     # Row 2: LIVE, DEPS, GITHUB, SBOM, CI/CD
@@ -1731,7 +2050,7 @@ def show_next_steps(cmd_type: str, context: dict = None):
         ],
         "scanners": [
             ("[1]", "Run full scan (all scanners)"),
-            ("[2-7]", "Run a specific scanner"),
+            ("[2-7,7a]", "Run a specific scanner"),
             ("[11]", "View CVE database"),
         ],
         "malware_scan": [
@@ -2064,15 +2383,24 @@ def quick_fix_all(session_logger, console):
                 })
                 continue
 
+            # Validate attacker-controlled package/version before building argv.
+            if not _is_safe_npm_package(package) or not _is_safe_npm_version(patched):
+                console.print(
+                    f"[warning]Skipping fix for suspicious package/version: "
+                    f"{package}@{patched}[/warning]"
+                )
+                continue
+
+            # Build an argv list (shell=False) — never a shell string. Use cwd=
+            # instead of a 'cd "..." &&' prefix so nothing is interpreted by a
+            # shell.
             if has_yarn:
-                cmd = f"cd \"{project_dir}\" && yarn upgrade {package}@{patched}"
-            elif has_npm:
-                cmd = f"cd \"{project_dir}\" && npm install {package}@{patched}"
+                argv = ["yarn", "upgrade", f"{package}@{patched}"]
             else:
-                cmd = f"cd \"{project_dir}\" && npm install {package}@{patched}"
+                argv = ["npm", "install", f"{package}@{patched}"]
 
             fix_commands.append({
-                'cmd': cmd,
+                'cmd': argv,
                 'package': package,
                 'patched': patched,
                 'project': project_dir,
@@ -2127,7 +2455,7 @@ def quick_fix_all(session_logger, console):
         try:
             result = subprocess.run(
                 fix['cmd'],
-                shell=True,
+                shell=False,
                 capture_output=True,
                 text=True,
                 timeout=180,  # 3 min timeout per package
@@ -2238,7 +2566,7 @@ def interactive_shell():
 
             if choice in ['h', 'help']:
                 console.print(Panel(
-                    "[title]Shellockolm v2.0[/title]\n\n"
+                    f"[title]Shellockolm v{__version__}[/title]\n\n"
                     "Security Detective for React, Next.js, Node.js & npm\n\n"
                     "[highlight]Coverage:[/highlight]\n"
                     "  • 32 CVEs tracked (2024-2026)\n"
@@ -2752,13 +3080,22 @@ def interactive_shell():
 
                         console.print("[subtitle]Recommended Fix:[/subtitle]")
 
+                        # Validate attacker-controlled package/version before
+                        # building any command. fix_argv is the safe argv list
+                        # used for execution (shell=False); fix_cmd is a
+                        # human-readable string used only for display.
+                        fix_safe = _is_safe_npm_package(package) and _is_safe_npm_version(patched)
+
                         if has_yarn:
-                            fix_cmd = f"cd {project_dir} && yarn upgrade {package}@{patched}"
-                            console.print(f"  [green]$[/green] {fix_cmd}")
+                            fix_argv = ["yarn", "upgrade", f"{package}@{patched}"]
+                            fix_cmd = f"yarn upgrade {package}@{patched}"
+                            console.print(f"  [green]$[/green] cd {project_dir} && {fix_cmd}")
                         elif has_npm:
-                            fix_cmd = f"cd {project_dir} && npm install {package}@{patched}"
-                            console.print(f"  [green]$[/green] {fix_cmd}")
+                            fix_argv = ["npm", "install", f"{package}@{patched}"]
+                            fix_cmd = f"npm install {package}@{patched}"
+                            console.print(f"  [green]$[/green] cd {project_dir} && {fix_cmd}")
                         else:
+                            fix_argv = ["npm", "install", f"{package}@{patched}"]
                             fix_cmd = f"npm install {package}@{patched}"
                             console.print(f"  [green]$[/green] {fix_cmd}")
                             console.print(f"  [dim]Or: yarn add {package}@{patched}[/dim]")
@@ -2799,15 +3136,25 @@ def interactive_shell():
                                 continue
 
                         if action in ['a', 'apply', 'y', 'yes', '']:
+                            # Refuse to run anything for a suspicious package/version.
+                            if not fix_safe:
+                                console.print(
+                                    f"[warning]Refusing to auto-run fix for suspicious "
+                                    f"package/version: {package}@{patched}[/warning]"
+                                )
+                                skipped_count += 1
+                                continue
+
                             # Execute the fix
                             console.print(f"[info]Applying fix...[/info]")
-                            console.print(f"[dim]Running: {fix_cmd}[/dim]\n")
+                            console.print(f"[dim]Running: {fix_cmd} (in {project_dir})[/dim]\n")
 
                             import subprocess
                             try:
                                 result = subprocess.run(
-                                    fix_cmd,
-                                    shell=True,
+                                    fix_argv,
+                                    shell=False,
+                                    cwd=project_dir,
                                     capture_output=True,
                                     text=True,
                                     timeout=120
@@ -2883,6 +3230,9 @@ def interactive_shell():
                 # Use the resolved path
                 path = str(resolved_path)
                 action = f"{action} {path}"
+                # Make the resolved path available to handlers that read
+                # cmd["input_value"] (sbom/tree/ignore/gha/watch/etc.).
+                cmd["input_value"] = path
 
             elif cmd.get("requires_input") == "url":
                 url = prompt(cmd["input_prompt"]).strip()
@@ -2947,6 +3297,17 @@ def interactive_shell():
                     pkg_name = pkg_input.split("/package/")[-1].split("?")[0].split("/")[0]
                 else:
                     pkg_name = pkg_input
+                cmd["input_value"] = pkg_name
+                action = f"{action} {pkg_name}"
+
+            elif cmd.get("requires_input") == "package":
+                pkg_name = prompt(cmd["input_prompt"]).strip()
+                if not pkg_name:
+                    console.print("[danger]Package name is required.[/danger]")
+                    show_menu = False
+                    continue
+                # Make the package name available to handlers that read
+                # cmd["input_value"] (ghsa-query, tree-find).
                 cmd["input_value"] = pkg_name
                 action = f"{action} {pkg_name}"
 
@@ -3043,18 +3404,10 @@ def interactive_shell():
                     # Auto-detect and scan all npm projects on the system
                     console.print(f"[title]🔍 Scanning ALL npm Projects on System[/title]\n")
 
-                    home_dir = Path.home()
-                    search_paths = [
-                        home_dir / ".npm",
-                        home_dir / "node_modules",
-                        home_dir / "projects",
-                        home_dir / "code",
-                        home_dir / "dev",
-                        Path("/mnt"),
-                        Path("/opt"),
-                    ]
+                    search_paths = _default_search_roots()
 
-                    # Find all package.json files with progress
+                    # Find all package.json files with progress (pure-Python
+                    # walk — cross-platform, no Unix `find` dependency).
                     sys.stdout.write("Discovering npm projects...")
                     sys.stdout.flush()
                     found_projects = set()
@@ -3062,15 +3415,8 @@ def interactive_shell():
                     for search_path in search_paths:
                         if search_path.exists():
                             try:
-                                import subprocess
-                                result = subprocess.run(
-                                    ["find", str(search_path), "-maxdepth", "6", "-name", "package.json", "-type", "f"],
-                                    capture_output=True, text=True, timeout=30
-                                )
-                                for line in result.stdout.strip().split("\n"):
-                                    if line and "node_modules" not in line:
-                                        project_dir = str(Path(line).parent)
-                                        found_projects.add(project_dir)
+                                for project_dir in _find_package_json(search_path, max_depth=6):
+                                    found_projects.add(project_dir)
                             except Exception:
                                 pass
 
@@ -3222,16 +3568,15 @@ def interactive_shell():
                         sys.stdout.write(f"\r⚠ {target_cve} not in local database" + " " * 20 + "\n")
                     sys.stdout.flush()
 
-                    # Step 2: Find package.json files with progress
-                    import subprocess
+                    # Step 2: Find package.json files with progress (pure-Python
+                    # walk — cross-platform, no Unix `find` dependency).
                     sys.stdout.write("Discovering package.json files...")
                     sys.stdout.flush()
                     try:
-                        result = subprocess.run(
-                            ["find", str(resolved_path), "-name", "package.json", "-type", "f"],
-                            capture_output=True, text=True, timeout=30
-                        )
-                        pkg_files = [f for f in result.stdout.strip().split("\n") if f and "node_modules" not in f]
+                        pkg_files = [
+                            str(Path(project_dir) / "package.json")
+                            for project_dir in _find_package_json(resolved_path, max_depth=10)
+                        ]
                         sys.stdout.write(f"\r✓ Found {len(pkg_files)} package.json files" + " " * 20 + "\n")
                         sys.stdout.flush()
                     except Exception:
@@ -3835,7 +4180,7 @@ def interactive_shell():
                             console.print(f"[dim]... and {len(report.matches) - 10} more findings[/dim]")
 
                         # Save report
-                        report_path = Path("/tmp/shellockolm/malware_report.json")
+                        report_path = _shellockolm_tmp("malware_report.json")
                         analyzer.generate_report(report, str(report_path))
                         console.print(f"[info]📋 Full report saved: {report_path}[/info]")
 
@@ -3867,7 +4212,7 @@ def interactive_shell():
                             if analyzer.quarantine_file(file_path, report):
                                 console.print(f"[success]✅ File quarantined successfully![/success]")
                                 console.print(f"[path]Original: {file_path}[/path]")
-                                console.print(f"[warning]Quarantine: /tmp/shellockolm/quarantine/[/warning]")
+                                console.print(f"[warning]Quarantine: {_shellockolm_tmp('quarantine')}[/warning]")
                             else:
                                 console.print(f"[danger]Failed to quarantine file[/danger]")
                         else:
@@ -3932,7 +4277,7 @@ def interactive_shell():
                     next_step_type = "malware_action"
 
                 elif cmd_name == "malware-report":
-                    report_path = Path("/tmp/shellockolm/malware_report.json")
+                    report_path = _shellockolm_tmp("malware_report.json")
                     if report_path.exists():
                         with open(report_path) as f:
                             report_data = json.load(f)
@@ -4014,7 +4359,7 @@ def interactive_shell():
                             console.print(f"[dim]... and {len(report.matches) - 10} more findings[/dim]")
 
                         # Save report
-                        report_path = Path("/tmp/shellockolm/secrets_report.json")
+                        report_path = _shellockolm_tmp("secrets_report.json")
                         scanner.generate_report(report, str(report_path))
                         console.print(f"[info]📋 Full report saved: {report_path}[/info]")
 
@@ -4032,7 +4377,7 @@ def interactive_shell():
                         next_step_type = "secrets_clean"
 
                 elif cmd_name == "secrets-report":
-                    report_path = Path("/tmp/shellockolm/secrets_report.json")
+                    report_path = _shellockolm_tmp("secrets_report.json")
                     if report_path.exists():
                         with open(report_path) as f:
                             report_data = json.load(f)
@@ -4066,9 +4411,9 @@ def interactive_shell():
                 # ─────────────────────────────────────────────────────────
                 elif cmd_name in ["security-score", "security-quick"]:
                     path = cmd_args[-1] if cmd_args and not cmd_args[-1].startswith("-") else "."
-                    quick_mode = cmd_name == "security-quick"
-
-                    console.print(f"[title]📊 Security Score Calculator{' (Quick)' if quick_mode else ''}[/title]")
+                    # NOTE: SecurityScoreCalculator has no separate "quick" mode;
+                    # both menu entries run the same comprehensive calculation.
+                    console.print(f"[title]📊 Security Score Calculator[/title]")
                     console.print(f"[path]Target: {Path(path).resolve()}[/path]\n")
 
                     calculator = SecurityScoreCalculator()
@@ -4149,14 +4494,14 @@ def interactive_shell():
                             console.print(f"  [warning]• {rec}[/warning]")
 
                     # Save report
-                    report_path = Path("/tmp/shellockolm/security_report.json")
+                    report_path = _shellockolm_tmp("security_report.json")
                     calculator.generate_report(report, str(report_path))
                     console.print(f"[info]📋 Full report saved: {report_path}[/info]")
 
                     next_step_type = "security_score" if report.score < 80 else "security_clean"
 
                 elif cmd_name == "security-report":
-                    report_path = Path("/tmp/shellockolm/security_report.json")
+                    report_path = _shellockolm_tmp("security_report.json")
                     if report_path.exists():
                         with open(report_path) as f:
                             report_data = json.load(f)
@@ -4259,7 +4604,7 @@ def interactive_shell():
 
                     fixer = AutoFixer()
                     # Look for backup in the default backup directory
-                    backup_dir = Path("/tmp/shellockolm/backups")
+                    backup_dir = _shellockolm_tmp("backups")
 
                     # Find most recent backup for this project
                     backups = sorted(backup_dir.glob("*"), reverse=True) if backup_dir.exists() else []
@@ -4353,7 +4698,7 @@ def interactive_shell():
                             console.print(f"[dim]... and {len(issues_to_show) - 10} more issues[/dim]")
 
                         # Save report
-                        report_path = Path("/tmp/shellockolm/lockfile_report.json")
+                        report_path = _shellockolm_tmp("lockfile_report.json")
                         analyzer.generate_report(report, str(report_path))
                         console.print(f"[info]📋 Full report saved: {report_path}[/info]")
 
@@ -4371,7 +4716,7 @@ def interactive_shell():
                         next_step_type = "lockfile_clean"
 
                 elif cmd_name == "lockfile-report":
-                    report_path = Path("/tmp/shellockolm/lockfile_report.json")
+                    report_path = _shellockolm_tmp("lockfile_report.json")
                     if report_path.exists():
                         with open(report_path) as f:
                             report_data = json.load(f)
@@ -4424,7 +4769,7 @@ def interactive_shell():
                         try:
                             scanners = get_all_scanners()
                             for scanner in scanners:
-                                result = scanner.scan(path)
+                                result = scanner.scan_directory(path, recursive=True, max_depth=10)
                                 if result.findings:
                                     sarif_gen.from_scan_results(result.findings)
                                     total_findings += len(result.findings)
@@ -4436,7 +4781,7 @@ def interactive_shell():
                         task = progress.add_task("[warning]Running malware scan...", total=None)
                         try:
                             malware = MalwareAnalyzer()
-                            malware_report = malware.analyze_project(path)
+                            malware_report = malware.scan_directory(path, recursive=True, max_depth=5)
                             if malware_report.matches:
                                 sarif_gen.from_malware_report(malware_report)
                                 total_findings += len(malware_report.matches)
@@ -4448,7 +4793,7 @@ def interactive_shell():
                         task = progress.add_task("[warning]Running secrets scan...", total=None)
                         try:
                             secrets = SecretsScanner()
-                            secrets_report = secrets.scan(path)
+                            secrets_report = secrets.scan_directory(path)
                             if secrets_report.matches:
                                 sarif_gen.from_secrets_report(secrets_report)
                                 total_findings += len(secrets_report.matches)
@@ -4475,7 +4820,7 @@ def interactive_shell():
 
                         # 5. Generate SARIF
                         task = progress.add_task("[warning]Generating SARIF report...", total=None)
-                        sarif_path = Path("/tmp/shellockolm/sarif-report.sarif")
+                        sarif_path = _shellockolm_tmp("sarif-report.sarif")
                         sarif_output = sarif_gen.generate(str(sarif_path))
                         progress.remove_task(task)
 
@@ -4503,7 +4848,7 @@ def interactive_shell():
                     next_step_type = "sarif_export"
 
                 elif cmd_name in ["sarif-view", "sarif-convert"]:
-                    sarif_path = Path("/tmp/shellockolm/sarif-report.sarif")
+                    sarif_path = _shellockolm_tmp("sarif-report.sarif")
 
                     if cmd_name == "sarif-convert":
                         console.print(f"[title]📤 SARIF Converter[/title]")
@@ -4520,7 +4865,7 @@ def interactive_shell():
                         ) as progress:
                             # Load scan results JSON if exists
                             task = progress.add_task("[warning]Converting scan results...", total=None)
-                            scan_report = Path("/tmp/shellockolm/sessions")
+                            scan_report = _shellockolm_tmp("sessions")
                             if scan_report.exists():
                                 # Get most recent findings file
                                 findings_files = sorted(scan_report.glob("findings_*.json"), reverse=True)
@@ -4544,7 +4889,7 @@ def interactive_shell():
 
                             # Load malware report if exists
                             task = progress.add_task("[warning]Converting malware results...", total=None)
-                            malware_report = Path("/tmp/shellockolm/malware_report.json")
+                            malware_report = _shellockolm_tmp("malware_report.json")
                             if malware_report.exists():
                                 try:
                                     with open(malware_report) as f:
@@ -4565,7 +4910,7 @@ def interactive_shell():
 
                             # Load lockfile report if exists
                             task = progress.add_task("[warning]Converting lockfile results...", total=None)
-                            lockfile_report = Path("/tmp/shellockolm/lockfile_report.json")
+                            lockfile_report = _shellockolm_tmp("lockfile_report.json")
                             if lockfile_report.exists():
                                 try:
                                     with open(lockfile_report) as f:
@@ -4693,7 +5038,7 @@ def interactive_shell():
                             console.print(f"[subtitle]... and {len(result.advisories) - 10} more advisories[/subtitle]")
 
                         # Save report
-                        report_path = Path("/tmp/shellockolm/ghsa_report.json")
+                        report_path = _shellockolm_tmp("ghsa_report.json")
                         ghsa_db.generate_report([package_name], str(report_path))
                         console.print(f"[info]📋 Full report: {report_path}[/info]")
                     else:
@@ -4823,7 +5168,7 @@ def interactive_shell():
                             console.print(f"  [warning]• {pkg}[/warning]")
 
                         # Save report
-                        report_path = Path("/tmp/shellockolm/ghsa_report.json")
+                        report_path = _shellockolm_tmp("ghsa_report.json")
                         ghsa_db.generate_report(all_deps, str(report_path))
                         console.print(f"[info]📋 Full report: {report_path}[/info]")
                     else:
@@ -4837,7 +5182,7 @@ def interactive_shell():
                     next_step_type = "ghsa_scan"
 
                 elif cmd_name == "ghsa-report":
-                    report_path = Path("/tmp/shellockolm/ghsa_report.json")
+                    report_path = _shellockolm_tmp("ghsa_report.json")
 
                     if report_path.exists():
                         with open(report_path) as f:
@@ -5710,16 +6055,20 @@ def interactive_shell():
 
                     console.print()
                     console.print("[subtitle]Process Check[/subtitle]")
-                    try:
-                        import subprocess
-                        result = subprocess.run(["pgrep", "-fa", "clawdbot|moltbot"], capture_output=True, text=True, timeout=5)
-                        if result.stdout.strip():
-                            for line in result.stdout.strip().split('\n'):
-                                console.print(f"  [bright_red]🚨 Running process: {line}[/bright_red]")
-                        else:
-                            console.print(f"  [bright_green]✓ No Clawdbot/Moltbot processes running[/bright_green]")
-                    except Exception:
-                        console.print(f"  [dim]Cannot check processes[/dim]")
+                    if sys.platform == "win32":
+                        # pgrep does not exist on Windows; skip cleanly.
+                        console.print(f"  [dim]Process check via pgrep is not available on Windows; skipped.[/dim]")
+                    else:
+                        try:
+                            import subprocess
+                            result = subprocess.run(["pgrep", "-fa", "clawdbot|moltbot"], capture_output=True, text=True, timeout=5)
+                            if result.stdout.strip():
+                                for line in result.stdout.strip().split('\n'):
+                                    console.print(f"  [bright_red]🚨 Running process: {line}[/bright_red]")
+                            else:
+                                console.print(f"  [bright_green]✓ No Clawdbot/Moltbot processes running[/bright_green]")
+                        except Exception:
+                            console.print(f"  [dim]Cannot check processes[/dim]")
 
                     console.print()
                     next_step_type = "clawdbot"
