@@ -676,6 +676,27 @@ def build_json_report(
     }
 
 
+def build_sarif_report(results: List[ScanResult], *, base_path: str = "") -> dict:
+    """Assemble a SARIF 2.1.0 document from scan results for GitHub Code Scanning.
+
+    Routes every finding (dependency CVEs, secrets, malware, and the agent
+    ``AGENT-*`` supply-chain rules) through the shared :class:`SarifGenerator`, so
+    ``scan --sarif`` produces a single artifact that GitHub Code Scanning / the
+    VS Code SARIF viewer can ingest — agent-scan findings included. The agent
+    scanner has already redacted any secret in the finding text, so the SARIF never
+    re-emits a live credential.
+    """
+    gen = SarifGenerator()
+    # Emit ONLY the rules that actually fired in this scan: drop the pre-seeded
+    # built-in catalog so a clean (or agent-only) report isn't padded with a dozen
+    # unrelated rule definitions. Each finding contributes its own self-consistent
+    # rule via add_scan_finding.
+    gen.rules.clear()
+    for r in results:
+        gen.from_scan_findings(r.findings, base_path=base_path)
+    return gen.generate()
+
+
 def print_summary(results: List[ScanResult], output_json: Optional[str] = None):
     """Print scan summary with actionable tips"""
     total_findings = sum(len(r.findings) for r in results)
@@ -788,6 +809,11 @@ def scan(
         False, "--json",
         help="Emit one machine-readable JSON document to stdout (CI mode); "
              "suppresses all human output. Schema is documented in the README.",
+    ),
+    sarif: Optional[str] = typer.Option(
+        None, "--sarif",
+        help="Also write a SARIF 2.1.0 report to this path (for GitHub Code "
+             "Scanning / the VS Code SARIF viewer). Covers agent-scan findings too.",
     ),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
     quick: bool = typer.Option(False, "--quick", help="Quick mode: only check package versions (fast!)"),
@@ -955,6 +981,28 @@ def scan(
             f"[dim]🔅 {total_below_conf} finding(s) below --min-confidence "
             f"{min_confidence} (raise sensitivity with --min-confidence low)[/dim]"
         )
+
+    # SARIF export (a file artifact for GitHub Code Scanning); independent of the
+    # stdout mode, so it composes with both the human and --json paths and never
+    # writes to stdout.
+    if sarif:
+        try:
+            sarif_doc = build_sarif_report(
+                results, base_path=str(Path(path).resolve())
+            )
+            sarif_parent = Path(sarif).parent
+            if str(sarif_parent) not in ("", "."):
+                sarif_parent.mkdir(parents=True, exist_ok=True)
+            with open(sarif, "w", encoding="utf-8") as fh:
+                json.dump(sarif_doc, fh, indent=2)
+            if not quiet:
+                n = sum(len(r.findings) for r in results)
+                console.print(
+                    f"[success]📤 SARIF report ({n} result(s)) written to: {sarif}[/success]"
+                )
+        except OSError as e:
+            # Never corrupt the stdout JSON contract; report file errors on stderr.
+            print(f"shellockolm: could not write {sarif}: {e}", file=sys.stderr)
 
     if json_output:
         # CI mode: assemble the stable JSON document and write ONLY it to stdout

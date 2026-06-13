@@ -300,6 +300,26 @@ renamed or removed.
 
 Add `-o report.json` alongside `--json` to also persist the identical document to a file.
 
+**SARIF export (`--sarif`, GitHub Code Scanning).** `--sarif <path>` writes a SARIF 2.1.0
+document covering **every** finding — dependency CVEs, secrets, malware, **and** the agent
+`AGENT-*` supply-chain rules — so GitHub Code Scanning and the VS Code SARIF viewer surface
+agent-scan findings inline in the Security tab / editor. It is a file artifact independent of
+the stdout mode, so it composes with both the human and `--json` paths (it never writes to
+stdout). Each finding becomes a SARIF rule (severity → `error`/`warning`/`note`,
+`security-severity` score for GitHub, agent rules tagged `agent`/`supply-chain` + attack class)
+and a result with a repo-relative `uri`, `startLine`, and a `confidence` property. Secrets are
+already redacted in finding text, so the SARIF never carries a live credential.
+
+```yaml
+# GitHub Actions — upload agent-scan findings to the Security tab
+- name: Scan agent skills/MCP
+  run: python src/cli.py scan -s agent --sarif results.sarif ./skills || true
+- name: Upload SARIF
+  uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: results.sarif
+```
+
 </details>
 
 <details>

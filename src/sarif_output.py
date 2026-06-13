@@ -8,6 +8,8 @@ SARIF Spec: https://sarifweb.azurewebsites.net/
 """
 
 import json
+import os
+import re
 import hashlib
 from pathlib import Path
 from datetime import datetime
@@ -84,7 +86,10 @@ class SarifResult:
     end_column: Optional[int] = None
     level: str = "warning"  # "error", "warning", "note"
     fingerprint: Optional[str] = None
-    
+    # Optional SARIF result-level properties (e.g. detection confidence). Emitted
+    # only when set, so existing results serialize byte-identically.
+    properties: Optional[Dict[str, Any]] = None
+
     def to_sarif(self, base_path: str = "") -> Dict[str, Any]:
         """Convert to SARIF result format"""
         # Calculate fingerprint for deduplication
@@ -109,7 +114,7 @@ class SarifResult:
         if self.end_column:
             physical_location["region"]["endColumn"] = self.end_column
         
-        return {
+        result: Dict[str, Any] = {
             "ruleId": self.rule_id,
             "level": self.level,
             "message": {
@@ -122,6 +127,9 @@ class SarifResult:
                 "primary": self.fingerprint
             }
         }
+        if self.properties:
+            result["properties"] = self.properties
+        return result
 
 
 class SarifGenerator:
@@ -266,6 +274,160 @@ class SarifGenerator:
     def add_result(self, result: SarifResult):
         """Add a result (finding)"""
         self.results.append(result)
+
+    # ─────────────────────────────────────────────────────────────────
+    # Unified ScanFinding → SARIF (covers CVE, secret, malware AND the
+    # AGENT-* agent-supply-chain rules). This is the path used by the
+    # `scan --sarif` CLI flag so agent-scan findings are ingestible by
+    # GitHub Code Scanning alongside dependency CVEs.
+    # ─────────────────────────────────────────────────────────────────
+
+    # severity → SARIF level
+    _LEVEL_MAP = {
+        "critical": "error",
+        "high": "error",
+        "medium": "warning",
+        "low": "note",
+        "info": "note",
+        "note": "note",
+    }
+
+    # AGENT-<FAMILY>-NNN → an extra descriptive SARIF tag for the attack class.
+    _AGENT_SUBTAGS = {
+        "PI": "prompt-injection",
+        "PRO": "prompt-injection",
+        "MCP": "mcp",
+        "N8N": "n8n",
+        "HOOK": "hooks",
+        "SECRET": "secrets",
+        "EXFIL": "exfiltration",
+        "DESTRUCT": "destructive",
+    }
+
+    @staticmethod
+    def _truncate(text: str, limit: int = 400) -> str:
+        """Collapse whitespace and bound a description for SARIF message/help text."""
+        collapsed = " ".join((text or "").split())
+        if len(collapsed) <= limit:
+            return collapsed
+        return collapsed[: limit - 1] + "…"
+
+    @staticmethod
+    def _split_location(file_path: str, raw_data: Optional[Dict[str, Any]] = None):
+        """Resolve a finding's ``file_path`` into a clean (path, line) pair.
+
+        Agent findings label location as ``<path>:<line>`` for text rules or
+        ``<path> » server:<name>`` / ``» node:<name>`` for structured rules. SARIF
+        needs a bare artifact path plus a separate ``startLine``, so we strip the
+        structured suffix, then take the line from ``raw_data['line']`` when present
+        and otherwise from a trailing ``:<digits>``. A Windows drive colon
+        (``G:\\…``) is preserved because the regex is anchored to end-of-string.
+        """
+        path = (file_path or "").split(" » ", 1)[0]
+        line: Optional[int] = None
+        if isinstance(raw_data, dict) and "line" in raw_data:
+            try:
+                line = int(raw_data["line"])
+            except (TypeError, ValueError):
+                line = None
+        # Always strip a trailing ":<digits>" (the agent text-rule "<path>:<line>"
+        # label) from the path so the SARIF artifact URI is a bare file path; use it
+        # as the line when raw_data didn't already supply one.
+        m = re.search(r":(\d+)$", path)
+        if m:
+            if line is None:
+                line = int(m.group(1))
+            path = path[: m.start()]
+        return path, (line if line and line > 0 else 1)
+
+    @staticmethod
+    def _uri(path: str, base_path: str = "") -> str:
+        """Best-effort relative, forward-slash URI for the SARIF artifact location.
+
+        GitHub Code Scanning maps results to files by repo-relative path, so we
+        relativize against ``base_path`` when the artifact lives under it (guarded:
+        ``relpath`` raises across Windows drives) and normalize separators to ``/``.
+        """
+        p = path
+        if base_path:
+            try:
+                rel = os.path.relpath(path, base_path)
+                if not rel.startswith(".."):
+                    p = rel
+            except (ValueError, OSError):
+                pass
+        return p.replace("\\", "/")
+
+    @classmethod
+    def _agent_subtags(cls, rule_id: str) -> List[str]:
+        parts = rule_id.split("-")
+        if len(parts) >= 2:
+            tag = cls._AGENT_SUBTAGS.get(parts[1].upper())
+            if tag:
+                return [tag]
+        return []
+
+    def _rule_for_finding(self, rule_id: str, finding: Any, severity: str) -> SarifRule:
+        """Build the SARIF rule definition for a finding's rule id, choosing a
+        correct helpUri + tags by id family (AGENT-* / CVE-* / other)."""
+        title = (getattr(finding, "title", "") or rule_id).strip()
+        description = self._truncate(getattr(finding, "description", "") or title)
+        if rule_id.startswith("AGENT-"):
+            help_uri = f"{self.TOOL_INFO_URI}#ai-agent-supply-chain-scanning"
+            tags = ["security", "agent", "supply-chain"] + self._agent_subtags(rule_id)
+        elif rule_id.startswith("CVE-"):
+            help_uri = f"https://nvd.nist.gov/vuln/detail/{rule_id}"
+            tags = ["security", "vulnerability", "cve"]
+        else:
+            help_uri = f"{self.TOOL_INFO_URI}#detections"
+            tags = ["security"]
+        return SarifRule(
+            id=rule_id,
+            name=title[:120] or rule_id,
+            short_description=title[:200] or rule_id,
+            full_description=description,
+            help_uri=help_uri,
+            security_severity=severity,
+            tags=tags,
+        )
+
+    def add_scan_finding(self, finding: Any, base_path: str = ""):
+        """Add a single ``ScanFinding`` (duck-typed) as a SARIF rule + result.
+
+        Works uniformly for every scanner: dependency CVEs, secrets, malware, and
+        the agent-supply-chain ``AGENT-*`` rules. Descriptions are already redacted
+        by the agent scanner, so no live secret is re-emitted here.
+        """
+        rule_id = getattr(finding, "cve_id", None) or "UNKNOWN"
+        raw_sev = getattr(finding, "severity", "medium")
+        severity = (raw_sev.value if hasattr(raw_sev, "value") else str(raw_sev)).lower()
+        path, line = self._split_location(
+            getattr(finding, "file_path", "") or "",
+            getattr(finding, "raw_data", None),
+        )
+        uri = self._uri(path, base_path)
+
+        if rule_id not in self.rules:
+            self.add_rule(self._rule_for_finding(rule_id, finding, severity))
+
+        title = (getattr(finding, "title", "") or rule_id).strip()
+        message = self._truncate(
+            f"{title}: {getattr(finding, 'description', '') or ''}".rstrip(": ").strip()
+        )
+        confidence = getattr(finding, "confidence", None)
+        self.add_result(SarifResult(
+            rule_id=rule_id,
+            message=message or title or rule_id,
+            file_path=uri,
+            start_line=line,
+            level=self._LEVEL_MAP.get(severity, "warning"),
+            properties={"confidence": confidence} if confidence else None,
+        ))
+
+    def from_scan_findings(self, findings: List[Any], base_path: str = ""):
+        """Add a flat list of ``ScanFinding`` objects (the unified scan path)."""
+        for finding in findings:
+            self.add_scan_finding(finding, base_path=base_path)
     
     def add_cve_finding(self, cve_id: str, file_path: str, line_number: int,
                        message: str, severity: str = "high"):
