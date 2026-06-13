@@ -219,6 +219,21 @@ python src/cli.py scan -s agent ./claude_desktop_config.json
 
 Also available as the `scan` MCP tool (pass `scanner: "agent"`) so an agent can vet a skill mid-session.
 
+**Suppressing accepted findings.** Drop a `.shellockolmignore` at your repo root to allowlist
+findings your team has reviewed and accepted — by rule ID, optionally scoped to a path glob
+(gitignore-style). Suppressed findings are removed from results and reported as a count, so the
+allowlist is never silent:
+
+```gitignore
+# .shellockolmignore
+AGENT-PI-013                 # suppress this rule everywhere
+AGENT-PI-016 docs/skills/**  # suppress it only under a path glob
+AGENT-MCP-004,AGENT-HOOK-001 vendor/**  # several rules, one shared path scope
+```
+
+Path-pattern lines (e.g. `node_modules/`, `*.min.js`) keep working exactly as before — only lines
+whose first token is an uppercase rule ID are read as suppressions.
+
 </details>
 
 <details>

@@ -1148,6 +1148,11 @@ class AgentSupplyChainScanner(BaseScanner):
         # sink. Runs before finalize_result so the summary counts reflect the boost.
         self._apply_composite_severity(result.findings)
 
+        # Allowlist: drop findings a team has accepted via `.shellockolmignore`
+        # rule-ID suppressions. Runs after composite scoring so a suppressed rule
+        # is removed regardless of any boost it received.
+        suppressed = self._apply_rule_suppressions(result.findings, root)
+
         result = self.finalize_result(result)
         result.stats.update({
             "skills_scanned": skills,
@@ -1156,8 +1161,50 @@ class AgentSupplyChainScanner(BaseScanner):
             "instruction_files_scanned": instrs,
             "commands_scanned": commands,
             "claude_settings_scanned": settings,
+            "findings_suppressed": suppressed,
         })
         return result
+
+    def _apply_rule_suppressions(self, findings: List[ScanFinding], root: Path) -> int:
+        """Remove findings suppressed by `.shellockolmignore` rule-ID directives.
+
+        Discovers ignore files within the scanned tree (plus the user-level
+        `~/.shellockolmignore`) and drops any finding whose rule ID is suppressed
+        for its artifact path. Mutates `findings` in place; returns the count
+        removed. No-ops (and never raises) when no suppressions are configured.
+        """
+        try:
+            from ignore_handler import IgnoreHandler
+        except Exception:
+            return 0
+
+        search_dir = root.parent if root.is_file() else root
+        try:
+            handler = IgnoreHandler()
+            handler.load_global_ignore()
+            handler.load_project_ignores(str(search_dir))
+        except Exception:
+            return 0
+
+        if not handler.get_stats().get("rule_suppressions"):
+            return 0
+
+        kept: List[ScanFinding] = []
+        removed = 0
+        for f in findings:
+            artifact_path = self._artifact_key(f.file_path)
+            try:
+                suppressed, _reason = handler.is_rule_suppressed(f.cve_id, artifact_path)
+            except Exception:
+                suppressed = False
+            if suppressed:
+                removed += 1
+            else:
+                kept.append(f)
+
+        if removed:
+            findings[:] = kept
+        return removed
 
     def scan_file(self, file_path: str) -> List[ScanFinding]:
         res = self.scan_directory(file_path, recursive=False)

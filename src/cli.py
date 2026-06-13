@@ -791,6 +791,14 @@ def scan(
                 border_style="bright_green",
             ))
 
+    # Surface allowlisted findings so the suppression is never silent.
+    total_suppressed = sum(r.stats.get("findings_suppressed", 0) for r in results)
+    if total_suppressed and not quiet:
+        console.print(
+            f"[dim]🔇 {total_suppressed} finding(s) suppressed by "
+            f".shellockolmignore rule allowlist[/dim]"
+        )
+
     print_summary(results, output)
 
     # Log summary to session
