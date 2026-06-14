@@ -101,7 +101,8 @@ def test_schema_top_level_keys_and_version():
     assert report["scan"]["min_confidence"] == "low"
     assert report["scan"]["scanners"] == ["agent"]
     assert set(report["summary"]) == {
-        "total_findings", "by_severity", "findings_suppressed", "findings_below_confidence"
+        "total_findings", "by_severity", "findings_suppressed",
+        "findings_below_confidence", "findings_diff_filtered",
     }
 
 
@@ -169,11 +170,16 @@ def test_suppressed_and_below_confidence_counts_propagate():
     r = _result(
         "agent",
         [_finding("AGENT-PI-007", "HIGH")],
-        stats={"findings_suppressed": 3, "findings_below_confidence": 5},
+        stats={
+            "findings_suppressed": 3,
+            "findings_below_confidence": 5,
+            "findings_diff_filtered": 7,
+        },
     )
     report = cli.build_json_report([r], target="/x")
     assert report["summary"]["findings_suppressed"] == 3
     assert report["summary"]["findings_below_confidence"] == 5
+    assert report["summary"]["findings_diff_filtered"] == 7
 
 
 def test_errors_carry_scanner_and_message():

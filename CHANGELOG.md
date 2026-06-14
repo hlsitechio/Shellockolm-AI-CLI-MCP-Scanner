@@ -10,6 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`scan --diff` / `--diff-ref` — git-diff scoping for pre-commit & CI.** Reports
+  findings only for files **changed in git**: `--diff` scans the staged set
+  (`git diff --cached`, the pre-commit content) and `--diff-ref <ref>` scans
+  everything that differs from a ref (e.g. `origin/main`). Findings on unchanged
+  files are dropped (count announced, never silent; surfaced as
+  `summary.findings_diff_filtered` in `--json`); an empty changed set exits `0`
+  immediately. Path-matching is exact and case-insensitive on Windows — it strips a
+  finding's `:<line>` / ` » server:<name>` suffix and resolves relative paths, never
+  a fuzzy basename match. A path outside a git work tree (or an unknown ref) is a
+  usage error (exit `2`). Composes with `--json`/`--sarif`/`--fail-on`/
+  `--min-confidence`. New `src/diff_scan.py` with a 28-test suite
+  (`tests/test_diff_scan.py`): pure matching units, real-temp-repo integration, and
+  e2e proving an unchanged malicious skill is hidden while a staged one is reported.
 - **`scan` exit-code contract + `--fail-on` gate.** Exit codes are now documented
   and stable — `0` clean, `1` findings, `2` usage/operational error — and
   `--fail-on critical|high|medium|low|info` gates the build on severity (exit `1`

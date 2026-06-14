@@ -281,6 +281,26 @@ shellockolm scan -s agent --fail-on high ./skills   # fail the build only on HIG
 shellockolm scan -s agent --fail-on none ./skills   # report findings but always exit 0
 ```
 
+**Diff mode (`--diff` / `--diff-ref`, pre-commit & CI).** Restrict reported findings to the files
+**changed in git**, so a pre-commit hook or a PR check only flags what your change actually touched —
+not pre-existing findings elsewhere in the tree.
+
+- `--diff` scans the **staged** set (`git diff --cached`) — the exact content a commit will introduce.
+- `--diff-ref <ref>` scans everything that differs from a ref (working tree vs `<ref>`), e.g.
+  `origin/main` in CI. It implies `--diff`.
+
+Findings on files outside the changed set are dropped and the count is announced (never silent) and
+surfaced as `summary.findings_diff_filtered` in `--json`. When nothing relevant changed, the scan
+exits `0` immediately. Diff mode composes with every other flag (`--json`, `--sarif`, `--fail-on`,
+`--min-confidence`). A path that is not inside a git work tree (or an unknown ref) is a usage error
+(exit `2`).
+
+```bash
+shellockolm scan -s agent --diff .                       # only files staged for commit
+shellockolm scan -s agent --diff-ref origin/main .       # only files changed vs origin/main (CI)
+shellockolm scan -s agent --diff --fail-on high .        # pre-commit: block the commit on new HIGH+
+```
+
 ```jsonc
 {
   "schema_version": "1.0",
@@ -296,7 +316,8 @@ shellockolm scan -s agent --fail-on none ./skills   # report findings but always
     "total_findings": 1,
     "by_severity": { "critical": 0, "high": 1, "medium": 0, "low": 0, "info": 0 },
     "findings_suppressed": 0,          // dropped by a .shellockolmignore rule allowlist
-    "findings_below_confidence": 0     // hidden by --min-confidence
+    "findings_below_confidence": 0,    // hidden by --min-confidence
+    "findings_diff_filtered": 0        // dropped because the file is outside --diff scope
   },
   "findings": [                        // sorted CRITICAL → INFO
     {

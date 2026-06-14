@@ -182,6 +182,11 @@ from npm_audit import NpmAuditWrapper, NpmAuditSeverity
 from sbom_generator import SBOMGenerator, SBOMFormat
 from dependency_tree import DependencyTreeVisualizer, OutputFormat as TreeOutputFormat
 from ignore_handler import IgnoreHandler
+from diff_scan import (
+    DiffScanError,
+    resolve_changed_files,
+    filter_results_to_changed,
+)
 from github_actions import GitHubActionsGenerator, WorkflowConfig, ScanLevel, TriggerType
 from watch_mode import WatchMode, WatchConfig
 from context_intelligence import (
@@ -710,6 +715,10 @@ def build_json_report(
             "findings_below_confidence": sum(
                 r.stats.get("findings_below_confidence", 0) for r in results
             ),
+            # Findings dropped because their file is outside the --diff scope.
+            "findings_diff_filtered": sum(
+                r.stats.get("findings_diff_filtered", 0) for r in results
+            ),
         },
         "findings": findings_json,
         "errors": errors,
@@ -869,6 +878,17 @@ def scan(
              "never fail on findings (report-only). Default: any finding exits 1. "
              "Usage/operational errors always exit 2.",
     ),
+    diff: bool = typer.Option(
+        False, "--diff",
+        help="Report findings only for files STAGED in git (git diff --cached) — "
+             "the exact content a commit will introduce. Ideal for pre-commit. "
+             "Combine with --diff-ref to compare against a ref instead.",
+    ),
+    diff_ref: Optional[str] = typer.Option(
+        None, "--diff-ref",
+        help="Report findings only for files changed relative to this git ref "
+             "(e.g. origin/main) — working tree vs <ref>. For CI. Implies --diff.",
+    ),
     _from_menu: bool = False,  # Internal: skip banner when called from menu
 ):
     """
@@ -882,6 +902,8 @@ def scan(
         shellockolm scan -o report.json ./      # Export to JSON
         shellockolm scan -s agent --json ./      # Machine-readable JSON to stdout (CI mode)
         shellockolm scan -s agent --fail-on high ./  # Exit 1 only on HIGH+ findings
+        shellockolm scan --diff ./              # Only files staged in git (pre-commit)
+        shellockolm scan --diff-ref origin/main ./   # Only files changed vs a ref (CI)
         shellockolm scan --quick ./             # Quick scan (package versions only)
 
     Exit codes: 0 = clean (no finding at/above --fail-on), 1 = findings gate the
@@ -938,6 +960,27 @@ def scan(
                 console.print("[info]Choose one of: critical, high, medium, low, info, none[/info]")
             raise typer.Exit(EXIT_ERROR)
 
+    # Git-diff scope (build-loop task #19): restrict reported findings to files
+    # changed in git. --diff = staged set (pre-commit); --diff-ref = vs a ref.
+    # A bad path / missing git / unknown ref is a usage/operational error (exit 2).
+    diff_mode = diff or (diff_ref is not None)
+    changed_keys: Optional[set] = None
+    if diff_mode:
+        try:
+            _toplevel, changed_keys = resolve_changed_files(path, ref=diff_ref)
+        except DiffScanError as e:
+            msg = f"--diff: {e}"
+            if json_output:
+                print(msg, file=sys.stderr)
+            else:
+                console.print(f"[danger]{msg}[/danger]")
+            raise typer.Exit(EXIT_ERROR)
+        if not quiet:
+            scope = f"ref {diff_ref}" if diff_ref else "the git index (staged)"
+            console.print(
+                f"[info]🔬 Diff mode: {len(changed_keys)} changed file(s) vs {scope}[/info]"
+            )
+
     results: List[ScanResult] = []
 
     # Get scanners to run
@@ -957,12 +1000,17 @@ def scan(
     else:
         scanners_to_run = get_all_scanners()
 
+    # In diff mode with an empty changed-file set there is nothing to scan, so the
+    # scanner walk is skipped entirely (the genuine pre-commit fast path) and the
+    # run renders as clean below.
+    skip_scan = diff_mode and not changed_keys
+
     # Run scans with single-line progress
-    if not quiet:
+    if not quiet and not skip_scan:
         progress = SingleLineProgress(total=len(scanners_to_run))
         progress.start()
 
-    for i, s in enumerate(scanners_to_run):
+    for i, s in enumerate([] if skip_scan else scanners_to_run):
         # Log scan start
         if session_logger:
             session_logger.log_scan_start(s.NAME, str(Path(path).resolve()))
@@ -987,8 +1035,19 @@ def scan(
         if session_logger:
             session_logger.log_scan_result(s.NAME, len(result.findings), result.duration_seconds)
 
-    if not quiet:
+    if not quiet and not skip_scan:
         progress.finish()
+
+    # Diff scope (build-loop task #19): drop findings on files not in the changed
+    # set so only the current change's findings are reported. Applied after the
+    # scan and before all rendering/JSON/SARIF, so every output path is diff-scoped.
+    # Findings carry their file relative to the scan's cwd, so that is the resolve
+    # base. ``changed_keys`` empty was already short-circuited via ``skip_scan``.
+    diff_filtered = 0
+    if diff_mode and changed_keys:
+        diff_filtered = filter_results_to_changed(
+            results, changed_keys, base=os.getcwd()
+        )
 
     # Print findings
     all_findings = [f for r in results for f in r.findings]
@@ -1047,6 +1106,13 @@ def scan(
         console.print(
             f"[dim]🔅 {total_below_conf} finding(s) below --min-confidence "
             f"{min_confidence} (raise sensitivity with --min-confidence low)[/dim]"
+        )
+
+    # Surface findings dropped because their file is outside the git-diff scope.
+    if diff_filtered and not quiet:
+        console.print(
+            f"[dim]🔬 {diff_filtered} finding(s) hidden — outside the --diff "
+            f"changed-file set (scan the full tree without --diff to see them)[/dim]"
         )
 
     # SARIF export (a file artifact for GitHub Code Scanning); independent of the
