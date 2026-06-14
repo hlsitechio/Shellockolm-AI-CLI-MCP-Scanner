@@ -159,6 +159,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich import box
+from rich.text import Text
 from rich.theme import Theme
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
@@ -186,6 +187,7 @@ from diff_scan import (
     DiffScanError,
     resolve_changed_files,
     filter_results_to_changed,
+    bare_path,
 )
 from github_actions import GitHubActionsGenerator, WorkflowConfig, ScanLevel, TriggerType
 from watch_mode import WatchMode, WatchConfig
@@ -841,6 +843,191 @@ def print_summary(results: List[ScanResult], output_json: Optional[str] = None):
 
 
 # ─────────────────────────────────────────────────────────────────
+# TABLE OUTPUT  (scan --table, build-loop task #22)
+# ─────────────────────────────────────────────────────────────────
+# A polished, grouped-by-file findings view: one compact table per file with
+# rows colored by severity, closed by a severity-tally summary footer. Degrades
+# to clean ASCII (no box-drawing characters, no color) when stdout is not a TTY,
+# so piped / CI output stays readable instead of leaking Unicode frame glyphs.
+
+_SEVERITY_GLYPH = {
+    "CRITICAL": "🔴",
+    "HIGH": "🟠",
+    "MEDIUM": "🟡",
+    "LOW": "🔵",
+    "INFO": "⚪",
+}
+
+# Fixed display order for the per-severity tally (a plain dict is insertion-
+# ordered on the supported Python ≥3.10, so no OrderedDict is needed).
+_TALLY_SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO")
+
+
+def group_findings_by_file(findings: List[ScanFinding]) -> List[tuple]:
+    """Group findings by their bare artifact path for the table view.
+
+    Returns an ordered list of ``(bare_path, [findings])`` sorted by each file's
+    worst (most severe) finding, then by path; findings within a file are sorted
+    by severity. ``bare_path`` collapses the ``:<line>`` and ``» server:<name>``
+    location suffixes so every finding in one file groups together rather than
+    splitting per line/server. Pure and deterministic (no I/O, stable ordering).
+    """
+    groups: Dict[str, List[ScanFinding]] = {}
+    for f in findings:
+        key = bare_path(f.file_path) or (f.file_path or "<unknown>")
+        groups.setdefault(key, []).append(f)
+
+    def rank(f: ScanFinding) -> int:
+        return _SEVERITY_ORDER.get(_severity_str(f), 5)
+
+    ordered = sorted(
+        groups.items(),
+        key=lambda kv: (min(rank(f) for f in kv[1]), kv[0]),
+    )
+    for _path, group in ordered:
+        group.sort(key=rank)
+    return ordered
+
+
+def _finding_line_no(finding: ScanFinding) -> str:
+    """Best-effort line number from a ``<path>:<line>`` location, else ``''``.
+
+    The structured ``» server:<name>`` suffix (no line number) is split off
+    first; a trailing ``:<digits>`` on what remains is the line. A Windows drive
+    colon is preserved because the regex is anchored to end-of-string.
+    """
+    raw = (finding.file_path or "").split(" » ", 1)[0]
+    m = re.search(r":(\d+)$", raw)
+    return m.group(1) if m else ""
+
+
+def build_findings_table(file_path: str, findings: List[ScanFinding], *,
+                         is_terminal: bool = True) -> Table:
+    """Build one Rich table for a single file's findings, colored by severity.
+
+    When ``is_terminal`` is False the table uses an ASCII box and unstyled cells
+    so redirected / piped output is plain pipe-friendly text (graceful TTY
+    degradation). Dynamic strings are wrapped in :class:`~rich.text.Text` so a
+    bracket in a path or title can never be mis-parsed as Rich console markup.
+    """
+    table = Table(
+        title=("📄 " if is_terminal else "FILE: ") + file_path,
+        title_justify="left",
+        box=box.ROUNDED if is_terminal else box.ASCII,
+        header_style="bold" if is_terminal else None,
+        expand=False,
+    )
+    table.add_column("Sev", no_wrap=True)
+    table.add_column("Line", justify="right", no_wrap=True)
+    table.add_column("ID", no_wrap=True)
+    table.add_column("Finding")
+    table.add_column("CVSS", justify="right", no_wrap=True)
+    table.add_column("Conf", no_wrap=True)
+
+    for f in findings:
+        sev = _severity_str(f)
+        # The emoji glyph and color are TTY affordances; a piped/redirected stream
+        # gets the bare severity word so the output stays plain ASCII.
+        if is_terminal:
+            glyph = _SEVERITY_GLYPH.get(sev, "")
+            sev_text = Text(f"{glyph} {sev}".strip())
+            sev_text.stylize(severity_style(sev))
+        else:
+            sev_text = Text(sev)
+        cvss = (
+            f"{f.cvss_score:.1f}"
+            if isinstance(f.cvss_score, (int, float)) and f.cvss_score
+            else "-"
+        )
+        conf = str(getattr(f, "confidence", "high")).upper()
+        table.add_row(
+            sev_text,
+            Text(_finding_line_no(f) or "-"),
+            Text(f.cve_id or "-"),
+            Text(f.title or ""),
+            Text(cvss),
+            Text(conf),
+        )
+    return table
+
+
+def build_severity_footer(tally: Dict[str, int], *, n_findings: int,
+                          n_files: int, duration: float,
+                          is_terminal: bool = True) -> Table:
+    """Build the severity-tally summary footer for the table view.
+
+    A single-row table tallying findings per severity (colored), plus the file
+    and total counts and the elapsed time. Degrades to an ASCII box with
+    unstyled cells when not a TTY.
+    """
+    footer = Table(
+        title="Summary",
+        title_justify="left",
+        box=box.ROUNDED if is_terminal else box.ASCII,
+        header_style="bold" if is_terminal else None,
+        expand=False,
+    )
+    footer.add_column("Total", justify="right")
+    footer.add_column("Files", justify="right")
+    footer.add_column("Critical", justify="right")
+    footer.add_column("High", justify="right")
+    footer.add_column("Medium", justify="right")
+    footer.add_column("Low", justify="right")
+    footer.add_column("Info", justify="right")
+    footer.add_column("Duration", justify="right")
+
+    def cell(n: int, sev: str) -> Text:
+        t = Text(str(n))
+        if is_terminal and n:
+            t.stylize(severity_style(sev))
+        return t
+
+    footer.add_row(
+        Text(str(n_findings)),
+        Text(str(n_files)),
+        cell(tally.get("CRITICAL", 0), "CRITICAL"),
+        cell(tally.get("HIGH", 0), "HIGH"),
+        cell(tally.get("MEDIUM", 0), "MEDIUM"),
+        cell(tally.get("LOW", 0), "LOW"),
+        cell(tally.get("INFO", 0), "INFO"),
+        Text(f"{duration:.2f}s"),
+    )
+    return footer
+
+
+def render_findings_table(results: List[ScanResult], *,
+                          target_console: Optional[Console] = None) -> Dict[str, int]:
+    """Render findings grouped by file as tables, closed by the summary footer.
+
+    Honors the console's TTY state for graceful degradation. Returns the
+    per-severity tally (so callers/tests can assert the counts).
+    """
+    con = target_console or console
+    is_tty = con.is_terminal
+    all_findings = [f for r in results for f in r.findings]
+    grouped = group_findings_by_file(all_findings)
+
+    for file_path, group in grouped:
+        con.print(build_findings_table(file_path, group, is_terminal=is_tty))
+
+    tally = {s: 0 for s in _TALLY_SEVERITIES}
+    for f in all_findings:
+        sev = _severity_str(f)
+        if sev in tally:
+            tally[sev] += 1
+
+    duration = sum(r.duration_seconds for r in results)
+    con.print(build_severity_footer(
+        tally,
+        n_findings=len(all_findings),
+        n_files=len(grouped),
+        duration=duration,
+        is_terminal=is_tty,
+    ))
+    return tally
+
+
+# ─────────────────────────────────────────────────────────────────
 # SCAN COMMAND
 # ─────────────────────────────────────────────────────────────────
 @app.command()
@@ -865,6 +1052,12 @@ def scan(
              "Scanning / the VS Code SARIF viewer). Covers agent-scan findings too.",
     ),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
+    table: bool = typer.Option(
+        False, "--table",
+        help="Render findings as a polished table grouped by file (severity-"
+             "colored, with a summary footer). Degrades to plain ASCII when "
+             "output is not a TTY.",
+    ),
     quick: bool = typer.Option(False, "--quick", help="Quick mode: only check package versions (fast!)"),
     min_confidence: str = typer.Option(
         "low", "--min-confidence",
@@ -1066,11 +1259,18 @@ def scan(
             )
         )
 
-        for finding in sorted_findings:
-            if not json_output:
-                print_finding(finding, verbose)
-            # Log each finding to session
-            if session_logger:
+        # Render: the polished grouped-by-file table (--table) or the per-finding
+        # cards (default). --json suppresses both (CI emits only the JSON doc).
+        if not json_output:
+            if table and not quiet:
+                render_findings_table(results)
+            else:
+                for finding in sorted_findings:
+                    print_finding(finding, verbose)
+
+        # Session logging is independent of the chosen render mode.
+        if session_logger:
+            for finding in sorted_findings:
                 session_logger.log_finding({
                     "cve_id": finding.cve_id,
                     "title": finding.title,

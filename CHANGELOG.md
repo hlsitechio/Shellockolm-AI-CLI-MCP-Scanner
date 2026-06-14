@@ -10,6 +10,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`scan --table` — polished findings table grouped by file.** A new opt-in
+  human-output mode: one compact Rich table per artifact (rows colored by
+  severity, with rule ID, line, CVSS and detection confidence), closed by a
+  severity-tally summary footer. It **degrades gracefully when stdout is not a
+  TTY** — a piped/redirected stream gets an ASCII box (no Unicode frame glyphs),
+  no ANSI color, and the bare severity word instead of an emoji — so it stays
+  clean in a log capture. Grouping reuses `diff_scan.bare_path`, so a file's
+  findings collapse together across the `:<line>` / `» server:<name>` location
+  suffixes. `--json` (CI mode) suppresses the table; stdout stays a single JSON
+  document. Rendering helpers (`group_findings_by_file`, `build_findings_table`,
+  `build_severity_footer`, `render_findings_table`) are pure/testable, and finding
+  text is wrapped in `rich.text.Text` so a bracket in a path or title can't be
+  mis-parsed as console markup. 19 new tests (`tests/test_cli_table_output.py`:
+  grouping/ordering units, TTY-vs-non-TTY degradation, tallies, markup-safety, and
+  e2e subprocess runs proving the table renders, the piped stream is ASCII, and
+  `--json` still emits only JSON); full suite 383 green (was 364).
 - **GitHub Action (`action.yml`) — checkout → scan → SARIF upload.** A composite
   action consumers add in one workflow step. It runs the scan in stable `--json`
   mode, writes a JSON report and a SARIF 2.1.0 document, and uploads the SARIF to

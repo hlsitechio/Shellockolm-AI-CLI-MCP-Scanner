@@ -255,6 +255,18 @@ appears in the JSON report (`-o report.json`) and is shown inline for any non-`h
 scanners' findings (CVE/secret matches) are deterministic and default to `high`, so a threshold never
 hides them.
 
+**Table output (`--table`).** Render the findings as a polished table **grouped by file** instead of the
+default per-finding cards: one compact table per artifact (rows colored by severity, with the rule ID,
+line, CVSS and detection confidence), closed by a severity-tally summary footer. It **degrades
+gracefully when stdout is not a TTY** — a redirected or piped stream gets an ASCII box (no Unicode frame
+glyphs), no ANSI color, and the bare severity word instead of an emoji — so it stays readable in a log or
+`tee` capture. `--json` (CI mode) suppresses the table entirely; stdout stays a single JSON document.
+
+```bash
+shellockolm scan -s agent --table ./skills          # grouped-by-file table, colored by severity
+shellockolm scan -s agent --table ./skills | tee scan.txt   # clean ASCII when piped
+```
+
 **Machine-readable JSON (`--json`, CI mode).** `--json` writes **one** JSON document to *stdout* and
 suppresses every other line (no banner, progress, panels, or summary — errors go to *stderr*), so it
 pipes straight into `jq` or a CI step. The exit code follows the contract below (default: any finding
