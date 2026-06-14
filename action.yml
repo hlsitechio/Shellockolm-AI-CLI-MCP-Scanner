@@ -1,5 +1,5 @@
 name: 'Shellockolm Security Scan'
-description: 'Scan React/Next.js/Node/npm/n8n projects for CVEs, malware, secrets, and supply-chain risks. Offline, no telemetry.'
+description: 'Scan React/Next.js/Node/npm/n8n projects AND the AI-agent supply chain (SKILL.md, MCP configs, n8n exports, CLAUDE.md) for CVEs, malware, secrets, and prompt-injection. Offline, no telemetry. Uploads findings as SARIF to the Security tab.'
 author: 'hlsitechio'
 branding:
   icon: 'shield'
@@ -11,29 +11,51 @@ inputs:
     required: false
     default: '.'
   scanner:
-    description: 'Which scanner to run (react, nextjs, npm, nodejs, n8n, supply-chain, clawdbot, or all)'
+    description: 'Single scanner to run (react, nextjs, npm, nodejs, n8n, supply-chain, clawdbot, agent). Leave EMPTY to run every scanner (the default). Note: "all" is NOT a valid value — empty means all.'
     required: false
-    default: 'all'
+    default: ''
   fail-on:
-    description: 'Minimum severity that fails the build (critical, high, medium, low, none)'
+    description: 'Minimum severity that fails the build (critical, high, medium, low, info, or none for report-only). Default: high.'
     required: false
     default: 'high'
+  min-confidence:
+    description: 'Minimum agent-scan detection confidence to report (low, medium, high). low shows everything; high keeps only structural/signature matches. Default: low.'
+    required: false
+    default: 'low'
   output:
-    description: 'Path to write the JSON report'
+    description: 'Path to write the JSON report (stable --json schema).'
     required: false
     default: 'shellockolm-report.json'
+  sarif:
+    description: 'Path to write the SARIF 2.1.0 report.'
+    required: false
+    default: 'shellockolm-results.sarif'
+  upload-sarif:
+    description: 'Upload the SARIF report to GitHub code scanning (Security tab). Requires the calling workflow to grant security-events: write. Set to false to skip.'
+    required: false
+    default: 'true'
   quick:
-    description: 'Quick mode: version checks only (faster)'
+    description: 'Quick mode: version checks only (faster).'
     required: false
     default: 'false'
+  python-version:
+    description: 'Python version to set up for the scan.'
+    required: false
+    default: '3.11'
 
 outputs:
   report:
-    description: 'Path to the generated JSON report'
+    description: 'Path to the generated JSON report.'
     value: ${{ steps.scan.outputs.report }}
+  sarif:
+    description: 'Path to the generated SARIF report.'
+    value: ${{ steps.scan.outputs.sarif }}
   findings:
-    description: 'Number of findings'
+    description: 'Total number of findings reported by the scan.'
     value: ${{ steps.scan.outputs.findings }}
+  exit-code:
+    description: 'The scan exit code (0 = clean / 1 = findings gate the build / 2 = usage or operational error).'
+    value: ${{ steps.scan.outputs.exit-code }}
 
 runs:
   using: 'composite'
@@ -41,21 +63,55 @@ runs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.11'
+        python-version: ${{ inputs.python-version }}
 
     - name: Install Shellockolm
       shell: bash
       run: pip install -r "${{ github.action_path }}/requirements.txt"
 
-    - name: Run scan
+    - name: Run Shellockolm scan
       id: scan
       shell: bash
       run: |
-        ARGS="scan ${{ inputs.path }} -s ${{ inputs.scanner }} -o ${{ inputs.output }}"
-        if [ "${{ inputs.quick }}" = "true" ]; then ARGS="$ARGS --quick"; fi
-        python "${{ github.action_path }}/src/cli.py" $ARGS || true
-        echo "report=${{ inputs.output }}" >> "$GITHUB_OUTPUT"
+        set -uo pipefail
 
-    # Note: the CLI already exits with severity-based codes. Wire `fail-on`
-    # to those exit codes here once their mapping is finalized so the build
-    # fails on findings at or above the chosen severity.
+        # Build argv. --json writes the stable machine-readable document to stdout
+        # and -o mirrors it to a file; --sarif writes the SARIF artifact alongside.
+        # --fail-on (wired to the documented exit-code contract) decides exit 1 vs 0.
+        ARGS=(scan "${{ inputs.path }}" --json
+              --fail-on "${{ inputs.fail-on }}"
+              --min-confidence "${{ inputs.min-confidence }}"
+              -o "${{ inputs.output }}"
+              --sarif "${{ inputs.sarif }}")
+        # IMPORTANT: only pass -s when a scanner is named. The scan CLI rejects
+        # "-s all" (that is the live command's default, not scan's); an empty
+        # scanner means "run every scanner".
+        if [ -n "${{ inputs.scanner }}" ]; then ARGS+=(-s "${{ inputs.scanner }}"); fi
+        if [ "${{ inputs.quick }}" = "true" ]; then ARGS+=(--quick); fi
+
+        # Capture the exit code without letting -e abort the step (we still need to
+        # set outputs and upload the SARIF on a non-zero/gated exit). Discard the raw
+        # JSON on stdout — we render a friendly summary from the file just below.
+        set +e
+        python "${{ github.action_path }}/src/cli.py" "${ARGS[@]}" >/dev/null
+        code=$?
+        set -e
+
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        echo "report=${{ inputs.output }}" >> "$GITHUB_OUTPUT"
+        echo "sarif=${{ inputs.sarif }}" >> "$GITHUB_OUTPUT"
+
+        # Render the report into the log and capture the total finding count
+        # (0 if the scan errored out before writing a report).
+        findings=$(python "${{ github.action_path }}/scripts/action_summary.py" "${{ inputs.output }}")
+        echo "findings=$findings" >> "$GITHUB_OUTPUT"
+
+        # Propagate the scan's exit code so the build fails per --fail-on (1) or on
+        # an operational error (2); 0 keeps the build green.
+        exit $code
+
+    - name: Upload SARIF to GitHub code scanning
+      if: ${{ always() && inputs.upload-sarif == 'true' && hashFiles(inputs.sarif) != '' }}
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ inputs.sarif }}

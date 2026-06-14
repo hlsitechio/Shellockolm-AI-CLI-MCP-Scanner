@@ -424,14 +424,43 @@ Finds leaked credentials in code, configs, and environment files:
 <details>
 <summary><strong>🔄 CI/CD Integration</strong></summary>
 
+**GitHub Action (recommended).** The repo ships a composite [`action.yml`](action.yml)
+that runs the scan and uploads findings as SARIF to your Security tab in one step:
+
 ```yaml
-# GitHub Actions
+# .github/workflows/security.yml
+permissions:
+  contents: read
+  security-events: write   # required so the action can upload SARIF
+jobs:
+  shellockolm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hlsitechio/Shellockolm-AI-CLI-MCP-Scanner@v1
+        with:
+          path: .
+          fail-on: high           # critical|high|medium|low|info|none (default: high)
+          # scanner: agent        # leave empty to run ALL scanners (the default)
+          # min-confidence: high  # low|medium|high (default: low)
+          # upload-sarif: 'false' # set to skip the Security-tab upload
+```
+
+The action fails the build per the [exit-code contract](#) (`--fail-on`), writes a
+stable JSON report and a SARIF 2.1.0 document, and exposes `report`, `sarif`,
+`findings`, and `exit-code` step outputs. Leave `scanner` empty to run every scanner
+(passing `scanner: all` is **not** valid — empty means all).
+
+Prefer a hand-rolled step? The CLI is the same either way:
+
+```yaml
 - name: Vet agent skills/MCP (fails the build on any finding)
   run: |
     pip install -r requirements.txt
     python src/cli.py scan -s agent --json --min-confidence high ./skills | tee results.json
 ```
 
+- **GitHub Action** — checkout → scan → SARIF upload, with `fail-on` gating
 - **`--json` stdout mode** — one stable, documented JSON document for `jq`/CI piping
 - **SARIF export** for GitHub Code Scanning
 - **JSON reports** (`-o results.json`) for automated processing

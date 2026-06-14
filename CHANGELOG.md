@@ -10,6 +10,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **GitHub Action (`action.yml`) — checkout → scan → SARIF upload.** A composite
+  action consumers add in one workflow step. It runs the scan in stable `--json`
+  mode, writes a JSON report and a SARIF 2.1.0 document, and uploads the SARIF to
+  GitHub code scanning (Security tab) via `github/codeql-action/upload-sarif`.
+  Inputs: `path`, `scanner` (empty = all), `fail-on`, `min-confidence`, `output`,
+  `sarif`, `upload-sarif`, `quick`, `python-version`; outputs: `report`, `sarif`,
+  `findings`, `exit-code`. The build fails per the documented exit-code contract
+  (`--fail-on`, wired through to the step's exit). A 20-test contract suite
+  (`tests/test_github_action.py`) validates the action shape, that the scan step
+  wires `--json`/`--fail-on`/`--sarif`/`-o`, that the SARIF upload step exists and
+  is gated, and that the `scripts/action_summary.py` helper prints only the finding
+  count to stdout (degrading to `0` on a missing report).
+
+### Fixed
+- **GitHub Action no longer passes the invalid `-s all`.** The previous stub
+  `action.yml` defaulted `scanner` to `all` and passed `-s all`, which `scan`
+  rejects (exit `2`) — so it failed every run. The scanner default is now empty
+  (= run every scanner) and `-s` is only passed when a scanner is named; the
+  `fail-on` input is now actually wired to the exit code (it was a no-op), and the
+  `findings` output is populated.
+
 - **Pre-commit hook integration (`.pre-commit-hooks.yaml`).** Ships two
   [pre-commit](https://pre-commit.com) hooks so any repo can vet every commit in
   one `.pre-commit-config.yaml` block: `shellockolm-agent` (AI agent
