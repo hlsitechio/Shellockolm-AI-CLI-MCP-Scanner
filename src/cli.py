@@ -189,6 +189,12 @@ from diff_scan import (
     filter_results_to_changed,
     bare_path,
 )
+from baseline import (
+    BaselineError,
+    build_baseline_document,
+    filter_results_to_new,
+    load_baseline,
+)
 from github_actions import GitHubActionsGenerator, WorkflowConfig, ScanLevel, TriggerType
 from watch_mode import WatchMode, WatchConfig
 from context_intelligence import (
@@ -721,6 +727,10 @@ def build_json_report(
             "findings_diff_filtered": sum(
                 r.stats.get("findings_diff_filtered", 0) for r in results
             ),
+            # Findings hidden because they are already present in the --baseline.
+            "findings_baselined": sum(
+                r.stats.get("findings_baselined", 0) for r in results
+            ),
         },
         "findings": findings_json,
         "errors": errors,
@@ -1082,6 +1092,18 @@ def scan(
         help="Report findings only for files changed relative to this git ref "
              "(e.g. origin/main) — working tree vs <ref>. For CI. Implies --diff.",
     ),
+    baseline: Optional[str] = typer.Option(
+        None, "--baseline",
+        help="Compare against a baseline file: report ONLY new findings (those "
+             "not already in the baseline) so CI fails only on NEW issues. "
+             "A missing/corrupt baseline exits 2. Create one with --write-baseline.",
+    ),
+    write_baseline: Optional[str] = typer.Option(
+        None, "--write-baseline",
+        help="Write every current finding to this baseline file (report-only: "
+             "never fails the build) so you can accept the existing findings, "
+             "commit the file, and then gate later runs with --baseline.",
+    ),
     _from_menu: bool = False,  # Internal: skip banner when called from menu
 ):
     """
@@ -1097,6 +1119,8 @@ def scan(
         shellockolm scan -s agent --fail-on high ./  # Exit 1 only on HIGH+ findings
         shellockolm scan --diff ./              # Only files staged in git (pre-commit)
         shellockolm scan --diff-ref origin/main ./   # Only files changed vs a ref (CI)
+        shellockolm scan --write-baseline baseline.json ./  # Accept current findings
+        shellockolm scan --baseline baseline.json ./        # Fail only on NEW findings
         shellockolm scan --quick ./             # Quick scan (package versions only)
 
     Exit codes: 0 = clean (no finding at/above --fail-on), 1 = findings gate the
@@ -1152,6 +1176,17 @@ def scan(
                 console.print(f"[danger]{msg}[/danger]")
                 console.print("[info]Choose one of: critical, high, medium, low, info, none[/info]")
             raise typer.Exit(EXIT_ERROR)
+
+    # Baseline (build-loop task #25): --baseline (compare → fail only on NEW) and
+    # --write-baseline (snapshot → report-only) are mutually exclusive modes; using
+    # both is a usage error (exit 2), never a silent pick-one.
+    if baseline is not None and write_baseline is not None:
+        msg = "Use either --baseline (compare) or --write-baseline (create), not both"
+        if json_output:
+            print(msg, file=sys.stderr)
+        else:
+            console.print(f"[danger]{msg}[/danger]")
+        raise typer.Exit(EXIT_ERROR)
 
     # Git-diff scope (build-loop task #19): restrict reported findings to files
     # changed in git. --diff = staged set (pre-commit); --diff-ref = vs a ref.
@@ -1242,6 +1277,26 @@ def scan(
             results, changed_keys, base=os.getcwd()
         )
 
+    # Baseline compare (build-loop task #25): drop every finding already present in
+    # the baseline so only NEW findings are reported and can gate the build. Runs
+    # after the scan + diff filter and before all rendering/JSON/SARIF and the gate,
+    # so every output path and the exit code see only the new findings. A missing or
+    # corrupt baseline is a usage/operational error (exit 2), never a silent pass.
+    baselined = 0
+    if baseline is not None:
+        try:
+            known_fingerprints = load_baseline(baseline)
+        except BaselineError as e:
+            msg = f"--baseline: {e}"
+            if json_output:
+                print(msg, file=sys.stderr)
+            else:
+                console.print(f"[danger]{msg}[/danger]")
+            raise typer.Exit(EXIT_ERROR)
+        baselined = filter_results_to_new(
+            results, known_fingerprints, base=os.getcwd()
+        )
+
     # Print findings
     all_findings = [f for r in results for f in r.findings]
 
@@ -1315,6 +1370,13 @@ def scan(
             f"changed-file set (scan the full tree without --diff to see them)[/dim]"
         )
 
+    # Surface findings hidden because they are already in the --baseline.
+    if baselined and not quiet:
+        console.print(
+            f"[dim]📋 {baselined} known finding(s) hidden by --baseline "
+            f"(only NEW findings are reported; refresh with --write-baseline)[/dim]"
+        )
+
     # SARIF export (a file artifact for GitHub Code Scanning); independent of the
     # stdout mode, so it composes with both the human and --json paths and never
     # writes to stdout.
@@ -1336,6 +1398,43 @@ def scan(
         except OSError as e:
             # Never corrupt the stdout JSON contract; report file errors on stderr.
             print(f"shellockolm: could not write {sarif}: {e}", file=sys.stderr)
+
+    # Baseline write (build-loop task #25): snapshot every current finding into the
+    # baseline file. A file artifact like --sarif: it composes with the human and
+    # --json paths and never writes to stdout. The run is forced report-only below,
+    # so establishing/refreshing a baseline never fails the build.
+    if write_baseline is not None:
+        try:
+            baseline_doc = build_baseline_document(
+                results,
+                target=str(Path(path).resolve()),
+                base=os.getcwd(),
+                tool_version=__version__,
+            )
+            baseline_parent = Path(write_baseline).parent
+            if str(baseline_parent) not in ("", "."):
+                baseline_parent.mkdir(parents=True, exist_ok=True)
+            with open(write_baseline, "w", encoding="utf-8") as fh:
+                json.dump(baseline_doc, fh, indent=2)
+            if not quiet:
+                n = len(baseline_doc["findings"])
+                console.print(
+                    f"[success]📋 Baseline written ({n} finding(s)) to: "
+                    f"{write_baseline}[/success]"
+                )
+                console.print(
+                    "[dim]Commit it, then gate later runs with "
+                    "--baseline to fail only on NEW findings.[/dim]"
+                )
+            else:
+                # Keep stdout clean in --json mode; confirm on stderr.
+                print(
+                    f"shellockolm: baseline written "
+                    f"({len(baseline_doc['findings'])} finding(s)) to {write_baseline}",
+                    file=sys.stderr,
+                )
+        except OSError as e:
+            print(f"shellockolm: could not write {write_baseline}: {e}", file=sys.stderr)
 
     if json_output:
         # CI mode: assemble the stable JSON document and write ONLY it to stdout
@@ -1371,10 +1470,18 @@ def scan(
     # Exit-code contract (documented): 0 clean, 1 findings (per --fail-on), 2 error.
     # A bare finding count no longer decides the code: the --fail-on gate does, so
     # CI can choose to fail only on HIGH+ (or never, for a report-only run).
-    gate_fail = _findings_gate_failure(all_findings, fail_on)
+    # --write-baseline is always report-only: snapshotting the accepted findings
+    # must never fail the build (task #25).
+    report_only_baseline = write_baseline is not None
+    gate_fail = _findings_gate_failure(all_findings, fail_on) and not report_only_baseline
     if all_findings and not gate_fail and not quiet:
         # Findings exist but the gate keeps the exit at 0 — say so, never silently.
-        if fail_on in _FAIL_ON_NEVER:
+        if report_only_baseline:
+            console.print(
+                "[dim]✔ Exit 0: --write-baseline (report-only; the findings above "
+                "were snapshotted as the accepted baseline)[/dim]"
+            )
+        elif fail_on in _FAIL_ON_NEVER:
             console.print(
                 "[dim]✔ Exit 0: --fail-on none (report-only; findings do not fail "
                 "the build)[/dim]"

@@ -10,6 +10,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Baseline support (`--baseline` / `--write-baseline`) — fail CI only on NEW
+  findings.** Adopt the scanner on a codebase that already has findings without
+  drowning CI in pre-existing noise. `scan --write-baseline baseline.json`
+  snapshots every current finding into a file (a report-only run that never fails
+  the build) so you can accept the existing findings and commit it;
+  `scan --baseline baseline.json` then drops every finding already in the baseline
+  and reports only NEW ones, which gate the exit code per `--fail-on`. A
+  finding's identity is a SHA-256 over `id | repo-relative path | package |
+  version`, deliberately **excluding the line number and severity** — so editing a
+  file (shifting a finding's line) or a later composite-severity boost never makes
+  a known finding look new and spuriously fail the build. The hidden count is
+  announced (never silent) and surfaced as `summary.findings_baselined` in
+  `--json`; a missing/corrupt baseline is a usage error (exit `2`, never a silent
+  pass); `--baseline` and `--write-baseline` together is a usage error. New
+  self-contained `src/baseline.py` module (mirrors `diff_scan.py`: pure, tested
+  identity + filtering split from the file I/O). The baseline file is a documented
+  `schema_version` 1.0 JSON document (deduped + sorted, so it diffs cleanly across
+  regenerations). 25 new tests (`tests/test_baseline.py`: fingerprint stability
+  across line-shift + severity-change, per-axis distinctness, build/load/filter
+  round-trip, every load error path, and e2e subprocess runs proving
+  write→exit 0, known-hidden→exit 0, new-finding→exit 1 with only the new file
+  reported, missing→exit 2, and the conflict→exit 2); full suite 441 green
+  (was 416).
 - **`rules explain <RULE-ID>` — a full per-rule explainer with an example
   attack.** The deep-dive companion to `rules list`: `shellockolm rules explain
   AGENT-PI-013` prints one rule's severity, tier, confidence, attack class and

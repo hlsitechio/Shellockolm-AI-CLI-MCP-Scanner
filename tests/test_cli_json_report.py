@@ -103,6 +103,7 @@ def test_schema_top_level_keys_and_version():
     assert set(report["summary"]) == {
         "total_findings", "by_severity", "findings_suppressed",
         "findings_below_confidence", "findings_diff_filtered",
+        "findings_baselined",
     }
 
 

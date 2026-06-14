@@ -313,6 +313,29 @@ shellockolm scan -s agent --diff-ref origin/main .       # only files changed vs
 shellockolm scan -s agent --diff --fail-on high .        # pre-commit: block the commit on new HIGH+
 ```
 
+**Baseline mode (`--baseline` / `--write-baseline`, fail only on NEW findings).** Adopt Shellockolm on
+a codebase that already has findings without drowning CI in pre-existing noise: snapshot the findings
+you currently accept into a baseline file, commit it, and from then on only **new** findings gate the
+build.
+
+- `--write-baseline <file>` runs a scan and writes every current finding into `<file>` (a report-only
+  run that **never** fails the build, even with HIGH findings present). Commit the file.
+- `--baseline <file>` runs a scan and drops every finding already in the baseline; only findings **not**
+  in it are reported and can gate the exit code (composes with `--fail-on`). A missing or corrupt
+  baseline is a usage error (exit `2`) — it can never silently pass.
+
+A finding's baseline identity is a SHA-256 over `rule/CVE id | repo-relative path | package | version`,
+deliberately **excluding the line number** — so editing a file (shifting a finding up or down) does not
+make a known finding look new and spuriously fail the build. The hidden count is announced (never
+silent) and surfaced as `summary.findings_baselined` in `--json`. Re-run `--write-baseline` to refresh
+the accepted set. Use either flag, not both (using both is a usage error, exit `2`).
+
+```bash
+shellockolm scan -s agent --write-baseline baseline.json ./skills   # accept current findings
+git add baseline.json && git commit -m "chore: shellockolm baseline"
+shellockolm scan -s agent --baseline baseline.json --fail-on high ./skills   # CI: fail only on NEW HIGH+
+```
+
 **Pre-commit hook (`.pre-commit-hooks.yaml`).** Shellockolm ships [pre-commit](https://pre-commit.com)
 hooks so a clone can vet every commit. Add to your repo's `.pre-commit-config.yaml`:
 
@@ -348,7 +371,8 @@ hook's `entry`, so it survives an `args:` override.
     "by_severity": { "critical": 0, "high": 1, "medium": 0, "low": 0, "info": 0 },
     "findings_suppressed": 0,          // dropped by a .shellockolmignore rule allowlist
     "findings_below_confidence": 0,    // hidden by --min-confidence
-    "findings_diff_filtered": 0        // dropped because the file is outside --diff scope
+    "findings_diff_filtered": 0,       // dropped because the file is outside --diff scope
+    "findings_baselined": 0            // hidden because already present in --baseline
   },
   "findings": [                        // sorted CRITICAL → INFO
     {
