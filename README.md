@@ -301,6 +301,25 @@ shellockolm scan -s agent --diff-ref origin/main .       # only files changed vs
 shellockolm scan -s agent --diff --fail-on high .        # pre-commit: block the commit on new HIGH+
 ```
 
+**Pre-commit hook (`.pre-commit-hooks.yaml`).** Shellockolm ships [pre-commit](https://pre-commit.com)
+hooks so a clone can vet every commit. Add to your repo's `.pre-commit-config.yaml`:
+
+```yaml
+repos:
+  - repo: https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner
+    rev: v3.0.0                 # pin to a released tag
+    hooks:
+      - id: shellockolm-agent   # AI agent supply-chain scan (recommended)
+      # - id: shellockolm       # full scan: deps + secrets + malware + agent
+```
+
+then run `pre-commit install`. Both hooks scan only the **staged** set (`scan --diff`) and block the
+commit on HIGH+ findings; they exit `0` instantly when nothing relevant is staged. `shellockolm-agent`
+fires only when an agent artifact (`SKILL.md`, `mcp.json`, `.claude/`, `CLAUDE.md`/`AGENTS.md`, …) is
+staged. Tune the gate by overriding `args:` in your config — `args: ['--fail-on', 'critical']` (looser)
+or `args: ['--fail-on', 'medium', '--min-confidence', 'medium']` (stricter); `--diff` lives in the
+hook's `entry`, so it survives an `args:` override.
+
 ```jsonc
 {
   "schema_version": "1.0",

@@ -10,6 +10,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Pre-commit hook integration (`.pre-commit-hooks.yaml`).** Ships two
+  [pre-commit](https://pre-commit.com) hooks so any repo can vet every commit in
+  one `.pre-commit-config.yaml` block: `shellockolm-agent` (AI agent
+  supply-chain scan, the recommended default — triggers only when a `SKILL.md` /
+  `mcp.json` / `.claude/` / `CLAUDE.md` / `AGENTS.md` artifact is staged) and
+  `shellockolm` (full deps + secrets + malware + agent scan). Both scan only the
+  **staged** set via `scan --diff` (so they flag what the commit introduces and
+  exit `0` instantly when nothing relevant is staged), block the commit on HIGH+
+  by default, and keep `--diff` in `entry` so it survives an `args:` gate
+  override. `pass_filenames: false` (the `scan` CLI takes one PATH, not a
+  filename list). Documented in the README; an 11-test contract suite
+  (`tests/test_pre_commit_hooks.py`) validates the YAML shape, that the `entry`
+  console script is declared in `pyproject` `[project.scripts]`, that the default
+  `--fail-on` gate is a value the live CLI accepts, and that the agent hook's
+  `files` trigger regex matches real agent artifacts while ignoring ordinary
+  source files.
 - **`scan --diff` / `--diff-ref` — git-diff scoping for pre-commit & CI.** Reports
   findings only for files **changed in git**: `--diff` scans the staged set
   (`git diff --cached`, the pre-commit content) and `--diff-ref <ref>` scans
