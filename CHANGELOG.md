@@ -10,6 +10,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`rules explain <RULE-ID>` — a full per-rule explainer with an example
+  attack.** The deep-dive companion to `rules list`: `shellockolm rules explain
+  AGENT-PI-013` prints one rule's severity, tier, confidence, attack class and
+  CVSS, then the full description, a concrete **example attack**, and the
+  remediation. The rule ID is case-insensitive; an unknown ID is a usage error
+  (exit `2`, message to stderr so `--json` stdout stays empty); `--json` emits
+  one stable document (`schema_version` 1.0, `rule` object) for docs/CI. Backing
+  it, a canonical per-rule example-attack catalog (`_RULE_ATTACK_EXAMPLES` +
+  `agent_rule_example()` / `agent_rule_explain()` in
+  `scanners/agent_supply_chain.py`) carries one short, illustrative example for
+  **every** rule the scanner can emit — completeness is test-enforced so it can't
+  drift behind a newly-added rule, and every embedded credential is an obvious
+  non-live placeholder. The human render escapes authored prose, so an example
+  containing markdown-link brackets (`[docs.github.com](…)`) can't be mis-parsed
+  as console markup. 11 new tests (example-catalog completeness + case-insensitive
+  /unknown-safe lookup, explainer-matches-catalog + every-rule coverage, and e2e
+  subprocess runs for the human render, `--json` document, case-insensitivity,
+  the exit-2 unknown-rule path, and markup-safety); full suite 416 green (was 405).
 - **`rules list` — the agent rule catalog as a command (and docs).** A new
   `shellockolm rules list` prints every agent supply-chain detection rule — ID,
   severity, **tier** (free / Pro), confidence, attack class, and a one-line

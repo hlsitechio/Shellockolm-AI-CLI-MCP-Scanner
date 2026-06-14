@@ -37,6 +37,8 @@ from scanners.agent_supply_chain import (  # noqa: E402
     agent_rule_catalog,
     agent_rule_tier,
     agent_rule_class,
+    agent_rule_example,
+    agent_rule_explain,
     ALL_AGENT_RULES,
     PRO_RULES,
 )
@@ -120,6 +122,55 @@ def test_one_line_description_is_single_line_and_nonempty():
 ])
 def test_attack_class_derivation(rule_id, expected):
     assert agent_rule_class(rule_id) == expected
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# `rules explain` — example attacks + explainer (build-loop task #24)
+# ──────────────────────────────────────────────────────────────────────────
+def test_every_rule_has_a_nonempty_example_attack():
+    # Completeness: every rule the scanner can emit must ship a concrete example
+    # attack, so `rules explain <id>` never shows an empty section and the example
+    # catalog can't silently drift behind a newly-added rule.
+    missing = [r.id for r in ALL_AGENT_RULES if not agent_rule_example(r.id).strip()]
+    assert not missing, f"rules missing an example attack: {sorted(missing)}"
+
+
+def test_example_lookup_is_case_insensitive_and_unknown_safe():
+    assert agent_rule_example("agent-pi-013") == agent_rule_example("AGENT-PI-013")
+    assert agent_rule_example("  AGENT-PI-013  ") == agent_rule_example("AGENT-PI-013")
+    # An unknown id is empty, never an error.
+    assert agent_rule_example("AGENT-NOPE-999") == ""
+    assert agent_rule_example("") == ""
+
+
+def test_explain_returns_full_entry_plus_example():
+    rule = agent_rule_explain("AGENT-PI-013")
+    assert rule is not None
+    required = {"id", "title", "severity", "tier", "confidence", "cvss",
+                "attack_class", "description", "remediation", "example_attack"}
+    assert required <= set(rule)
+    assert rule["id"] == "AGENT-PI-013"
+    assert rule["example_attack"].strip(), "explainer must carry the example attack"
+    # The catalog fields match the canonical catalog entry exactly.
+    entry = {e["id"]: e for e in agent_rule_catalog()}["AGENT-PI-013"]
+    for key in ("title", "severity", "tier", "confidence", "cvss",
+                "attack_class", "description", "remediation"):
+        assert rule[key] == entry[key], f"explain/{key} drifted from catalog"
+
+
+def test_explain_is_case_insensitive():
+    assert agent_rule_explain("agent-mcp-004") == agent_rule_explain("AGENT-MCP-004")
+
+
+def test_explain_covers_every_catalog_rule():
+    for rid in (e["id"] for e in agent_rule_catalog()):
+        assert agent_rule_explain(rid) is not None, f"no explainer for {rid}"
+
+
+def test_explain_unknown_or_empty_returns_none():
+    assert agent_rule_explain("AGENT-NOPE-999") is None
+    assert agent_rule_explain("") is None
+    assert agent_rule_explain("   ") is None
 
 
 def test_promoted_structural_rule_still_emits_catalog_metadata(tmp_path):
@@ -218,3 +269,55 @@ def test_rules_list_human_table_renders():
     assert "AGENT-PI-001" in proc.stdout
     assert "Total:" in proc.stdout
     assert "Pro" in proc.stdout
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# `rules explain` — CLI end-to-end subprocess (build-loop task #24)
+# ──────────────────────────────────────────────────────────────────────────
+def test_rules_explain_human_renders_all_sections():
+    proc = _run_cli("rules", "explain", "AGENT-PI-013")
+    assert proc.returncode == 0
+    out = proc.stdout
+    assert "AGENT-PI-013" in out
+    # The three explainer sections are present.
+    assert "Description" in out
+    assert "Example attack" in out
+    assert "Remediation" in out
+
+
+def test_rules_explain_json_is_pure_document_with_example():
+    proc = _run_cli("rules", "explain", "AGENT-MCP-004", "--json")
+    assert proc.returncode == 0
+    assert proc.stdout.lstrip().startswith("{")
+    doc = json.loads(proc.stdout)
+    assert doc["schema_version"] == "1.0"
+    assert doc["tool"] == "shellockolm"
+    rule = doc["rule"]
+    assert rule["id"] == "AGENT-MCP-004"
+    assert rule["example_attack"].strip()
+    # The full catalog metadata rides along.
+    for key in ("title", "severity", "tier", "confidence", "cvss",
+                "attack_class", "description", "remediation"):
+        assert key in rule
+
+
+def test_rules_explain_is_case_insensitive_on_cli():
+    proc = _run_cli("rules", "explain", "agent-pi-017")
+    assert proc.returncode == 0
+    assert "AGENT-PI-017" in proc.stdout
+
+
+def test_rules_explain_unknown_exits_2_and_keeps_stdout_clean():
+    proc = _run_cli("rules", "explain", "AGENT-XYZ-001", "--json")
+    assert proc.returncode == 2
+    # In --json mode the usage error goes to stderr; stdout must stay empty.
+    assert proc.stdout.strip() == ""
+    assert "Unknown rule" in proc.stderr
+
+
+def test_rules_explain_markup_in_example_does_not_break_render():
+    # PI-012's example contains a markdown link with '[' brackets; the human
+    # render must escape it (no crash, exit 0, the rule id still prints).
+    proc = _run_cli("rules", "explain", "AGENT-PI-012")
+    assert proc.returncode == 0
+    assert "AGENT-PI-012" in proc.stdout

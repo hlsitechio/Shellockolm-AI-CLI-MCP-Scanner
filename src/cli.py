@@ -1703,6 +1703,85 @@ def rules_list(
         )
 
 
+@rules_app.command("explain")
+def rules_explain(
+    rule_id: str = typer.Argument(
+        ..., metavar="RULE-ID", help="Rule ID to explain, e.g. AGENT-PI-013"),
+    output_json: bool = typer.Option(
+        False, "--json", help="Emit the explanation as a single JSON document"),
+    _from_menu: bool = False,  # Internal: skip banner when called from menu
+):
+    """
+    Explain ONE agent supply-chain rule in full.
+
+    The deep-dive companion to `rules list`: prints the rule's severity, tier,
+    confidence, attack class and CVSS, then the full description, a concrete
+    EXAMPLE ATTACK, and the remediation. The rule ID is case-insensitive. An
+    unknown rule ID is a usage error and exits 2 (per the scan exit-code
+    contract). Use --json for a machine-readable document.
+
+    Examples:
+        shellockolm rules explain AGENT-PI-013
+        shellockolm rules explain agent-mcp-004 --json
+    """
+    from rich.markup import escape
+    from scanners.agent_supply_chain import agent_rule_explain
+
+    # Usage errors exit 2; in --json mode their messages go to stderr so stdout
+    # stays empty (a consumer never parses a half-document).
+    err = console if not output_json else Console(stderr=True, theme=dark_theme)
+
+    rule = agent_rule_explain(rule_id)
+    if rule is None:
+        err.print(f"[danger]Unknown rule: {rule_id}[/danger]")
+        err.print("[info]Run 'shellockolm rules list' to see every rule ID.[/info]")
+        raise typer.Exit(2)
+
+    if output_json:
+        # CI / docs mode: ONE stable JSON document on stdout, nothing else.
+        doc = {
+            "schema_version": "1.0",
+            "tool": "shellockolm",
+            "catalog": "agent-supply-chain-rules",
+            "rule": rule,
+        }
+        print(json.dumps(doc, indent=2))
+        return
+
+    if not _from_menu:
+        print_banner()
+
+    sev = rule["severity"]
+    sev_styled = f"[{severity_style(sev)}]{sev}[/{severity_style(sev)}]"
+    tier_styled = "[magenta]PRO[/magenta]" if rule["tier"] == "pro" else "[dim]free[/dim]"
+
+    # Dynamic prose may contain '[' (e.g. a markdown-link example), which Rich
+    # would parse as console markup — escape every authored field.
+    lines = [
+        f"{sev_styled}   {tier_styled}   "
+        f"[info]confidence:[/info] {rule['confidence']}   "
+        f"[info]CVSS:[/info] {rule['cvss']}   "
+        f"[info]class:[/info] {escape(rule['attack_class'])}",
+        "",
+        f"[bold]{escape(rule['title'])}[/bold]",
+        "",
+        "[bold cyan]Description[/bold cyan]",
+        escape(rule["description"]),
+        "",
+        "[bold cyan]Example attack[/bold cyan]",
+        f"[dim]{escape(rule['example_attack'])}[/dim]",
+        "",
+        "[bold cyan]Remediation[/bold cyan]",
+        escape(rule["remediation"]),
+    ]
+    console.print(Panel(
+        "\n".join(lines),
+        title=f"🕵️  {rule['id']}",
+        border_style="bright_cyan",
+        box=box.ROUNDED,
+    ))
+
+
 # ─────────────────────────────────────────────────────────────────
 # INFO COMMAND - CVE details
 # ─────────────────────────────────────────────────────────────────

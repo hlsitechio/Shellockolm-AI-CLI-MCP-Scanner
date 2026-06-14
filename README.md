@@ -407,6 +407,19 @@ shellockolm rules list -s critical     # critical-severity rules
 shellockolm rules list --json | jq '.rules[] | {id, severity, tier}'
 ```
 
+**Explain one rule (`rules explain`).** `shellockolm rules explain <RULE-ID>` is the deep-dive
+companion to `rules list`: it prints a single rule's severity, tier, confidence, attack class and
+CVSS, then the **full description**, a concrete **example attack**, and the **remediation** — the
+"what does this rule actually catch, and what does the attack look like?" view. The rule ID is
+case-insensitive; an unknown ID is a usage error (exit `2`). `--json` emits one stable document
+(`schema_version` 1.0) for docs/tooling.
+
+```bash
+shellockolm rules explain AGENT-PI-013        # full explainer + example attack
+shellockolm rules explain agent-mcp-004       # case-insensitive
+shellockolm rules explain AGENT-PRO-003 --json
+```
+
 </details>
 
 <details>
