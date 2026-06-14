@@ -392,6 +392,21 @@ already redacted in finding text, so the SARIF never carries a live credential.
     sarif_file: results.sarif
 ```
 
+**Rule reference (`rules list`).** `shellockolm rules list` prints the full catalog of agent
+supply-chain detection rules — each rule's **ID**, severity, **tier** (free / Pro), confidence,
+attack class, and a one-line description — so you can see exactly what the agent scanner looks for
+without reading source. Filter with `--tier free|pro` or `--severity critical|high|medium|low|info`.
+`--json` emits one stable JSON document (the same catalog that feeds `RULES.md` and CI tooling);
+an unknown filter value is a usage error (exit `2`). Pro rules are listed for reference but only
+run with an active Shellockolm Pro license.
+
+```bash
+shellockolm rules list                 # full catalog as a table
+shellockolm rules list --tier pro      # Pro-only rules
+shellockolm rules list -s critical     # critical-severity rules
+shellockolm rules list --json | jq '.rules[] | {id, severity, tier}'
+```
+
 </details>
 
 <details>

@@ -1092,6 +1092,233 @@ def _is_injection_rule(rule_id: str) -> bool:
     return rule_id.startswith("AGENT-PI-") or rule_id in _PRO_INJECTION_IDS
 
 
+# --- Structural / stealth-channel rule constants -------------------------------
+# The detections below are emitted by structural / byte-level checks (invisible
+# characters, Unicode-Tags ASCII smuggling, bidi overrides, homoglyphs, link/href
+# mismatch, HTML-comment-concealed directives, frontmatter bypass flags, memory
+# poisoning, cross-file staged payloads, spoofed harness markers, large base64
+# blobs) rather than a single regex `pattern`, so each rule's metadata lives here
+# as a named module constant — both to keep the per-method check code lean and so
+# the rule catalog (`agent_rule_catalog`) can enumerate every rule the scanner can
+# emit WITHOUT running a scan. Each constant is static (per-match detail goes into
+# the finding's evidence snippet, never the rule fields), so referencing the
+# constant from its check method is byte-for-byte identical to the prior inline
+# literal it replaced.
+INVISIBLE_CHARS_RULE = AgentRule(
+    "AGENT-PI-005", "Hidden / invisible characters in instructions",
+    FindingSeverity.MEDIUM, 6.0, None,
+    "Zero-width or invisible Unicode characters can hide instructions from human review while staying visible to the model.",
+    "Strip invisible/zero-width characters; legitimate docs don't need them.",
+)
+TAG_SMUGGLING_RULE = AgentRule(
+    "AGENT-PI-007", "ASCII smuggling via Unicode Tags block",
+    FindingSeverity.HIGH, 8.2, None,
+    "Invisible Unicode Tag characters (U+E0000–U+E007F) encode hidden ASCII that "
+    "renders as nothing to a human reviewer but is read by the model — a stealth "
+    "prompt-injection channel.",
+    "Strip all U+E0000–U+E007F characters; no legitimate artifact uses the Tags block.",
+)
+BIDI_RULE = AgentRule(
+    "AGENT-PI-010", "Bidirectional text override (Trojan Source) character",
+    FindingSeverity.HIGH, 8.0, None,
+    "A Unicode bidirectional control character (Trojan Source, CVE-2021-42574) "
+    "is present. It reorders how text is displayed without changing the raw "
+    "bytes, so a human reviewer reads a different ordering than the model — a "
+    "stealth channel to hide or visually reverse instructions.",
+    "Strip U+202A–U+202E and U+2066–U+2069; plain LTR agent artifacts never "
+    "need bidi overrides or isolates.",
+)
+CONFUSABLE_RULE = AgentRule(
+    "AGENT-PI-011", "Homoglyph / mixed-script confusable spoofing",
+    FindingSeverity.HIGH, 7.7, None,
+    "A word mixes ASCII letters with confusable look-alike characters from "
+    "another script (Cyrillic/Greek). It reads identically to a human and to "
+    "the model, but defeats keyword/substring review — used to smuggle "
+    "instructions or impersonate a trusted tool/skill name past a filter.",
+    "Normalize the text to ASCII and re-review; legitimate Latin-script "
+    "artifacts never mix Cyrillic/Greek look-alikes into English words.",
+)
+LINK_MISMATCH_RULE = AgentRule(
+    "AGENT-PI-012", "Markdown link text / href domain mismatch",
+    FindingSeverity.HIGH, 7.4, None,
+    "A markdown link's visible text advertises one domain while its href "
+    "points to a different one. In an agent artifact this is a lure: the "
+    "model (or a skimming reviewer) trusts the visible domain and follows "
+    "or auto-fetches the real, attacker-controlled URL.",
+    "Make the link text match its destination, or remove the link. Visible "
+    "text should never name a domain other than the one it links to.",
+)
+HTML_COMMENT_RULE = AgentRule(
+    "AGENT-PI-013", "Imperative instructions hidden in an HTML comment",
+    FindingSeverity.HIGH, 7.6, None,
+    "An HTML comment (<!-- ... -->) contains imperative instructions. The "
+    "comment is invisible in any rendered Markdown view but is read verbatim "
+    "by a model consuming the raw file — a stealth channel to smuggle "
+    "directions (instruction overrides, 'do not tell the user', exfiltration "
+    "or execute commands) past a human who only sees the rendered artifact.",
+    "Remove the comment or the directive inside it. Skill / instruction files "
+    "should never hide imperative instructions for the model in HTML comments.",
+)
+FRONTMATTER_RULE = AgentRule(
+    "AGENT-PI-014", "Permission/safety-bypass flag in skill frontmatter",
+    FindingSeverity.HIGH, 8.0, None,
+    "The skill / instruction file's YAML frontmatter declares a permission- or "
+    "safety-bypass flag (e.g. bypassPermissions, --dangerously-skip-permissions, "
+    "auto-approve: true, yolo: true, or permission-mode: bypassPermissions). "
+    "Frontmatter is metadata loaded before the skill runs, so the flag silently "
+    "broadens the agent's autonomy past the per-invocation consent the user "
+    "expects — the prompts that gate dangerous actions — while the prose body "
+    "looks ordinary.",
+    "Remove the bypass / auto-approve flag from the frontmatter. A distributable "
+    "skill should declare only descriptive metadata and the specific tools it "
+    "needs, never disable the permission prompts that gate dangerous actions.",
+)
+MEMORY_POISONING_RULE = AgentRule(
+    "AGENT-PI-015", "Memory / persistence poisoning (self-propagating instruction)",
+    FindingSeverity.HIGH, 8.5, None,
+    "An instruction directs the agent to write a directive into its own "
+    "persistent standing-context store (CLAUDE.md, AGENTS.md, a memory file, "
+    ".cursorrules, settings.json, …) so it auto-loads in future sessions, and "
+    "the persisted content carries a covert ('do not tell the user'), "
+    "instruction-override, or 'from now on always …' directive. This is "
+    "self-propagating prompt injection — a one-shot inject rewritten into the "
+    "agent's config to become a persistent backdoor that survives across sessions.",
+    "Never let a downloaded skill / instruction file write behavioural rules "
+    "into your memory or config. Remove the self-propagation directive; the "
+    "agent's CLAUDE.md / memory / settings should be changed only by the user, "
+    "never on instruction from an untrusted artifact.",
+)
+CROSS_FILE_RULE = AgentRule(
+    "AGENT-PI-016", "Cross-file staged payload (instruction-following indirection)",
+    FindingSeverity.HIGH, 7.8, None,
+    "The artifact directs the agent to read a companion file and then follow / "
+    "obey the instructions inside it, and the indirection is suspicious — the "
+    "referenced path escapes or hides from the skill bundle (parent traversal, "
+    "an absolute/home/UNC path, or a hidden dot-directory), or a covert / "
+    "instruction-override cue accompanies it. This stages the real payload "
+    "out-of-band: the reviewed file looks benign while the actual injected "
+    "directives live in a sibling file the reviewer won't open — a way to "
+    "smuggle a prompt-injection past review of the primary artifact. (A plain "
+    "in-bundle reference like \"read forms.md and follow its instructions\" is "
+    "ordinary progressive disclosure and is not flagged.)",
+    "Inline what the agent must do, or keep companion files inside the skill "
+    "bundle and free of covert/override directions. A skill should never send "
+    "the agent to obey instructions in a hidden, out-of-tree, or concealed file.",
+)
+TOOL_OUTPUT_SPOOF_RULE = AgentRule(
+    "AGENT-PI-017", "Spoofed harness tool-output / system-reminder marker",
+    FindingSeverity.HIGH, 8.5, None,
+    "The artifact embeds a raw harness framing token (a <system-reminder> "
+    "block, or tool-use framing such as <function_calls> / <invoke> / "
+    "<function_results> / <tool_use> / <tool_result>). The agent runtime "
+    "uses these to wrap privileged, higher-trust content it injects itself; "
+    "an artifact that emits one spoofs that boundary — it can fabricate a "
+    "'system reminder' the model treats as authoritative, forge a tool "
+    "result (claiming a check passed, a command succeeded, or a file is "
+    "safe) to mislead the agent, or forge a tool call to drive its next "
+    "action. (A backticked or fenced reference that merely documents the "
+    "format is not flagged.)",
+    "Remove the tag. Skill / instruction / command files are plain content "
+    "and must never emit harness tool-output or system-reminder framing; "
+    "show the format inside a code fence or inline backticks if you need to "
+    "document it.",
+)
+B64_BLOB_RULE = AgentRule(
+    "AGENT-OBF-002", "Large base64 blob embedded in artifact",
+    FindingSeverity.LOW, 4.0, None,
+    "A long base64-encoded blob is embedded in the artifact; these can conceal payloads or data.",
+    "Decode and review the blob; remove it if it isn't a legitimate asset.",
+)
+
+# Structural rules in detection order (all free-tier, always-on).
+STRUCTURAL_RULES: List[AgentRule] = [
+    INVISIBLE_CHARS_RULE, TAG_SMUGGLING_RULE, BIDI_RULE, CONFUSABLE_RULE,
+    LINK_MISMATCH_RULE, HTML_COMMENT_RULE, FRONTMATTER_RULE, MEMORY_POISONING_RULE,
+    CROSS_FILE_RULE, TOOL_OUTPUT_SPOOF_RULE, B64_BLOB_RULE,
+]
+
+
+# --- Canonical rule catalog ----------------------------------------------------
+# The single source of truth for every AGENT-* rule the scanner can emit. Consumed
+# by `shellockolm rules list`, a per-rule `--explain`, and the generated RULES.md,
+# so the documentation never drifts from the engine. Built by unioning every rule
+# list (de-duplicated by id — DESTRUCT_RULE is shared by the text and hook paths,
+# SECRET2_RULE by the text and structured paths) and ordered by rule id for stable,
+# reproducible output. This is a *documentation* surface: it lists every rule
+# regardless of whether a Pro license is active at runtime.
+_PRO_RULE_IDS: Set[str] = {r.id for r in PRO_RULES}
+
+# rule-id family token -> human-readable attack class (AGENT-<FAMILY>-NNN).
+_RULE_FAMILY_CLASS: Dict[str, str] = {
+    "PI": "prompt-injection",
+    "EXFIL": "data-exfiltration",
+    "SECRET": "hardcoded-secret",
+    "OBF": "obfuscation",
+    "DESTRUCT": "destructive-command",
+    "MCP": "mcp-config",
+    "N8N": "n8n-workflow",
+    "HOOK": "settings-hook",
+    "PRO": "advanced-injection",
+}
+
+
+def agent_rule_tier(rule_id: str) -> str:
+    """'pro' for licensed Pro-tier rules, 'free' for the always-on OSS rules."""
+    return "pro" if rule_id in _PRO_RULE_IDS else "free"
+
+
+def agent_rule_class(rule_id: str) -> str:
+    """Human-readable attack class derived from a rule id's family token."""
+    parts = rule_id.split("-")
+    family = parts[1] if len(parts) >= 3 else ""
+    return _RULE_FAMILY_CLASS.get(family, "agent-artifact")
+
+
+def _build_agent_rule_catalog() -> List[AgentRule]:
+    """Union every rule list, de-duplicate by id (first wins), order by id."""
+    seen: Dict[str, AgentRule] = {}
+    for rule in (
+        PROMPT_INJECTION_RULES
+        + STRUCTURAL_RULES
+        + GENERIC_TEXT_RULES
+        + MCP_RULES
+        + [MCP_ENV_EXFIL_RULE, MCP_REMOTE_SOURCE_RULE]
+        + N8N_RULES
+        + [N8N_CRED_EXFIL_RULE]
+        + HOOK_COMMAND_RULES
+        + PRO_RULES
+    ):
+        seen.setdefault(rule.id, rule)
+    return [seen[rule_id] for rule_id in sorted(seen)]
+
+
+# Ordered, de-duplicated list of every distinct AGENT-* rule the scanner can emit.
+ALL_AGENT_RULES: List[AgentRule] = _build_agent_rule_catalog()
+
+
+def agent_rule_catalog() -> List[Dict[str, Any]]:
+    """Catalog of every agent supply-chain rule as plain, JSON-safe dicts.
+
+    Each entry carries: id, title (the one-line description), severity, tier
+    (free|pro), confidence, cvss, attack_class, description (full), remediation.
+    Stable order by rule id.
+    """
+    return [
+        {
+            "id": r.id,
+            "title": r.title,
+            "severity": r.severity.value,
+            "tier": agent_rule_tier(r.id),
+            "confidence": r.confidence,
+            "cvss": r.cvss,
+            "attack_class": agent_rule_class(r.id),
+            "description": r.description,
+            "remediation": r.remediation,
+        }
+        for r in ALL_AGENT_RULES
+    ]
+
+
 class AgentSupplyChainScanner(BaseScanner):
     """Scans agent skills, MCP configs, and n8n workflows for agentic-era threats."""
 
@@ -1698,13 +1925,7 @@ class AgentSupplyChainScanner(BaseScanner):
             idx = text.find(ch)
             if idx != -1:
                 line_no = text.count("\n", 0, idx) + 1
-                rule = AgentRule(
-                    "AGENT-PI-005", "Hidden / invisible characters in instructions",
-                    FindingSeverity.MEDIUM, 6.0, None,
-                    "Zero-width or invisible Unicode characters can hide instructions from human review while staying visible to the model.",
-                    "Strip invisible/zero-width characters; legitimate docs don't need them.",
-                )
-                return [self._finding(rule, fp, artifact, repr(ch), line_no)]
+                return [self._finding(INVISIBLE_CHARS_RULE, fp, artifact, repr(ch), line_no)]
         return []
 
     def _check_tag_smuggling(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
@@ -1721,15 +1942,7 @@ class AgentSupplyChainScanner(BaseScanner):
         line_no = text.count("\n", 0, tag_idx[0]) + 1
         snippet = f"{len(tag_idx)} tag char(s); decodes to: {decoded[:80]!r}" if decoded \
             else f"{len(tag_idx)} Unicode Tag char(s)"
-        rule = AgentRule(
-            "AGENT-PI-007", "ASCII smuggling via Unicode Tags block",
-            FindingSeverity.HIGH, 8.2, None,
-            "Invisible Unicode Tag characters (U+E0000–U+E007F) encode hidden ASCII that "
-            "renders as nothing to a human reviewer but is read by the model — a stealth "
-            "prompt-injection channel.",
-            "Strip all U+E0000–U+E007F characters; no legitimate artifact uses the Tags block.",
-        )
-        return [self._finding(rule, fp, artifact, snippet, line_no)]
+        return [self._finding(TAG_SMUGGLING_RULE, fp, artifact, snippet, line_no)]
 
     def _check_bidi(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
         """Detect Trojan Source bidirectional control characters (CVE-2021-42574).
@@ -1743,17 +1956,7 @@ class AgentSupplyChainScanner(BaseScanner):
             if name is None:
                 continue
             line_no = text.count("\n", 0, idx) + 1
-            rule = AgentRule(
-                "AGENT-PI-010", "Bidirectional text override (Trojan Source) character",
-                FindingSeverity.HIGH, 8.0, None,
-                "A Unicode bidirectional control character (Trojan Source, CVE-2021-42574) "
-                "is present. It reorders how text is displayed without changing the raw "
-                "bytes, so a human reviewer reads a different ordering than the model — a "
-                "stealth channel to hide or visually reverse instructions.",
-                "Strip U+202A–U+202E and U+2066–U+2069; plain LTR agent artifacts never "
-                "need bidi overrides or isolates.",
-            )
-            return [self._finding(rule, fp, artifact, f"U+{ord(ch):04X} {name}", line_no)]
+            return [self._finding(BIDI_RULE, fp, artifact, f"U+{ord(ch):04X} {name}", line_no)]
         return []
 
     def _check_confusables(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
@@ -1775,17 +1978,7 @@ class AgentSupplyChainScanner(BaseScanner):
             line_no = text.count("\n", 0, m.start()) + 1
             cps = ", ".join(f"U+{ord(c):04X}" for c in confusables[:5])
             snippet = f"{word!r} spoofs {normalized!r} (confusable: {cps})"
-            rule = AgentRule(
-                "AGENT-PI-011", "Homoglyph / mixed-script confusable spoofing",
-                FindingSeverity.HIGH, 7.7, None,
-                "A word mixes ASCII letters with confusable look-alike characters from "
-                "another script (Cyrillic/Greek). It reads identically to a human and to "
-                "the model, but defeats keyword/substring review — used to smuggle "
-                "instructions or impersonate a trusted tool/skill name past a filter.",
-                "Normalize the text to ASCII and re-review; legitimate Latin-script "
-                "artifacts never mix Cyrillic/Greek look-alikes into English words.",
-            )
-            return [self._finding(rule, fp, artifact, snippet, line_no)]
+            return [self._finding(CONFUSABLE_RULE, fp, artifact, snippet, line_no)]
         return []
 
     def _check_link_mismatch(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
@@ -1809,17 +2002,7 @@ class AgentSupplyChainScanner(BaseScanner):
                     continue
                 line_no = text.count("\n", 0, m.start()) + 1
                 snippet = f"text says {tm.group(1)!r} but href is {href_host.group(1)!r}"
-                rule = AgentRule(
-                    "AGENT-PI-012", "Markdown link text / href domain mismatch",
-                    FindingSeverity.HIGH, 7.4, None,
-                    "A markdown link's visible text advertises one domain while its href "
-                    "points to a different one. In an agent artifact this is a lure: the "
-                    "model (or a skimming reviewer) trusts the visible domain and follows "
-                    "or auto-fetches the real, attacker-controlled URL.",
-                    "Make the link text match its destination, or remove the link. Visible "
-                    "text should never name a domain other than the one it links to.",
-                )
-                return [self._finding(rule, fp, artifact, snippet, line_no)]
+                return [self._finding(LINK_MISMATCH_RULE, fp, artifact, snippet, line_no)]
         return []
 
     def _check_hidden_comment(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
@@ -1842,18 +2025,7 @@ class AgentSupplyChainScanner(BaseScanner):
             abs_pos = cm.start(1) + dm.start()
             line_no = text.count("\n", 0, abs_pos) + 1
             snippet = "hidden in HTML comment: " + self._redact(dm.group(0))
-            rule = AgentRule(
-                "AGENT-PI-013", "Imperative instructions hidden in an HTML comment",
-                FindingSeverity.HIGH, 7.6, None,
-                "An HTML comment (<!-- ... -->) contains imperative instructions. The "
-                "comment is invisible in any rendered Markdown view but is read verbatim "
-                "by a model consuming the raw file — a stealth channel to smuggle "
-                "directions (instruction overrides, 'do not tell the user', exfiltration "
-                "or execute commands) past a human who only sees the rendered artifact.",
-                "Remove the comment or the directive inside it. Skill / instruction files "
-                "should never hide imperative instructions for the model in HTML comments.",
-            )
-            return [self._finding(rule, fp, artifact, snippet, line_no)]
+            return [self._finding(HTML_COMMENT_RULE, fp, artifact, snippet, line_no)]
         return []
 
     def _check_frontmatter(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
@@ -1908,21 +2080,7 @@ class AgentSupplyChainScanner(BaseScanner):
         if hit_pos is None:
             return []
         line_no = text.count("\n", 0, hit_pos) + 1
-        rule = AgentRule(
-            "AGENT-PI-014", "Permission/safety-bypass flag in skill frontmatter",
-            FindingSeverity.HIGH, 8.0, None,
-            "The skill / instruction file's YAML frontmatter declares a permission- or "
-            "safety-bypass flag (e.g. bypassPermissions, --dangerously-skip-permissions, "
-            "auto-approve: true, yolo: true, or permission-mode: bypassPermissions). "
-            "Frontmatter is metadata loaded before the skill runs, so the flag silently "
-            "broadens the agent's autonomy past the per-invocation consent the user "
-            "expects — the prompts that gate dangerous actions — while the prose body "
-            "looks ordinary.",
-            "Remove the bypass / auto-approve flag from the frontmatter. A distributable "
-            "skill should declare only descriptive metadata and the specific tools it "
-            "needs, never disable the permission prompts that gate dangerous actions.",
-        )
-        return [self._finding(rule, fp, artifact, "frontmatter flag: " + self._redact(snippet), line_no)]
+        return [self._finding(FRONTMATTER_RULE, fp, artifact, "frontmatter flag: " + self._redact(snippet), line_no)]
 
     def _check_memory_poisoning(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
         """Detect self-propagating injection that writes a directive into the agent's
@@ -1944,22 +2102,7 @@ class AgentSupplyChainScanner(BaseScanner):
                 continue
             line_no = text.count("\n", 0, am.start()) + 1
             snippet = "persist-to-standing-context: " + self._redact(am.group(0))
-            rule = AgentRule(
-                "AGENT-PI-015", "Memory / persistence poisoning (self-propagating instruction)",
-                FindingSeverity.HIGH, 8.5, None,
-                "An instruction directs the agent to write a directive into its own "
-                "persistent standing-context store (CLAUDE.md, AGENTS.md, a memory file, "
-                ".cursorrules, settings.json, …) so it auto-loads in future sessions, and "
-                "the persisted content carries a covert ('do not tell the user'), "
-                "instruction-override, or 'from now on always …' directive. This is "
-                "self-propagating prompt injection — a one-shot inject rewritten into the "
-                "agent's config to become a persistent backdoor that survives across sessions.",
-                "Never let a downloaded skill / instruction file write behavioural rules "
-                "into your memory or config. Remove the self-propagation directive; the "
-                "agent's CLAUDE.md / memory / settings should be changed only by the user, "
-                "never on instruction from an untrusted artifact.",
-            )
-            return [self._finding(rule, fp, artifact, snippet, line_no)]
+            return [self._finding(MEMORY_POISONING_RULE, fp, artifact, snippet, line_no)]
         return []
 
     def _check_staged_payload(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
@@ -2015,25 +2158,8 @@ class AgentSupplyChainScanner(BaseScanner):
             reason = "suspicious target path" if suspicious else "covert/override framing"
 
             line_no = text.count("\n", 0, fm.start()) + 1
-            rule = AgentRule(
-                "AGENT-PI-016", "Cross-file staged payload (instruction-following indirection)",
-                FindingSeverity.HIGH, 7.8, None,
-                "The artifact directs the agent to read a companion file and then follow / "
-                "obey the instructions inside it, and the indirection is suspicious — the "
-                "referenced path escapes or hides from the skill bundle (parent traversal, "
-                "an absolute/home/UNC path, or a hidden dot-directory), or a covert / "
-                "instruction-override cue accompanies it. This stages the real payload "
-                "out-of-band: the reviewed file looks benign while the actual injected "
-                "directives live in a sibling file the reviewer won't open — a way to "
-                "smuggle a prompt-injection past review of the primary artifact. (A plain "
-                "in-bundle reference like \"read forms.md and follow its instructions\" is "
-                "ordinary progressive disclosure and is not flagged.)",
-                "Inline what the agent must do, or keep companion files inside the skill "
-                "bundle and free of covert/override directions. A skill should never send "
-                "the agent to obey instructions in a hidden, out-of-tree, or concealed file.",
-            )
             snippet = f"staged cross-file payload ({reason}): " + self._redact(cue)
-            return [self._finding(rule, fp, artifact, snippet, line_no)]
+            return [self._finding(CROSS_FILE_RULE, fp, artifact, snippet, line_no)]
         return []
 
     def _check_tool_output_spoof(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
@@ -2065,26 +2191,8 @@ class AgentSupplyChainScanner(BaseScanner):
             if text[line_start:pos].count("`") % 2 == 1:
                 continue
             line_no = text.count("\n", 0, pos) + 1
-            rule = AgentRule(
-                "AGENT-PI-017", "Spoofed harness tool-output / system-reminder marker",
-                FindingSeverity.HIGH, 8.5, None,
-                "The artifact embeds a raw harness framing token (a <system-reminder> "
-                "block, or tool-use framing such as <function_calls> / <invoke> / "
-                "<function_results> / <tool_use> / <tool_result>). The agent runtime "
-                "uses these to wrap privileged, higher-trust content it injects itself; "
-                "an artifact that emits one spoofs that boundary — it can fabricate a "
-                "'system reminder' the model treats as authoritative, forge a tool "
-                "result (claiming a check passed, a command succeeded, or a file is "
-                "safe) to mislead the agent, or forge a tool call to drive its next "
-                "action. (A backticked or fenced reference that merely documents the "
-                "format is not flagged.)",
-                "Remove the tag. Skill / instruction / command files are plain content "
-                "and must never emit harness tool-output or system-reminder framing; "
-                "show the format inside a code fence or inline backticks if you need to "
-                "document it.",
-            )
             snippet = "spoofed harness marker: " + self._redact(m.group(0).strip())
-            return [self._finding(rule, fp, artifact, snippet, line_no)]
+            return [self._finding(TOOL_OUTPUT_SPOOF_RULE, fp, artifact, snippet, line_no)]
         return []
 
     def _check_b64(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
@@ -2092,13 +2200,7 @@ class AgentSupplyChainScanner(BaseScanner):
         if not m:
             return []
         line_no = text.count("\n", 0, m.start()) + 1
-        rule = AgentRule(
-            "AGENT-OBF-002", "Large base64 blob embedded in artifact",
-            FindingSeverity.LOW, 4.0, None,
-            "A long base64-encoded blob is embedded in the artifact; these can conceal payloads or data.",
-            "Decode and review the blob; remove it if it isn't a legitimate asset.",
-        )
-        return [self._finding(rule, fp, artifact, m.group(0)[:40] + "...", line_no)]
+        return [self._finding(B64_BLOB_RULE, fp, artifact, m.group(0)[:40] + "...", line_no)]
 
     def _mk(self, rule: AgentRule, loc: str, artifact: str, snippet: str) -> ScanFinding:
         return ScanFinding(

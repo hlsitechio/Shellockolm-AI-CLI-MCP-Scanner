@@ -10,6 +10,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`rules list` — the agent rule catalog as a command (and docs).** A new
+  `shellockolm rules list` prints every agent supply-chain detection rule — ID,
+  severity, **tier** (free / Pro), confidence, attack class, and a one-line
+  description — so you can see exactly what the agent scanner looks for without
+  reading source. Filters: `--tier free|pro`, `--severity critical|…|info`;
+  `--json` emits one stable JSON document (`schema_version` 1.0) that feeds the
+  forthcoming `RULES.md` and CI tooling — pure JSON on stdout (usage errors to
+  stderr, exit `2` on an unknown filter value). Backing it, every detection rule
+  is now exposed through a single canonical catalog (`agent_rule_catalog()` /
+  `ALL_AGENT_RULES` in `scanners/agent_supply_chain.py`): the 11 structural /
+  stealth-channel rules that were inline `AgentRule` literals (invisible chars,
+  Unicode-Tags, bidi, homoglyph, link/href mismatch, HTML comment, frontmatter,
+  memory poisoning, cross-file, tool-output spoof, base64 blob) were promoted to
+  named module constants and are now enumerable without running a scan — a
+  behaviour-preserving refactor (the full pre-existing agent suite stays green).
+  22 new tests (`tests/test_rules_catalog.py`: catalog completeness incl. all
+  structural rules, tier/attack-class classification, de-dup + ordering, valid
+  enums, a behaviour-preservation check that a promoted rule still emits its
+  catalog metadata, and e2e subprocess runs for `rules list` JSON/filters/exit-2
+  /human table); full suite 405 green (was 383).
 - **`scan --table` — polished findings table grouped by file.** A new opt-in
   human-output mode: one compact Rich table per artifact (rows colored by
   severity, with rule ID, line, CVSS and detection confidence), closed by a

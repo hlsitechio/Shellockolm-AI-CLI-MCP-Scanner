@@ -1588,6 +1588,122 @@ def cves(
 
 
 # ─────────────────────────────────────────────────────────────────
+# RULES COMMAND - agent supply-chain detection rule catalog
+# ─────────────────────────────────────────────────────────────────
+rules_app = typer.Typer(
+    name="rules",
+    help="Inspect the agent supply-chain detection rule catalog",
+    no_args_is_help=True,
+)
+app.add_typer(rules_app, name="rules")
+
+_RULES_SEVERITIES = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
+_RULES_TIERS = ["free", "pro"]
+
+
+@rules_app.command("list")
+def rules_list(
+    tier: Optional[str] = typer.Option(
+        None, "--tier", "-t", help="Filter by tier: free | pro"),
+    severity: Optional[str] = typer.Option(
+        None, "--severity", "-s", help="Filter by severity: critical|high|medium|low|info"),
+    output_json: bool = typer.Option(
+        False, "--json", help="Emit the catalog as a single JSON document (CI / docs)"),
+    _from_menu: bool = False,  # Internal: skip banner when called from menu
+):
+    """
+    List every agent supply-chain detection rule.
+
+    Prints each rule's ID, severity, tier (free / Pro), confidence, attack class,
+    and a one-line description — a rule reference that doubles as docs. Use --json
+    for a machine-readable catalog (feeds RULES.md and CI tooling). Pro rules are
+    listed for reference but only run with an active Shellockolm Pro license.
+
+    Examples:
+        shellockolm rules list                 # all rules, human table
+        shellockolm rules list --tier pro      # Pro-only rules
+        shellockolm rules list -s critical     # critical-severity rules
+        shellockolm rules list --json          # JSON catalog for docs/CI
+    """
+    from scanners.agent_supply_chain import agent_rule_catalog
+
+    catalog = agent_rule_catalog()
+
+    # Usage errors exit 2 (per the scan exit-code contract); in --json mode their
+    # messages go to stderr so stdout stays a single, parseable JSON document.
+    err = console if not output_json else Console(stderr=True, theme=dark_theme)
+
+    if tier is not None:
+        tier_l = tier.strip().lower()
+        if tier_l not in _RULES_TIERS:
+            err.print(f"[danger]Unknown tier: {tier}[/danger]")
+            err.print(f"[info]Available: {', '.join(_RULES_TIERS)}[/info]")
+            raise typer.Exit(2)
+        catalog = [r for r in catalog if r["tier"] == tier_l]
+
+    if severity is not None:
+        sev_u = severity.strip().upper()
+        if sev_u not in _RULES_SEVERITIES:
+            err.print(f"[danger]Unknown severity: {severity}[/danger]")
+            err.print(f"[info]Available: {', '.join(s.lower() for s in _RULES_SEVERITIES)}[/info]")
+            raise typer.Exit(2)
+        catalog = [r for r in catalog if r["severity"] == sev_u]
+
+    if output_json:
+        # CI / docs mode: ONE stable JSON document on stdout, nothing else. plain
+        # print() (no rich markup); json.dumps defaults to ensure_ascii=True so the
+        # en-dashes / ellipses in rule prose can't break a piped stream.
+        doc = {
+            "schema_version": "1.0",
+            "tool": "shellockolm",
+            "catalog": "agent-supply-chain-rules",
+            "rule_count": len(catalog),
+            "rules": catalog,
+        }
+        print(json.dumps(doc, indent=2))
+        return
+
+    if not _from_menu:
+        print_banner()
+
+    table = Table(
+        title="🕵️  Shellockolm Agent Supply-Chain Rules",
+        box=box.ROUNDED,
+        border_style="bright_cyan",
+    )
+    table.add_column("Rule ID", style="highlight", no_wrap=True)
+    table.add_column("Severity", justify="center")
+    table.add_column("Tier", justify="center")
+    table.add_column("Conf", justify="center")
+    table.add_column("Attack class", style="info")
+    table.add_column("Description", style="path")
+
+    for r in catalog:
+        sev = r["severity"]
+        sev_styled = f"[{severity_style(sev)}]{sev}[/{severity_style(sev)}]"
+        tier_styled = "[magenta]PRO[/magenta]" if r["tier"] == "pro" else "[dim]free[/dim]"
+        table.add_row(
+            r["id"],
+            sev_styled,
+            tier_styled,
+            r["confidence"],
+            r["attack_class"],
+            r["title"],
+        )
+
+    console.print(table)
+
+    n_free = sum(1 for r in catalog if r["tier"] == "free")
+    n_pro = sum(1 for r in catalog if r["tier"] == "pro")
+    console.print(f"[info]Total: {len(catalog)} rule(s) — {n_free} free, {n_pro} Pro.[/info]")
+    if n_pro:
+        console.print(
+            "[dim]Pro rules require a Shellockolm Pro license to run; "
+            "they are listed here for reference.[/dim]"
+        )
+
+
+# ─────────────────────────────────────────────────────────────────
 # INFO COMMAND - CVE details
 # ─────────────────────────────────────────────────────────────────
 @app.command()
