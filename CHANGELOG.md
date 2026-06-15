@@ -10,6 +10,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Benchmark script + perf guard for the agent scanner.** A new
+  `scripts/benchmark_scan.py` generates a deterministic, self-contained corpus of
+  agent artifacts (skills, MCP configs, n8n exports, instruction files, `.claude/`
+  settings + slash-commands; ≈5 % carrying a known malicious shape), scans it, and
+  reports wall-clock + throughput (and gates on a `--budget`). The corpus
+  generator is shared with the new `tests/test_perf_guard.py` so the benchmark and
+  the CI regression tripwire agree. Real measured numbers are documented in
+  [docs/PERFORMANCE.md](docs/PERFORMANCE.md): ~960–1,080 artifacts/s (~1 ms/artifact)
+  on the synthetic tree, and the real `~/.claude/skills` corpus (1,335 skills).
+
+### Changed
+- **Faster non-ASCII stealth scans (regex-pass optimization).** The per-character
+  Unicode-Tags-smuggling, Trojan-Source bidi, and confusable/homoglyph checks used
+  to iterate every character of every artifact (and, for confusables, regex over
+  every word). Every code point they look for lives above U+007F, so a single
+  C-level character-class search (`_STEALTH_CHARS_RE`, built from the same
+  constants the checks consume so it cannot drift) now lets a pure-ASCII artifact
+  skip all three Python loops. **1,333 of 1,335 real skills are pure ASCII**, so
+  the fast path applies almost everywhere: **−14.2 %** wall-clock on the real
+  corpus (18.65 s → 16.01 s) and −10.3 % on a 2,000-artifact synthetic tree, with
+  findings **byte-identical** both ways (a strict superset guard — any artifact
+  with a real stealth char still runs the full slow-path scan). 15 new perf-guard
+  tests assert the guard never drifts, fast-paths benign ASCII *and* benign
+  non-ASCII (emoji/curly-quotes/CJK), and still detects every smuggling attack;
+  full suite 456 green (was 441).
+
 - **Baseline support (`--baseline` / `--write-baseline`) — fail CI only on NEW
   findings.** Adopt the scanner on a codebase that already has findings without
   drowning CI in pre-existing noise. `scan --write-baseline baseline.json`

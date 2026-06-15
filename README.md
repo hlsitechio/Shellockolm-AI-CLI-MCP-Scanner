@@ -747,6 +747,7 @@ MIT License — See [LICENSE](LICENSE)
 
 **📚 More Documentation:**
 - [🤖 Agent Supply-Chain Scanner Guide](docs/AGENT_SCANNER.md)
+- [⚡ Performance & Benchmark](docs/PERFORMANCE.md)
 - [Installation Guide](docs/INSTALL.md)
 - [Quick Start](docs/QUICKSTART.md)
 - [Fast Install Reference](docs/FAST_INSTALL.md)

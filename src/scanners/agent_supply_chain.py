@@ -89,6 +89,29 @@ CONFUSABLES: Dict[str, str] = {
 # noise from short fragments; mixed-script detection happens per token below.
 _CONFUSABLE_WORD = re.compile(r"[A-Za-zЀ-ӿͰ-Ͽ]{3,}")
 
+
+def _build_stealth_char_class() -> "re.Pattern[str]":
+    """Compile a character class matching ANY non-ASCII stealth code point.
+
+    Every invisible-char, Unicode-Tags, bidi-control, and confusable code point
+    used by the stealth scans lives above U+007F. A single C-level search with
+    this class therefore lets the per-character Python loops in
+    `_check_tag_smuggling` / `_check_bidi` / `_check_confusables` short-circuit on
+    any artifact that contains none of them — the overwhelming majority (English
+    prose + code, and even text whose only non-ASCII is a benign emoji or curly
+    quote). The class is built FROM the same constants those checks consume, so
+    the fast path can never drift out of sync with the slow path (a test asserts
+    every member matches and the constituent sets stay non-ASCII).
+    """
+    singles = set(INVISIBLE_CHARS) | set(BIDI_CONTROL_CHARS) | set(CONFUSABLES)
+    body = "".join(re.escape(c) for c in sorted(singles))
+    body += re.escape(chr(TAG_BLOCK_START)) + "-" + re.escape(chr(TAG_BLOCK_END))
+    return re.compile("[" + body + "]")
+
+
+# Precompiled once at import; used as a cheap guard by the per-character checks.
+_STEALTH_CHARS_RE = _build_stealth_char_class()
+
 # Inline markdown link: [visible text](href). Used to detect a link whose visible
 # text advertises one domain while the href points to a different one — a lure that
 # gets an agent (or a skimming human) to auto-fetch an attacker-controlled URL.
@@ -2127,6 +2150,9 @@ class AgentSupplyChainScanner(BaseScanner):
 
     def _check_tag_smuggling(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
         """Detect ASCII smuggled via the Unicode Tags block (invisible instructions)."""
+        # Fast path: no non-ASCII stealth char anywhere → no tag char possible.
+        if _STEALTH_CHARS_RE.search(text) is None:
+            return []
         tag_idx = [i for i, ch in enumerate(text)
                    if TAG_BLOCK_START <= ord(ch) <= TAG_BLOCK_END]
         if not tag_idx:
@@ -2148,6 +2174,9 @@ class AgentSupplyChainScanner(BaseScanner):
         sees a different ordering than the model reads — a stealth way to hide or
         visually reverse instructions inside an artifact.
         """
+        # Fast path: no non-ASCII stealth char anywhere → no bidi control possible.
+        if _STEALTH_CHARS_RE.search(text) is None:
+            return []
         for idx, ch in enumerate(text):
             name = BIDI_CONTROL_CHARS.get(ch)
             if name is None:
@@ -2165,6 +2194,9 @@ class AgentSupplyChainScanner(BaseScanner):
         A word written *entirely* in one non-Latin script is genuine foreign text
         and is not flagged; only Latin-plus-confusable mixing trips the rule.
         """
+        # Fast path: no non-ASCII stealth char anywhere → no confusable possible.
+        if _STEALTH_CHARS_RE.search(text) is None:
+            return []
         for m in _CONFUSABLE_WORD.finditer(text):
             word = m.group(0)
             has_ascii = any("a" <= c.lower() <= "z" for c in word)
