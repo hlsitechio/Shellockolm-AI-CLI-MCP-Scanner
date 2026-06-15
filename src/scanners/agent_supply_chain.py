@@ -27,7 +27,9 @@ Shellockolm — a seatbelt you run *before* you install an untrusted skill or se
 import base64
 import ipaddress
 import json
+import os
 import re
+import stat as _stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Generator, Set
@@ -44,6 +46,22 @@ INVISIBLE_CHARS = ["​", "‌", "‍", "⁠", "﻿", "­"]
 # model still reads. Distinct from the zero-width chars above, which carry no payload.
 TAG_BLOCK_START = 0xE0000
 TAG_BLOCK_END = 0xE007F
+
+# Byte-order marks → text encoding. Windows tooling (Notepad's "Unicode"/"UTF-8 with
+# BOM" save, PowerShell `Out-File` / `>` redirection) routinely emits UTF-16 or
+# BOM-prefixed files. Reading those as UTF-8-with-errors-ignored interleaves NULs and
+# drops bytes, so the recovered text is garbled — a malicious artifact saved that way
+# would evade EVERY text rule (false negative), while a benign UTF-8-BOM file leaks a
+# leading U+FEFF that trips the invisible-character rule (false positive). We detect the
+# encoding from the BOM and decode with it. UTF-32 marks are listed before the UTF-16
+# marks they share a prefix with, so the longest match wins.
+_BOM_ENCODINGS = (
+    (b"\x00\x00\xfe\xff", "utf-32-be"),
+    (b"\xff\xfe\x00\x00", "utf-32-le"),
+    (b"\xef\xbb\xbf",     "utf-8"),
+    (b"\xff\xfe",         "utf-16-le"),
+    (b"\xfe\xff",         "utf-16-be"),
+)
 
 # Bidirectional text-direction control characters ("Trojan Source", CVE-2021-42574).
 # These reorder how a run of text is *displayed* without changing the underlying byte
@@ -1574,6 +1592,10 @@ class AgentSupplyChainScanner(BaseScanner):
     }
 
     MAX_FILE_BYTES = 2_000_000
+    # Cap on how many per-file read errors we record so a pathological tree (e.g. a
+    # share full of locked or long-path files) can't balloon the result. The scan
+    # always continues regardless; this only bounds the reported list.
+    MAX_RECORDED_ERRORS = 50
     _B64 = re.compile(r"[A-Za-z0-9+/]{160,}={0,2}")
 
     def __init__(self, pro: Optional[bool] = None):
@@ -1622,9 +1644,15 @@ class AgentSupplyChainScanner(BaseScanner):
             try:
                 if fp.stat().st_size > self.MAX_FILE_BYTES:
                     continue
-                text = fp.read_text(encoding="utf-8", errors="ignore")
-            except (OSError, IOError):
+                raw = fp.read_bytes()
+            except (OSError, ValueError) as exc:
+                # ValueError guards against an embedded-NUL path on some platforms.
+                # A long path, reparse point, locked file, or permission error here is
+                # collected (not silently swallowed) so the scan continues and the user
+                # sees what was skipped — Windows path/encoding hardening.
+                self._record_read_error(result, fp, exc)
                 continue
+            text = self._decode_bytes(raw)
 
             if is_skill:
                 skills += 1
@@ -1672,6 +1700,39 @@ class AgentSupplyChainScanner(BaseScanner):
             "min_confidence": _normalize_confidence(min_confidence),
         })
         return result
+
+    @staticmethod
+    def _decode_bytes(raw: bytes) -> str:
+        """Decode artifact bytes to text, honoring a UTF-8/16/32 byte-order mark.
+
+        A BOM-prefixed or UTF-16 file read as UTF-8 yields garbled text, so a malicious
+        artifact saved that way (common from Windows editors / PowerShell) would evade
+        every text rule, and a benign UTF-8-BOM file would leak a leading U+FEFF that
+        the invisible-character rule mistakes for smuggling. We strip the BOM and decode
+        with its encoding; absent a BOM we fall back to a NUL-density heuristic for
+        BOM-less UTF-16, then plain UTF-8. Always lenient (`errors="ignore"`) — decoding
+        must never raise and abort a scan.
+        """
+        for bom, enc in _BOM_ENCODINGS:
+            if raw.startswith(bom):
+                return raw[len(bom):].decode(enc, errors="ignore")
+        # BOM-less UTF-16: ASCII text encodes as <char>\x00 (LE) or \x00<char> (BE), so
+        # a real text artifact in UTF-16 is roughly half NUL bytes. Plain UTF-8/ASCII
+        # text and JSON have essentially none, so a high NUL density is a reliable tell.
+        sample = raw[:4096]
+        if sample and sample.count(0) >= len(sample) // 3:
+            # Endianness: which interleaved position holds the NULs.
+            if sample[1::2].count(0) >= sample[0::2].count(0):
+                return raw.decode("utf-16-le", errors="ignore")
+            return raw.decode("utf-16-be", errors="ignore")
+        return raw.decode("utf-8", errors="ignore")
+
+    @classmethod
+    def _record_read_error(cls, result: ScanResult, fp: Path, exc: Exception) -> None:
+        """Collect a per-file read error (capped) without aborting the scan."""
+        if len(result.errors) >= cls.MAX_RECORDED_ERRORS:
+            return
+        result.errors.append(f"Could not read {fp}: {type(exc).__name__}: {exc}")
 
     @staticmethod
     def _apply_confidence_filter(findings: List[ScanFinding], min_confidence: str) -> int:
@@ -1757,23 +1818,53 @@ class AgentSupplyChainScanner(BaseScanner):
             return False
         return ".claude" in parts[:parts.index("commands")]
 
+    @staticmethod
+    def _is_reparse_point(entry: Path) -> bool:
+        """True if `entry` is a symlink or a Windows junction (any reparse point).
+
+        `Path.is_symlink()` alone is False for a Windows directory **junction**
+        (`mklink /J`) — the most common reparse point on Windows — so a junction loop
+        would otherwise be followed and re-scan the tree (duplicate findings) up to the
+        depth cap. We also inspect the lstat reparse-point attribute to catch junctions.
+        Uses lstat (never follows the link) and is fully guarded.
+        """
+        try:
+            if entry.is_symlink():
+                return True
+        except OSError:
+            return False
+        reparse = getattr(_stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+        try:
+            attrs = getattr(os.lstat(entry), "st_file_attributes", 0)
+        except (OSError, ValueError, AttributeError):
+            return False
+        return bool(attrs & reparse)
+
     def _walk(self, root: Path, recursive: bool, max_depth: int) -> Generator[Path, None, None]:
         def rec(current: Path, depth: int):
             if depth > max_depth:
                 return
             try:
                 entries = list(current.iterdir())
-            except (OSError, PermissionError):
+            except (OSError, ValueError):
                 return
             for entry in entries:
                 try:
+                    # Don't descend through a directory reparse point (a symlink or
+                    # Windows junction): it can loop back into the tree (infinite walk /
+                    # duplicate findings) or escape the scan root. The max_depth cap is
+                    # the backstop against a crash; this avoids the wasted/duplicate
+                    # traversal entirely. Files — including file symlinks — are still
+                    # yielded.
+                    if entry.is_dir() and self._is_reparse_point(entry):
+                        continue
                     if entry.is_file():
                         yield entry
                     elif entry.is_dir() and recursive \
                             and entry.name not in self.SKIP_DIRS \
                             and entry.name not in self.WINDOWS_SYSTEM_DIRS:
                         yield from rec(entry, depth + 1)
-                except (OSError, PermissionError):
+                except (OSError, ValueError):
                     continue
 
         yield from rec(root, 0)

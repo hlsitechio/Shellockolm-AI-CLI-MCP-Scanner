@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Windows path/encoding hardening — UTF-16/BOM artifacts no longer evade the agent
+  scanner, and a benign BOM no longer false-positives.** Skills, MCP configs, and
+  instruction files were read as UTF-8 with `errors="ignore"`, so a malicious artifact
+  saved as **UTF-16** (routine from Windows Notepad's "Unicode" save or PowerShell
+  `Out-File`/`>`) decoded to garbled, NUL-interleaved text that matched **no** rule —
+  a complete detection bypass (confirmed: a UTF-16 instruction-override skill scored
+  0 findings vs. 2 in UTF-8). Conversely a benign **UTF-8-BOM** file leaked a leading
+  `U+FEFF` that the invisible-character rule (AGENT-PI-005) flagged as smuggling — a
+  false positive. A new `_decode_bytes` now detects the byte-order mark (UTF-8/16/32,
+  longest match first), strips it, and decodes with the right codec, with a NUL-density
+  heuristic for BOM-less UTF-16; detections now fire identically across UTF-8/UTF-16
+  LE+BE/UTF-32/BOM, and the BOM false positive is gone. Verified a **strict no-op on
+  the real `~/.claude/skills` corpus** (187 findings, byte-identical; 0 read errors).
+- **Unreadable artifacts are collected, not silently swallowed; the scan always
+  continues.** A long path, locked file, reparse-point, or permission error during
+  read is now recorded in `result.errors` (capped at 50) instead of being dropped, so
+  a skipped file is visible rather than masquerading as clean. A missing scan path
+  already reported an error; this extends the same contract per-file.
+- **Directory reparse-point loop protection (symlinks *and* Windows junctions).** The
+  walker now skips directory reparse points, which could otherwise loop back into the
+  tree and report the same finding repeatedly (a self-referential junction inflated one
+  skill's findings 5×) or escape the scan root. `Path.is_symlink()` alone misses
+  Windows junctions, so the check also inspects the lstat reparse-point attribute. File
+  symlinks are still followed. 28 new tests (`tests/test_windows_hardening.py`: per-BOM
+  decode units, malicious detected in every encoding, benign zero-FP in every encoding,
+  the AGENT-PI-005 BOM regression, read-error collection + cap, and a real
+  junction/symlink loop that completes without crashing and counts the finding once);
+  full suite **484 green** (was 456).
+
 ### Added
 - **Benchmark script + perf guard for the agent scanner.** A new
   `scripts/benchmark_scan.py` generates a deterministic, self-contained corpus of
