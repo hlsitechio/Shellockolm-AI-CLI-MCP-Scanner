@@ -195,6 +195,13 @@ from baseline import (
     filter_results_to_new,
     load_baseline,
 )
+from config_file import (
+    ConfigError,
+    ScanConfig,
+    load_config,
+    load_config_from_file,
+    filter_results_to_unignored,
+)
 from github_actions import GitHubActionsGenerator, WorkflowConfig, ScanLevel, TriggerType
 from watch_mode import WatchMode, WatchConfig
 from context_intelligence import (
@@ -649,6 +656,29 @@ def _findings_gate_failure(all_findings, fail_on: Optional[str]) -> bool:
     )
 
 
+def _user_passed(ctx, name: str) -> bool:
+    """True if the user explicitly set option ``name`` on the command line.
+
+    Used so a config-file value is applied only as a *default* — for a flag the
+    user did NOT type — never as an override of an explicit flag.
+
+    The parameter source is compared by its member NAME ("COMMANDLINE"), not by
+    enum identity: Typer bundles its own copy of Click (``typer._click``), so the
+    ``ParameterSource`` member a Typer ``Context`` returns is a *different class*
+    than ``click.core.ParameterSource`` — an ``is``/``==`` check against the
+    latter silently returns False and config would wrongly override explicit
+    flags. The string name is stable across both copies. Returns False (config
+    fills the gap) when no context or no source is available.
+    """
+    if ctx is None:
+        return False
+    try:
+        src = ctx.get_parameter_source(name)
+    except Exception:  # pragma: no cover - defensive
+        return False
+    return getattr(src, "name", None) == "COMMANDLINE"
+
+
 def build_json_report(
     results: List[ScanResult],
     *,
@@ -730,6 +760,10 @@ def build_json_report(
             # Findings hidden because they are already present in the --baseline.
             "findings_baselined": sum(
                 r.stats.get("findings_baselined", 0) for r in results
+            ),
+            # Findings hidden by a config-file `ignore` rule-ID / path glob.
+            "findings_config_ignored": sum(
+                r.stats.get("findings_config_ignored", 0) for r in results
             ),
         },
         "findings": findings_json,
@@ -1042,6 +1076,7 @@ def render_findings_table(results: List[ScanResult], *,
 # ─────────────────────────────────────────────────────────────────
 @app.command()
 def scan(
+    ctx: typer.Context,
     path: str = typer.Argument(".", help="Path to scan (default: current directory)"),
     scanner: Optional[str] = typer.Option(
         None, "--scanner", "-s",
@@ -1104,6 +1139,18 @@ def scan(
              "never fails the build) so you can accept the existing findings, "
              "commit the file, and then gate later runs with --baseline.",
     ),
+    config: Optional[str] = typer.Option(
+        None, "--config",
+        help="Path to a shellockolm.toml config file. By default the nearest "
+             "shellockolm.toml / pyproject.toml ([tool.shellockolm]) at or above "
+             "the scan path supplies defaults for flags you don't pass; an "
+             "explicit flag always wins. A missing/invalid file exits 2.",
+    ),
+    no_config: bool = typer.Option(
+        False, "--no-config",
+        help="Ignore any shellockolm.toml / pyproject.toml [tool.shellockolm] "
+             "config and use only the flags given on the command line.",
+    ),
     _from_menu: bool = False,  # Internal: skip banner when called from menu
 ):
     """
@@ -1121,6 +1168,8 @@ def scan(
         shellockolm scan --diff-ref origin/main ./   # Only files changed vs a ref (CI)
         shellockolm scan --write-baseline baseline.json ./  # Accept current findings
         shellockolm scan --baseline baseline.json ./        # Fail only on NEW findings
+        shellockolm scan ./                     # Uses shellockolm.toml defaults if present
+        shellockolm scan --no-config ./         # Ignore any config file
         shellockolm scan --quick ./             # Quick scan (package versions only)
 
     Exit codes: 0 = clean (no finding at/above --fail-on), 1 = findings gate the
@@ -1130,6 +1179,49 @@ def scan(
     # human/rich output (banner, progress, findings, panels, summary) is suppressed.
     if json_output:
         quiet = True
+
+    # Config file (build-loop task #29): a committed shellockolm.toml /
+    # pyproject.toml [tool.shellockolm] supplies DEFAULTS for flags the user did
+    # not pass on the command line (an explicit flag always wins). `ignore` entries
+    # are collected here and applied as a post-scan filter alongside diff/baseline.
+    # Skipped for the interactive menu (--no-config off the table there) and for
+    # --no-config. A missing --config file or an invalid config is exit 2 (never a
+    # silent wrong-config scan).
+    config_ignore: List[str] = []
+    if not _from_menu and not no_config:
+        try:
+            if config is not None:
+                loaded_config = load_config_from_file(config)
+            else:
+                loaded_config = load_config(path)
+        except ConfigError as e:
+            msg = f"config: {e}"
+            if json_output:
+                print(msg, file=sys.stderr)
+            else:
+                console.print(f"[danger]{msg}[/danger]")
+            raise typer.Exit(EXIT_ERROR)
+
+        if loaded_config is not None and not loaded_config.is_empty():
+            # Apply each value only when the user left that flag at its default.
+            if loaded_config.path is not None and not _user_passed(ctx, "path"):
+                path = loaded_config.path
+            if loaded_config.scanner is not None and not _user_passed(ctx, "scanner"):
+                scanner = loaded_config.scanner
+            if loaded_config.recursive is not None and not _user_passed(ctx, "recursive"):
+                recursive = loaded_config.recursive
+            if loaded_config.max_depth is not None and not _user_passed(ctx, "max_depth"):
+                max_depth = loaded_config.max_depth
+            if loaded_config.min_confidence is not None and not _user_passed(ctx, "min_confidence"):
+                min_confidence = loaded_config.min_confidence
+            if loaded_config.fail_on is not None and not _user_passed(ctx, "fail_on"):
+                fail_on = loaded_config.fail_on
+            config_ignore = list(loaded_config.ignore)
+            if not quiet:
+                console.print(
+                    f"[info]⚙️  Loaded config defaults from "
+                    f"{loaded_config.source}[/info]"
+                )
 
     if not quiet and not _from_menu:
         print_banner()
@@ -1297,6 +1389,16 @@ def scan(
             results, known_fingerprints, base=os.getcwd()
         )
 
+    # Config ignore (build-loop task #29): drop findings matched by a config
+    # `ignore` rule-ID or path glob. A pure, scanner-agnostic CLI-level post-filter
+    # in the same region as the diff/baseline filters, so every output path
+    # (human/--json/--sarif) and the exit code see only the unignored findings.
+    config_ignored = 0
+    if config_ignore:
+        config_ignored = filter_results_to_unignored(
+            results, config_ignore, base=os.getcwd()
+        )
+
     # Print findings
     all_findings = [f for r in results for f in r.findings]
 
@@ -1375,6 +1477,13 @@ def scan(
         console.print(
             f"[dim]📋 {baselined} known finding(s) hidden by --baseline "
             f"(only NEW findings are reported; refresh with --write-baseline)[/dim]"
+        )
+
+    # Surface findings hidden by a config `ignore` rule-ID / path glob.
+    if config_ignored and not quiet:
+        console.print(
+            f"[dim]⚙️  {config_ignored} finding(s) hidden by config 'ignore' "
+            f"(shellockolm.toml / [tool.shellockolm])[/dim]"
         )
 
     # SARIF export (a file artifact for GitHub Code Scanning); independent of the
@@ -4185,7 +4294,7 @@ def interactive_shell():
                             i += 1
                         else:
                             i += 1
-                    scan(path=path, scanner=scanner_name, output=output_file, recursive=True, max_depth=10, verbose=False, quiet=False, _from_menu=True)
+                    scan(ctx=None, path=path, scanner=scanner_name, output=output_file, recursive=True, max_depth=10, verbose=False, quiet=False, _from_menu=True)
                     next_step_type = "scan_clean"  # Will be updated if exit code 1
 
                 elif cmd_name == "scan-all-npm":
@@ -6719,7 +6828,7 @@ def interactive_shell():
                     console.print("[title]🤖 Clawdbot Home Credential Audit[/title]\n")
                     console.print("[dim]Scanning home directory for exposed credentials...[/dim]\n")
                     home_path = str(Path.home())
-                    scan(path=home_path, scanner="clawdbot", output=None, recursive=False, max_depth=1, verbose=False, quiet=False, _from_menu=True)
+                    scan(ctx=None, path=home_path, scanner="clawdbot", output=None, recursive=False, max_depth=1, verbose=False, quiet=False, _from_menu=True)
                     next_step_type = "clawdbot"
 
                 elif cmd_name == "clawdbot-oauth":

@@ -336,6 +336,43 @@ git add baseline.json && git commit -m "chore: shellockolm baseline"
 shellockolm scan -s agent --baseline baseline.json --fail-on high ./skills   # CI: fail only on NEW HIGH+
 ```
 
+**Config file (`shellockolm.toml` / `[tool.shellockolm]`).** Pin your scan defaults in a committed file
+so every contributor and CI runs the same scan without retyping flags. Shellockolm reads the **nearest**
+of these at or above the scan path (walking up like `.gitignore`):
+
+- a dedicated **`shellockolm.toml`** — keys at the top level or under a `[tool.shellockolm]` table, or
+- a **`pyproject.toml`** with a `[tool.shellockolm]` table (the standard place for Python tool config).
+
+A `shellockolm.toml` is preferred over a `pyproject.toml` in the same directory; a `pyproject.toml`
+**without** a `[tool.shellockolm]` table is left alone. Config supplies a **default** for any flag you
+don't pass — **an explicit flag always wins** — so it never overrides what you typed.
+
+```toml
+# shellockolm.toml  (or [tool.shellockolm] in pyproject.toml)
+[tool.shellockolm]
+scanner        = "agent"          # default scanner (-s)
+min_confidence = "medium"         # --min-confidence floor
+fail_on        = "high"           # exit-code gate (--fail-on)
+max_depth      = 8                # directory-walk depth (-d); `depth` also accepted
+recursive      = true             # --recursive / --no-recursive
+ignore         = [                # drop matching findings (rule IDs and/or path globs)
+  "AGENT-PI-012",                 #   a rule/CVE id (uppercase, hyphen-segmented)
+  "vendor/**",                    #   a gitignore-style path glob
+]
+```
+
+Supported keys: `path`, `scanner`, `recursive`, `max_depth` (alias `depth`), `min_confidence`,
+`fail_on`, `ignore`. The hidden `ignore` count is announced (never silent) and surfaced as
+`summary.findings_config_ignored` in `--json`. Point at a specific file with `--config <path>` (a
+missing/invalid file exits `2`), or disable config entirely with `--no-config`. A malformed config
+(bad value/type, invalid TOML) is a usage error (exit `2`) — it can never produce a silently-wrong scan.
+
+```bash
+shellockolm scan ./skills              # uses shellockolm.toml defaults if present
+shellockolm scan --fail-on critical .  # explicit flag overrides the config's fail_on
+shellockolm scan --no-config ./skills  # ignore any config file
+```
+
 **Pre-commit hook (`.pre-commit-hooks.yaml`).** Shellockolm ships [pre-commit](https://pre-commit.com)
 hooks so a clone can vet every commit. Add to your repo's `.pre-commit-config.yaml`:
 
@@ -372,7 +409,8 @@ hook's `entry`, so it survives an `args:` override.
     "findings_suppressed": 0,          // dropped by a .shellockolmignore rule allowlist
     "findings_below_confidence": 0,    // hidden by --min-confidence
     "findings_diff_filtered": 0,       // dropped because the file is outside --diff scope
-    "findings_baselined": 0            // hidden because already present in --baseline
+    "findings_baselined": 0,           // hidden because already present in --baseline
+    "findings_config_ignored": 0       // hidden by a config-file `ignore` rule/glob
   },
   "findings": [                        // sorted CRITICAL → INFO
     {

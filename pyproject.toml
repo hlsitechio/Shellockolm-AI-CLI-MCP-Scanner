@@ -122,6 +122,12 @@ py-modules = [
     "npm_audit",
     "mcp_server",
     "gui",
+    # Pure CLI-helper modules imported by `cli` (must be installed or the
+    # `shellockolm` console script fails to import on a pip install).
+    "diff_scan",
+    "baseline",
+    "doctor",
+    "config_file",
 ]
 
 [tool.setuptools.packages.find]

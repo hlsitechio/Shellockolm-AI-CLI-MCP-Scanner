@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Packaging: pure CLI-helper modules are now installed.** `diff_scan`, `baseline`, and `doctor`
+  (added in earlier build-loop tasks) were imported by `cli` but missing from `[tool.setuptools]`
+  `py-modules`, so a `pip install` would build a package whose `shellockolm` console script fails to
+  import (`ModuleNotFoundError`). All three — plus the new `config_file` — are now listed, and added
+  to the smoke-import test net. (In-tree test runs were unaffected because `conftest.py` puts `src/`
+  on `sys.path`; the gap only bit an installed package.)
 - **Windows path/encoding hardening — UTF-16/BOM artifacts no longer evade the agent
   scanner, and a benign BOM no longer false-positives.** Skills, MCP configs, and
   instruction files were read as UTF-8 with `errors="ignore"`, so a malicious artifact
@@ -40,6 +46,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full suite **484 green** (was 456).
 
 ### Added
+- **Config file (`shellockolm.toml` / `[tool.shellockolm]`) — pin scan defaults.** A project
+  can commit its scan settings so every contributor and CI runs the same scan without retyping
+  flags. The CLI reads the **nearest** `shellockolm.toml` (top-level keys or a `[tool.shellockolm]`
+  table) or `pyproject.toml` `[tool.shellockolm]` table at or above the scan path (walking up like
+  `.gitignore`); a dedicated `shellockolm.toml` is preferred over a `pyproject.toml`, and a
+  `pyproject.toml` without our table is left alone. Supported keys: `path`, `scanner`, `recursive`,
+  `max_depth` (alias `depth`), `min_confidence`, `fail_on`, and `ignore` (a list of rule/CVE IDs
+  and/or gitignore-style path globs). Config supplies a **default** only for a flag the user did not
+  pass — **an explicit flag always wins** (detected via Click's parameter-source, compared by member
+  name so Typer's bundled-Click copy doesn't break the check). `ignore` is applied as a pure,
+  scanner-agnostic post-filter alongside `--diff`/`--baseline`; the hidden count is announced and
+  surfaced as `summary.findings_config_ignored` in `--json`. `--config <path>` targets a specific
+  file (missing/invalid → exit `2`) and `--no-config` disables discovery; a malformed config (bad
+  value/type, invalid TOML) is a usage error (exit `2`), never a silently-wrong scan. Backed by a
+  pure, testable `src/config_file.py` (mirrors `diff_scan.py` / `baseline.py` / `doctor.py`); 56 new
+  tests (`tests/test_config_file.py`: discovery + precedence, table extraction, full validation of
+  every key + every error path, ignore rule-ID/glob matching, anti-drift parity with the CLI's
+  `_FAIL_ON_CHOICES`, and e2e subprocess proving config defaults apply, an explicit flag overrides,
+  `--no-config` disables, an `ignore` entry hides a finding, a `pyproject` table is discovered, and
+  missing/invalid configs exit 2); full suite **567 green** (was 508).
 - **`shellockolm doctor` — environment self-check with actionable output.** A new
   command that verifies Shellockolm can scan on the current machine before you depend
   on it: the Python runtime meets the supported floor (`>=3.10`), the bundled CVE
