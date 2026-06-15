@@ -65,6 +65,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ASCII-safety, the markdown/JSON formatter, tool registration, and end-to-end handler runs for a
   malicious skill, a raw-URL MCP config, a single-file path, and every error path). Full suite
   **593 green** (was 577).
+- **MCP tool `explain_finding` — the why/impact/remediation explainer over MCP.** The companion to
+  `scan_agent_artifacts`: given a rule ID (`AGENT-PI-013`, `AGENT-MCP-004` — from an agent-artifact
+  scan) **or** a tracked CVE ID (`CVE-2025-29927` — from a dependency/malware scan), it returns the
+  full explainer — severity/tier/confidence/attack-class/CVSS, the description, a concrete **example
+  attack**, and the remediation — plus a stable `schema_version` 1.0 JSON document
+  (`build_explain_payload`). It is the MCP analog of the `shellockolm rules explain <id>` CLI command,
+  and a single entry point for both finding families the scanner emits: agent rules resolve through
+  the shared `agent_rule_explain` catalog (no drift between MCP and CLI), CVEs through the bundled
+  vulnerability database. The ID is case-insensitive and whitespace-tolerant; a missing/blank id and
+  an unknown id are clear errors (never a silently-empty explainer); the embedded JSON is
+  `ensure_ascii` so unicode-heavy rule prose stays pipe-safe. Verified end-to-end over the real stdio
+  transport (`tests/mcp_live_check.py` now resolves both a rule and a CVE) and with 21 new tests
+  (`tests/test_mcp_explain_finding.py`: resolver shape for rules + CVEs, case-insensitivity,
+  every-rule-resolves coverage, unknown/boundary → None, the markdown/JSON formatter, ASCII-safety,
+  tool registration, and end-to-end handler runs incl. every error path).
 - **Scan-volume stats in the footer — items scanned + scanners run, surfaced consistently.**
   The per-scanner artifact/unit counts (`skills_scanned`, `mcp_configs_scanned`, `packages_scanned`,
   `files_scanned`, …) and the scanner count were already tracked on each `ScanResult` but never

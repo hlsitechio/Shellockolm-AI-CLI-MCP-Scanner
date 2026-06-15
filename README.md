@@ -227,6 +227,13 @@ mid-session and get back **structured findings** (rule id, severity, confidence,
 path exactly as on the CLI; the free tier still returns every free finding. Supports
 `recursive`, `max_depth`, `min_confidence` (`low|medium|high`), and `quick_mode` arguments.
 
+The companion **`explain_finding`** MCP tool turns any finding into a why/impact/remediation
+write-up: pass it a rule ID (`AGENT-PI-013`, from an agent-artifact scan) **or** a CVE ID
+(`CVE-2025-29927`, from a dependency/malware scan) and it returns the severity/tier/confidence/
+attack-class, the full description, a concrete **example attack**, and the fix — plus a stable JSON
+document — so an agent can understand a finding mid-session before acting on it. The ID is
+case-insensitive; this is the MCP analog of the `shellockolm rules explain <id>` CLI command.
+
 **Suppressing accepted findings.** Drop a `.shellockolmignore` at your repo root to allowlist
 findings your team has reviewed and accepted — by rule ID, optionally scoped to a path glob
 (gitignore-style). Suppressed findings are removed from results and reported as a count, so the

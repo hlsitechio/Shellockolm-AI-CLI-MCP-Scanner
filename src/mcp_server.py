@@ -273,6 +273,158 @@ def format_agent_scan_results(payload: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+# ─────────────────────────────────────────────────────────────────
+# EXPLAIN FINDING — the why / impact / remediation explainer (rule ID or CVE ID)
+# ─────────────────────────────────────────────────────────────────
+
+# Stable contract version for the explain_finding structured document. Mirrors the
+# CLI's `rules explain --json` schema_version so an MCP client and the CLI agree.
+EXPLAIN_SCHEMA_VERSION = "1.0"
+
+
+def _cve_explain_dict(vuln) -> Dict[str, Any]:
+    """JSON-safe explainer dict for a bundled CVE database entry.
+
+    Defensive: enum-or-str fields are normalized via ``.value`` when present, and
+    every optional list/flag is fetched with ``getattr`` so a future schema tweak
+    can't make the explainer raise mid-call.
+    """
+    def _val(x) -> str:
+        return (x.value if hasattr(x, "value") else str(x)) if x is not None else ""
+
+    patched = dict(getattr(vuln, "patched_versions", {}) or {})
+    if patched:
+        remediation = (
+            "Upgrade affected package(s) to a patched version: "
+            + ", ".join(f"{k} -> {v}" for k, v in patched.items())
+        )
+    else:
+        remediation = "Upgrade affected package(s) to a patched version."
+
+    return {
+        "id": vuln.cve_id,
+        "title": vuln.title,
+        "severity": _val(vuln.severity).upper(),
+        "cvss": vuln.cvss_score,
+        "vuln_type": _val(getattr(vuln, "vuln_type", None)),
+        "exploit_difficulty": _val(getattr(vuln, "exploit_difficulty", None)),
+        "packages": list(getattr(vuln, "packages", []) or []),
+        "affected_versions": list(getattr(vuln, "affected_versions", []) or []),
+        "patched_versions": patched,
+        "description": vuln.description,
+        "remediation": remediation,
+        "references": list(getattr(vuln, "references", []) or []),
+        "cisa_kev": bool(getattr(vuln, "cisa_kev", False)),
+        "public_poc": bool(getattr(vuln, "public_poc", False)),
+        "active_exploitation": bool(getattr(vuln, "active_exploitation", False)),
+    }
+
+
+def build_explain_payload(finding_id: str) -> Optional[Dict[str, Any]]:
+    """Resolve a rule ID or CVE ID to a stable explainer document, or None if unknown.
+
+    Single entry point that explains any Shellockolm finding: an agent supply-chain
+    rule (``AGENT-*``, from ``scan_agent_artifacts``) via the shared
+    ``agent_rule_explain`` catalog, or a bundled CVE (``CVE-*``) via the
+    vulnerability database. Returns ``None`` when the ID matches neither — a clear
+    "unknown" at the boundary, never a silently-empty explainer. Lookup is
+    case-insensitive and whitespace-tolerant.
+    """
+    rid = (finding_id or "").strip()
+    if not rid:
+        return None
+
+    # Agent supply-chain rule first (the flagship tool's findings); the catalog
+    # lookup is itself case-insensitive and carries the example_attack deep-dive.
+    from scanners.agent_supply_chain import agent_rule_explain
+
+    rule = agent_rule_explain(rid)
+    if rule is not None:
+        return {
+            "schema_version": EXPLAIN_SCHEMA_VERSION,
+            "tool": "shellockolm",
+            "kind": "agent-rule",
+            "rule": rule,
+        }
+
+    # Fall back to the bundled CVE database (dependency / malware findings carry CVE ids).
+    vuln = db.get_by_cve(rid.upper())
+    if vuln is not None:
+        return {
+            "schema_version": EXPLAIN_SCHEMA_VERSION,
+            "tool": "shellockolm",
+            "kind": "cve",
+            "cve": _cve_explain_dict(vuln),
+        }
+
+    return None
+
+
+def format_explain_payload(payload: Dict[str, Any]) -> str:
+    """Render an explainer payload as a markdown why/impact/remediation write-up plus
+    an embedded JSON block (the machine-readable structured document)."""
+    kind = payload.get("kind")
+    lines: List[str] = []
+
+    if kind == "agent-rule":
+        r = payload["rule"]
+        lines += [
+            f"# {r['id']} — {r['title']}",
+            "",
+            (
+                f"**Severity**: {r['severity']}  |  **Tier**: {r['tier']}  |  "
+                f"**Confidence**: {r['confidence']}  |  **CVSS**: {r['cvss']}  |  "
+                f"**Attack class**: {r['attack_class']}"
+            ),
+            "",
+            "## Why it's flagged (impact)",
+            r["description"],
+        ]
+        if r.get("example_attack"):
+            lines += ["", "## Example attack", "```", r["example_attack"], "```"]
+        lines += ["", "## Remediation", r["remediation"]]
+
+    elif kind == "cve":
+        c = payload["cve"]
+        lines += [
+            f"# {c['id']} — {c['title']}",
+            "",
+            (
+                f"**Severity**: {c['severity']}  |  **CVSS**: {c['cvss']}  |  "
+                f"**Type**: {c['vuln_type']}  |  **Exploit difficulty**: {c['exploit_difficulty']}"
+            ),
+            "",
+            "## Why it's flagged (impact)",
+            c["description"],
+        ]
+        if c["packages"]:
+            lines += ["", f"**Affected packages**: {', '.join(c['packages'])}"]
+        if c["patched_versions"]:
+            patched = ", ".join(f"{k} -> {v}" for k, v in c["patched_versions"].items())
+            lines += [f"**Patched**: {patched}"]
+        flags = []
+        if c["cisa_kev"]:
+            flags.append("⚠️ CISA Known Exploited Vulnerability")
+        if c["public_poc"]:
+            flags.append("🔴 Public PoC available — exploitation is trivial")
+        if c["active_exploitation"]:
+            flags.append("🚨 Active exploitation in the wild")
+        if flags:
+            lines += ["", *[f"- {fl}" for fl in flags]]
+        lines += ["", "## Remediation", c["remediation"]]
+        if c["references"]:
+            lines += ["", "## References", *[f"- {ref}" for ref in c["references"]]]
+
+    lines += [
+        "",
+        "## Structured explanation (JSON)",
+        "```json",
+        json.dumps(payload, indent=2, ensure_ascii=True),
+        "```",
+    ]
+    return "\n".join(lines)
+
+
 def _is_blocked_ip(ip_str: str) -> bool:
     """Return True if an IP address is loopback, private, link-local, or otherwise
     not safe to fetch (SSRF protection)."""
@@ -468,6 +620,32 @@ async def handle_list_tools() -> list[types.Tool]:
                     }
                 },
                 "required": ["path"]
+            }
+        ),
+        types.Tool(
+            name="explain_finding",
+            description=(
+                "Explain ONE Shellockolm finding in depth — the why / impact / "
+                "remediation companion to scan_agent_artifacts. Given a rule ID "
+                "(e.g. AGENT-PI-013, AGENT-MCP-004 — from an agent-artifact scan) OR "
+                "a CVE ID (e.g. CVE-2025-29927 — from a dependency/malware scan), "
+                "returns the severity/tier/confidence/attack-class, the full "
+                "description, a concrete EXAMPLE ATTACK, and the remediation, plus a "
+                "stable JSON document. The ID is case-insensitive. Use this to "
+                "understand a finding before acting on it."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "finding_id": {
+                        "type": "string",
+                        "description": (
+                            "A rule ID (e.g. AGENT-PI-013) or a tracked CVE ID "
+                            "(e.g. CVE-2025-29927) to explain"
+                        )
+                    }
+                },
+                "required": ["finding_id"]
             }
         ),
         types.Tool(
@@ -704,6 +882,33 @@ async def handle_call_tool(
             pro=scanner.pro,
         )
         return [types.TextContent(type="text", text=format_agent_scan_results(payload))]
+
+    if name == "explain_finding":
+        finding_id = arguments.get("finding_id", "")
+
+        # Validate the required field at the boundary so a missing/blank id is a
+        # clear error, never a silently-empty explainer.
+        if not isinstance(finding_id, str) or not finding_id.strip():
+            return [types.TextContent(
+                type="text",
+                text=(
+                    "❌ Error: 'finding_id' is required (a rule ID like "
+                    "AGENT-PI-013 or a CVE ID like CVE-2025-29927)."
+                )
+            )]
+
+        payload = build_explain_payload(finding_id)
+        if payload is None:
+            return [types.TextContent(
+                type="text",
+                text=(
+                    f"❌ Unknown finding ID: {finding_id!r}. Expected an agent rule "
+                    "ID (AGENT-*) or a tracked CVE ID (CVE-*). Use list_cves or run "
+                    "'shellockolm rules list' to see valid IDs."
+                )
+            )]
+
+        return [types.TextContent(type="text", text=format_explain_payload(payload))]
 
     if name == "find_packages":
         path = arguments.get("path", ".")

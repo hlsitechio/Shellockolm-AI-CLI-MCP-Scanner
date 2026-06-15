@@ -67,7 +67,16 @@ async def main() -> int:
             agent_hit = "AGENT-PI-007" in atext
             print(f"[+] scan_agent_artifacts OK; detected AGENT-PI-007: {agent_hit}")
 
-            ok = bool(names) and hit and blocked and agent_hit
+            # 5) explain_finding resolves both an agent rule and a CVE id
+            ex_rule = await session.call_tool("explain_finding", {"finding_id": "agent-pi-013"})
+            ex_rule_text = ex_rule.content[0].text if ex_rule.content else ""
+            ex_cve = await session.call_tool("explain_finding", {"finding_id": "CVE-2025-29927"})
+            ex_cve_text = ex_cve.content[0].text if ex_cve.content else ""
+            explain_hit = ("AGENT-PI-013" in ex_rule_text
+                           and "CVE-2025-29927" in ex_cve_text)
+            print(f"[+] explain_finding OK; resolved rule + CVE: {explain_hit}")
+
+            ok = bool(names) and hit and blocked and agent_hit and explain_hit
             print("\nRESULT:", "PASS" if ok else "FAIL")
             return 0 if ok else 1
 
