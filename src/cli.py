@@ -1988,6 +1988,97 @@ def version():
     console.print("[info]https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner[/info]")
 
 
+# ─────────────────────────────────────────────────────────────────
+# DOCTOR COMMAND - environment self-check
+# ─────────────────────────────────────────────────────────────────
+@app.command()
+def doctor(
+    output_json: bool = typer.Option(
+        False, "--json", help="Emit the self-check as a single JSON document (CI)"),
+    _from_menu: bool = False,  # Internal: skip banner when called from menu
+):
+    """
+    Environment self-check: verify Shellockolm can scan on this machine.
+
+    Probes the Python runtime floor, that the bundled CVE database and agent
+    supply-chain rule catalog load and are populated, that the config and session
+    directories are writable, that the optional `git` dependency (used by
+    `scan --diff` and the pre-commit hook) is present, and the active license
+    tier. Runs fully offline unless a license key is configured.
+
+    Exit codes: 0 = healthy (no failing checks), 1 = one or more checks FAILED.
+    Use --json for a machine-readable report — stdout stays a single JSON
+    document and nothing else is printed in that mode.
+
+    Examples:
+        shellockolm doctor
+        shellockolm doctor --json
+    """
+    from rich.markup import escape
+    import doctor as doctor_mod
+
+    report = doctor_mod.run_checks()
+
+    if output_json:
+        # CI mode: ONE stable JSON document on stdout, nothing else.
+        print(json.dumps(report.to_dict(), indent=2))
+        raise typer.Exit(EXIT_OK if report.healthy else EXIT_FINDINGS)
+
+    if not _from_menu:
+        print_banner()
+
+    glyphs = {
+        doctor_mod.OK: "[success]✓ ok[/success]",
+        doctor_mod.WARN: "[warning]▲ warn[/warning]",
+        doctor_mod.FAIL: "[danger]✗ FAIL[/danger]",
+        doctor_mod.INFO: "[info]ℹ info[/info]",
+    }
+
+    table = Table(
+        title="🩺  Shellockolm Doctor — environment self-check",
+        box=box.ROUNDED,
+        border_style="bright_cyan",
+    )
+    table.add_column("Status", justify="left", no_wrap=True)
+    table.add_column("Check", style="highlight", no_wrap=True)
+    table.add_column("Detail", style="path")
+
+    # Dynamic detail strings may contain '[' (paths, version specs); escape so
+    # Rich never mis-parses them as console markup.
+    for c in report.checks:
+        table.add_row(
+            glyphs.get(c.status, c.status),
+            escape(c.name),
+            escape(c.detail),
+        )
+
+    console.print(table)
+
+    # Actionable remediation for every non-OK / non-INFO check.
+    hints = [c for c in report.checks if c.hint and c.status in (doctor_mod.WARN, doctor_mod.FAIL)]
+    if hints:
+        console.print()
+        console.print("[bold]How to fix[/bold]")
+        for c in hints:
+            console.print(f"  [warning]•[/warning] {escape(c.name)}: {escape(c.hint)}")
+
+    counts = report.counts()
+    console.print()
+    if report.healthy:
+        warn_note = (
+            f" ([warning]{counts[doctor_mod.WARN]} warning(s)[/warning])"
+            if counts[doctor_mod.WARN] else ""
+        )
+        console.print(f"[success]✓ Healthy — Shellockolm is ready to scan.[/success]{warn_note}")
+    else:
+        console.print(
+            f"[danger]✗ Unhealthy — {counts[doctor_mod.FAIL]} check(s) failed; "
+            "fix the items above before scanning.[/danger]"
+        )
+
+    raise typer.Exit(EXIT_OK if report.healthy else EXIT_FINDINGS)
+
+
 def main():
     """Main entry point"""
     app()

@@ -444,6 +444,22 @@ shellockolm rules explain agent-mcp-004       # case-insensitive
 shellockolm rules explain AGENT-PRO-003 --json
 ```
 
+**Environment self-check (`doctor`).** `shellockolm doctor` verifies the tool can scan on your
+machine before you rely on it: the Python runtime meets the supported floor (`>=3.10`), the bundled
+CVE database and the agent supply-chain rule catalog load and are populated, the config
+(`~/.shellockolm`, where a Pro license is stored) and session/log directories are writable, `git`
+(needed by `scan --diff` and the pre-commit hook) is on `PATH`, and the active license tier resolves.
+Each check is `ok` / `warn` / `fail` / `info` with an actionable hint; only a hard **fail** (old
+Python, a corrupt install) makes the command exit non-zero — a missing `git` or an unwritable log dir
+is a `warn` that still passes. Exit codes mirror the scan contract (**0** healthy / **1** a check
+failed), and `--json` emits one stable document for CI. Runs **fully offline** unless a license key
+is configured.
+
+```bash
+shellockolm doctor                      # human table + actionable fixes
+shellockolm doctor --json | jq .healthy # CI-friendly self-check
+```
+
 </details>
 
 <details>

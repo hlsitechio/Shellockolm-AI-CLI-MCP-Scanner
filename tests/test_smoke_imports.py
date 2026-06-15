@@ -19,6 +19,7 @@ SRC_MODULES = [
     "scanner",
     "server",
     "vulnerability_database",
+    "doctor",
     "scan",
     "scan_simple",
     "auto_fix",

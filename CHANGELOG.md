@@ -40,6 +40,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full suite **484 green** (was 456).
 
 ### Added
+- **`shellockolm doctor` — environment self-check with actionable output.** A new
+  command that verifies Shellockolm can scan on the current machine before you depend
+  on it: the Python runtime meets the supported floor (`>=3.10`), the bundled CVE
+  database and the agent supply-chain rule catalog import and are populated, the
+  config (`~/.shellockolm`, where the Pro license lives) and session/log directories
+  are writable, the optional `git` dependency (used by `scan --diff` and the
+  pre-commit hook) is on `PATH`, and the active license tier resolves. Each check is
+  `ok` / `warn` / `fail` / `info`; only a hard `fail` (old Python, a corrupt install)
+  makes the command exit non-zero — a missing `git` or an unwritable log dir is a
+  `warn` that still passes. Exit codes mirror the scan contract (**0** healthy /
+  **1** one or more checks failed), and `--json` emits one stable `schema_version`
+  1.0 document (pure stdout, no banner) for CI. Runs **fully offline** unless a
+  license key is configured (the license probe only contacts the server when a key
+  is present). Backed by a pure, testable `src/doctor.py` (mirrors `diff_scan.py` /
+  `baseline.py`); 23 new tests (`tests/test_doctor.py`: per-check units incl. the
+  Python-floor boundary, writable-probe success/failure + cleanup, git/license
+  probes, `DoctorReport` health/counts/serialization, the CLI exit-code mapping, and
+  e2e subprocess proving pure-JSON stdout + a healthy machine exits 0); full suite
+  **507 green** (was 484).
 - **Benchmark script + perf guard for the agent scanner.** A new
   `scripts/benchmark_scan.py` generates a deterministic, self-contained corpus of
   agent artifacts (skills, MCP configs, n8n exports, instruction files, `.claude/`
