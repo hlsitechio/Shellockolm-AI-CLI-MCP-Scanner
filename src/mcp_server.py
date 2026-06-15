@@ -113,6 +113,166 @@ def format_scan_results(results: List[ScanResult]) -> str:
     return output
 
 
+# ─────────────────────────────────────────────────────────────────
+# AGENT SUPPLY-CHAIN SCAN — structured payload (the "agents scanning agents" tool)
+# ─────────────────────────────────────────────────────────────────
+
+# Stable contract version for the scan_agent_artifacts structured document. Within a
+# major version, fields are only ADDED — never renamed or removed. Mirrors the CLI's
+# build_json_report schema so an MCP client and `scan --json` agree on shape.
+AGENT_SCAN_SCHEMA_VERSION = "1.0"
+
+# UPPERCASE severity ranking for deterministic CRITICAL→INFO ordering.
+_AGENT_SEVERITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
+
+# Accepted detection-certainty thresholds for the min_confidence argument.
+_VALID_CONFIDENCE = {"low", "medium", "high"}
+
+
+def _finding_severity(finding) -> str:
+    """Normalize a finding's severity to an UPPERCASE string (enum or str safe)."""
+    sev = finding.severity
+    return (sev.value if hasattr(sev, "value") else str(sev)).upper()
+
+
+def build_agent_scan_payload(
+    result: ScanResult,
+    *,
+    target: str,
+    min_confidence: str = "low",
+    pro: bool = False,
+) -> Dict[str, Any]:
+    """Assemble the stable, structured agent-scan document from the agent scanner's
+    ``ScanResult``.
+
+    Agent-scoped sibling of the CLI's ``build_json_report`` (same ``schema_version``
+    1.0 shape) that ADDS per-finding ``attack_class`` and ``tier`` (free/pro) so an
+    MCP client gets the full agentic-supply-chain context without a second call.
+    Findings are sorted CRITICAL→INFO for deterministic output, and ``ensure_ascii``
+    JSON serialization keeps an invisible-Unicode injection payload pipe-safe.
+    """
+    # Imported lazily so the module's import surface stays light and the helper is
+    # patchable in tests; the scanner package is already a hard dependency.
+    from scanners.agent_supply_chain import agent_rule_class, agent_rule_tier
+
+    by_severity = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+    findings: List[Dict[str, Any]] = []
+    for f in result.findings:
+        sev = _finding_severity(f)
+        key = sev.lower()
+        if key in by_severity:
+            by_severity[key] += 1
+        # For the agent scanner the finding's ``cve_id`` field carries the AGENT-* rule id.
+        rule_id = f.cve_id
+        findings.append({
+            "id": rule_id,
+            "title": f.title,
+            "severity": sev,
+            "confidence": getattr(f, "confidence", "high"),
+            "attack_class": agent_rule_class(rule_id),
+            "tier": agent_rule_tier(rule_id),
+            "cvss_score": f.cvss_score,
+            # file_path carries the ``<path>:<line>`` / ``<path> » server:<name>`` locator
+            # exactly as the CLI emits it, so callers can resolve the artifact + line.
+            "file_path": f.file_path,
+            "description": f.description,
+            "remediation": f.remediation,
+        })
+
+    findings.sort(key=lambda d: _AGENT_SEVERITY_ORDER.get(d["severity"], 5))
+
+    stats = result.stats or {}
+    # Sum every integer ``*_scanned`` stat (bools excluded), matching the CLI's
+    # aggregate_scan_stats convention so a new artifact class is counted for free.
+    items_scanned = sum(
+        v for k, v in stats.items()
+        if k.endswith("_scanned") and isinstance(v, int) and not isinstance(v, bool)
+    )
+
+    mc = str(min_confidence).strip().lower()
+    if mc not in _VALID_CONFIDENCE:
+        mc = "low"
+
+    return {
+        "schema_version": AGENT_SCAN_SCHEMA_VERSION,
+        "tool": {"name": "shellockolm", "scanner": "agent"},
+        "scan": {
+            "time": datetime.now().isoformat(),
+            "target": target,
+            "min_confidence": mc,
+            "pro": bool(pro),
+            "duration_seconds": round(result.duration_seconds, 4),
+        },
+        "summary": {
+            "total_findings": len(findings),
+            "by_severity": by_severity,
+            "items_scanned": items_scanned,
+            # Findings removed by a .shellockolmignore rule allowlist.
+            "findings_suppressed": stats.get("findings_suppressed", 0),
+            # Findings hidden by the min_confidence threshold.
+            "findings_below_confidence": stats.get("findings_below_confidence", 0),
+        },
+        "findings": findings,
+        "errors": [str(e) for e in result.errors],
+    }
+
+
+def format_agent_scan_results(payload: Dict[str, Any]) -> str:
+    """Render the agent-scan payload as a markdown summary + an embedded JSON block.
+
+    The markdown is for a human reading the tool output; the fenced ``json`` block is
+    the machine-readable structured document for programmatic consumers.
+    """
+    scan = payload["scan"]
+    s = payload["summary"]
+    bs = s["by_severity"]
+    tier = "Pro" if scan.get("pro") else "Free"
+
+    lines = [
+        "# Agent Supply-Chain Scan",
+        "",
+        f"**Target**: {scan['target']}",
+        (
+            f"**Tier**: {tier}  |  **Min confidence**: {scan['min_confidence']}  |  "
+            f"**Items scanned**: {s['items_scanned']}  |  **Duration**: {scan['duration_seconds']}s"
+        ),
+        (
+            f"**Total findings**: {s['total_findings']}  "
+            f"(CRITICAL {bs['critical']}, HIGH {bs['high']}, MEDIUM {bs['medium']}, "
+            f"LOW {bs['low']}, INFO {bs['info']})"
+        ),
+        "",
+    ]
+
+    if s["total_findings"] == 0:
+        lines.append("✅ **No agentic-supply-chain threats detected.**")
+    else:
+        lines.append("## Findings")
+        lines.append("")
+        for f in payload["findings"]:
+            conf = f.get("confidence", "high")
+            conf_note = "" if conf == "high" else f" · confidence: {conf}"
+            lines.append(
+                f"- **[{f['severity']}] {f['id']}** "
+                f"({f['attack_class']}, {f['tier']}{conf_note}) — {f['title']}\n"
+                f"  `{f['file_path']}`\n"
+                f"  _Fix_: {f['remediation']}"
+            )
+
+    if payload["errors"]:
+        lines.append("")
+        lines.append("## Errors (files skipped, scan continued)")
+        for e in payload["errors"]:
+            lines.append(f"- {e}")
+
+    lines.append("")
+    lines.append("## Structured findings (JSON)")
+    lines.append("```json")
+    lines.append(json.dumps(payload, indent=2, ensure_ascii=True))
+    lines.append("```")
+    return "\n".join(lines)
+
+
 def _is_blocked_ip(ip_str: str) -> bool:
     """Return True if an IP address is loopback, private, link-local, or otherwise
     not safe to fetch (SSRF protection)."""
@@ -266,6 +426,50 @@ Upgrade affected packages to patched versions.
 async def handle_list_tools() -> list[types.Tool]:
     """List available scanning tools"""
     return [
+        types.Tool(
+            name="scan_agent_artifacts",
+            description=(
+                "FLAGSHIP — agents scanning agents: scan the AI-agent coding supply "
+                "chain for agentic-era threats (prompt injection, secret exfiltration, "
+                "tool poisoning, MCP/n8n abuse, auto-running hook RCE) across Claude / "
+                "Cursor / Windsurf skills & SKILL.md, MCP configs (mcp.json), n8n workflow "
+                "exports, slash commands, settings.json hooks, and CLAUDE.md / AGENTS.md / "
+                ".cursorrules instruction files. Returns STRUCTURED findings (rule id, "
+                "severity, confidence, attack class, file:line, remediation) plus a JSON "
+                "document. Use this to vet a skill, MCP server, or agent repo BEFORE "
+                "installing or trusting it."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Directory or single file path to scan for agent artifacts"
+                    },
+                    "recursive": {
+                        "type": "boolean",
+                        "description": "Recursively scan subdirectories",
+                        "default": True
+                    },
+                    "max_depth": {
+                        "type": "integer",
+                        "description": "Maximum directory depth to walk (prevents runaway/looping trees)",
+                        "default": 10
+                    },
+                    "min_confidence": {
+                        "type": "string",
+                        "description": "Drop findings below this detection certainty: low | medium | high (default low keeps everything; high = structural/signature/secret only)",
+                        "default": "low"
+                    },
+                    "quick_mode": {
+                        "type": "boolean",
+                        "description": "Skip the most expensive heuristics for a faster pass",
+                        "default": False
+                    }
+                },
+                "required": ["path"]
+            }
+        ),
         types.Tool(
             name="find_packages",
             description="FAST: Find npm packages (package.json files) in a directory. By default excludes node_modules (40x faster). Returns list in ~0.1 seconds. Use this when user asks to 'find' or 'list' packages.",
@@ -447,6 +651,59 @@ async def handle_call_tool(
 
     # Guard against clients sending null params (e.g. JSON-RPC params: null)
     arguments = arguments or {}
+
+    if name == "scan_agent_artifacts":
+        path = arguments.get("path", ".")
+        recursive = arguments.get("recursive", True)
+        min_confidence = arguments.get("min_confidence", "low")
+        quick_mode = arguments.get("quick_mode", False)
+
+        if not Path(path).exists():
+            return [types.TextContent(type="text", text=f"❌ Path does not exist: {path}")]
+
+        # Validate min_confidence at the boundary so a typo is a clear error, never a
+        # silently-wrong scan (mirrors the CLI's --min-confidence handling).
+        if str(min_confidence).strip().lower() not in _VALID_CONFIDENCE:
+            return [types.TextContent(
+                type="text",
+                text=(
+                    f"❌ Invalid min_confidence: {min_confidence!r}. "
+                    "Use one of: low, medium, high."
+                )
+            )]
+
+        # max_depth may arrive as a string from a loose client; coerce defensively.
+        try:
+            max_depth = int(arguments.get("max_depth", 10))
+        except (TypeError, ValueError):
+            return [types.TextContent(
+                type="text",
+                text=f"❌ Invalid max_depth: {arguments.get('max_depth')!r}. Must be an integer."
+            )]
+
+        from scanners.agent_supply_chain import AgentSupplyChainScanner
+
+        # Pro rules are gated by the active license, resolved inside the scanner's
+        # __init__ exactly as the CLI does — free tier still gets every free rule.
+        scanner = AgentSupplyChainScanner()
+        try:
+            result = scanner.scan_directory(
+                path,
+                recursive=bool(recursive),
+                max_depth=max_depth,
+                quick_mode=bool(quick_mode),
+                min_confidence=str(min_confidence),
+            )
+        except Exception as e:
+            return [types.TextContent(type="text", text=f"❌ Error scanning agent artifacts: {e}")]
+
+        payload = build_agent_scan_payload(
+            result,
+            target=str(Path(path).resolve()),
+            min_confidence=str(min_confidence),
+            pro=scanner.pro,
+        )
+        return [types.TextContent(type="text", text=format_agent_scan_results(payload))]
 
     if name == "find_packages":
         path = arguments.get("path", ".")

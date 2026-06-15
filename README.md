@@ -220,7 +220,12 @@ python src/cli.py scan -s agent ./some-skill/SKILL.md
 python src/cli.py scan -s agent ./claude_desktop_config.json
 ```
 
-Also available as the `scan` MCP tool (pass `scanner: "agent"`) so an agent can vet a skill mid-session.
+Also exposed through the MCP server as the dedicated **`scan_agent_artifacts`** tool — the
+flagship "agents scanning agents" feature — so an agent can vet a skill, MCP server, or repo
+mid-session and get back **structured findings** (rule id, severity, confidence, attack class,
+`file:line`, remediation) plus a stable JSON document. Pro rules are respected through the MCP
+path exactly as on the CLI; the free tier still returns every free finding. Supports
+`recursive`, `max_depth`, `min_confidence` (`low|medium|high`), and `quick_mode` arguments.
 
 **Suppressing accepted findings.** Drop a `.shellockolmignore` at your repo root to allowlist
 findings your team has reviewed and accepted — by rule ID, optionally scoped to a path glob

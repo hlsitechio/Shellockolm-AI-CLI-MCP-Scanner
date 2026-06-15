@@ -46,6 +46,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full suite **484 green** (was 456).
 
 ### Added
+- **MCP tool `scan_agent_artifacts` — the flagship "agents scanning agents" feature.** The agent
+  supply-chain scanner is now exposed directly through the MCP server as a dedicated tool, so an AI
+  agent can vet a skill, MCP server, or repo mid-session — *before* installing or trusting it — and
+  get back **structured findings**: each finding carries the `AGENT-*` rule id, severity, confidence,
+  **attack class** (prompt-injection / mcp / n8n / hooks / secrets / …), **tier** (free/pro),
+  `cvss_score`, the `file:line` locator, and remediation, plus a stable `schema_version` 1.0 JSON
+  document (`build_agent_scan_payload`) that mirrors the CLI's `scan --json` shape. Covers every
+  agent artifact class the CLI does — `SKILL.md` skills, `mcp.json` configs, n8n workflow exports,
+  slash commands, `settings.json` hooks, and `CLAUDE.md`/`AGENTS.md`/`.cursorrules` instruction
+  files — and accepts `recursive`, `max_depth`, `min_confidence` (`low|medium|high`), and
+  `quick_mode` arguments. Pro rules are gated by the active license through the MCP path exactly as
+  on the CLI (free tier still returns every free finding); invalid `min_confidence`/`max_depth` and a
+  missing path are clear errors, never a silently-wrong scan; the embedded JSON is `ensure_ascii` so
+  an invisible-Unicode injection payload stays pipe-safe. Verified end-to-end over the real stdio
+  transport (`tests/mcp_live_check.py` now also exercises it) and with 16 new tests
+  (`tests/test_mcp_agent_scan.py`: payload shape + CRITICAL→INFO ordering + zero-FP benign baseline +
+  ASCII-safety, the markdown/JSON formatter, tool registration, and end-to-end handler runs for a
+  malicious skill, a raw-URL MCP config, a single-file path, and every error path). Full suite
+  **593 green** (was 577).
 - **Scan-volume stats in the footer — items scanned + scanners run, surfaced consistently.**
   The per-scanner artifact/unit counts (`skills_scanned`, `mcp_configs_scanned`, `packages_scanned`,
   `files_scanned`, …) and the scanner count were already tracked on each `ScanResult` but never
