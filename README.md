@@ -234,6 +234,15 @@ attack-class, the full description, a concrete **example attack**, and the fix �
 document — so an agent can understand a finding mid-session before acting on it. The ID is
 case-insensitive; this is the MCP analog of the `shellockolm rules explain <id>` CLI command.
 
+The **`scan_text`** MCP tool is the in-memory sibling of `scan_agent_artifacts`: it scans a raw
+artifact **string** the agent is **about to install or paste** — a skill / `SKILL.md`, an MCP
+config (`mcp.json`), an instruction file (`CLAUDE.md` / `AGENTS.md` / `.cursorrules`), an n8n
+workflow export, a `settings.json` hooks block, or a slash command — **without ever writing it to
+disk**, and returns the same structured findings + JSON document. `artifact_type` selects the
+detection path; the default `auto` infers it from an optional `filename` hint, then from the
+content shape (JSON with `mcpServers` → MCP, with `nodes`+`connections` → n8n, otherwise prose →
+skill). Use it to vet untrusted content in the moment, before it lands anywhere.
+
 **Suppressing accepted findings.** Drop a `.shellockolmignore` at your repo root to allowlist
 findings your team has reviewed and accepted — by rule ID, optionally scoped to a path glob
 (gitignore-style). Suppressed findings are removed from results and reported as a count, so the

@@ -649,6 +649,51 @@ async def handle_list_tools() -> list[types.Tool]:
             }
         ),
         types.Tool(
+            name="scan_text",
+            description=(
+                "Scan a raw STRING for agentic-supply-chain threats WITHOUT touching "
+                "disk — the in-memory sibling of scan_agent_artifacts. Pass the text "
+                "of a skill / SKILL.md, MCP config (mcp.json), AI instruction file "
+                "(CLAUDE.md / AGENTS.md / .cursorrules), n8n workflow export, "
+                "settings.json hooks block, or slash command the agent is ABOUT to "
+                "install or paste, and get back the same STRUCTURED findings (rule id, "
+                "severity, confidence, attack class, line, remediation) + JSON "
+                "document — before the content ever lands on disk. 'artifact_type' "
+                "selects the detection path; the default 'auto' infers it from an "
+                "optional 'filename' hint then the content shape. Pro rules respected "
+                "as on the CLI."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "The raw artifact content to scan (skill / MCP config / instruction / n8n / command text)"
+                    },
+                    "artifact_type": {
+                        "type": "string",
+                        "description": "Detection path: auto | skill | instructions | command | mcp | n8n | settings (default auto = infer from filename/content)",
+                        "default": "auto"
+                    },
+                    "filename": {
+                        "type": "string",
+                        "description": "Optional virtual filename (e.g. SKILL.md, mcp.json) used to classify the text and label finding locations"
+                    },
+                    "min_confidence": {
+                        "type": "string",
+                        "description": "Drop findings below this detection certainty: low | medium | high (default low keeps everything)",
+                        "default": "low"
+                    },
+                    "quick_mode": {
+                        "type": "boolean",
+                        "description": "Skip the most expensive heuristics for a faster pass",
+                        "default": False
+                    }
+                },
+                "required": ["text"]
+            }
+        ),
+        types.Tool(
             name="find_packages",
             description="FAST: Find npm packages (package.json files) in a directory. By default excludes node_modules (40x faster). Returns list in ~0.1 seconds. Use this when user asks to 'find' or 'list' packages.",
             inputSchema={
@@ -909,6 +954,74 @@ async def handle_call_tool(
             )]
 
         return [types.TextContent(type="text", text=format_explain_payload(payload))]
+
+    if name == "scan_text":
+        text = arguments.get("text")
+        artifact_type = arguments.get("artifact_type", "auto")
+        filename = arguments.get("filename")
+        min_confidence = arguments.get("min_confidence", "low")
+        quick_mode = arguments.get("quick_mode", False)
+
+        # The raw artifact string is the one required field — a missing/blank value is
+        # a clear error, never a silently-empty scan.
+        if not isinstance(text, str) or not text.strip():
+            return [types.TextContent(
+                type="text",
+                text="❌ Error: 'text' is required (the raw artifact string to scan)."
+            )]
+
+        from scanners.agent_supply_chain import AgentSupplyChainScanner
+
+        # Validate the selector at the boundary so a typo is a clear error.
+        valid_types = AgentSupplyChainScanner.TEXT_ARTIFACT_TYPES
+        at = str(artifact_type).strip().lower()
+        if at not in valid_types:
+            return [types.TextContent(
+                type="text",
+                text=(
+                    f"❌ Invalid artifact_type: {artifact_type!r}. "
+                    f"Use one of: {', '.join(sorted(valid_types))}."
+                )
+            )]
+
+        if str(min_confidence).strip().lower() not in _VALID_CONFIDENCE:
+            return [types.TextContent(
+                type="text",
+                text=(
+                    f"❌ Invalid min_confidence: {min_confidence!r}. "
+                    "Use one of: low, medium, high."
+                )
+            )]
+
+        if filename is not None and not isinstance(filename, str):
+            return [types.TextContent(
+                type="text",
+                text=f"❌ Invalid filename: {filename!r}. Must be a string."
+            )]
+
+        # Pro rules gated by the active license inside __init__, exactly as the CLI.
+        scanner = AgentSupplyChainScanner()
+        try:
+            result = scanner.scan_text(
+                text,
+                artifact_type=at,
+                filename=filename,
+                quick_mode=bool(quick_mode),
+                min_confidence=str(min_confidence),
+            )
+        except Exception as e:
+            return [types.TextContent(type="text", text=f"❌ Error scanning text: {e}")]
+
+        # Reuse the flagship structured payload so scan_text and scan_agent_artifacts
+        # share one contract; label the target by filename or the resolved kind.
+        resolved = result.stats.get("artifact_type", at)
+        target = filename if filename else f"<text:{resolved}>"
+        payload = build_agent_scan_payload(
+            result, target=target, min_confidence=str(min_confidence), pro=scanner.pro
+        )
+        # Additive field (schema 1.0 only grows): surface what "auto" resolved to.
+        payload["scan"]["artifact_type"] = resolved
+        return [types.TextContent(type="text", text=format_agent_scan_results(payload))]
 
     if name == "find_packages":
         path = arguments.get("path", ".")

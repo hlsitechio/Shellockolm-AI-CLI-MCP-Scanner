@@ -1598,6 +1598,23 @@ class AgentSupplyChainScanner(BaseScanner):
     MAX_RECORDED_ERRORS = 50
     _B64 = re.compile(r"[A-Za-z0-9+/]{160,}={0,2}")
 
+    # Artifact kinds scan_text() can scan in-memory. "auto" infers the kind from a
+    # filename hint, then from the content shape (JSON → mcp/n8n; otherwise prose →
+    # skill). Each non-auto value maps 1:1 onto a directory-walk detection path.
+    TEXT_ARTIFACT_TYPES = {
+        "auto", "skill", "instructions", "command", "mcp", "n8n", "settings",
+    }
+    # Default virtual filename per kind, used as the in-memory finding locator when a
+    # scan_text() caller does not supply a `filename` label.
+    _TEXT_DEFAULT_NAME = {
+        "skill": "SKILL.md",
+        "instructions": "CLAUDE.md",
+        "command": ".claude/commands/command.md",
+        "mcp": "mcp.json",
+        "n8n": "workflow.json",
+        "settings": ".claude/settings.json",
+    }
+
     def __init__(self, pro: Optional[bool] = None):
         super().__init__()
         if pro is None:
@@ -1794,6 +1811,144 @@ class AgentSupplyChainScanner(BaseScanner):
     def scan_file(self, file_path: str) -> List[ScanFinding]:
         res = self.scan_directory(file_path, recursive=False)
         return res.findings
+
+    def scan_text(
+        self,
+        text: str,
+        *,
+        artifact_type: str = "auto",
+        filename: Optional[str] = None,
+        quick_mode: bool = False,
+        min_confidence: str = "low",
+    ) -> ScanResult:
+        """Scan a raw in-memory string for agentic-supply-chain threats — no disk I/O.
+
+        The in-memory sibling of :meth:`scan_directory`: vet a skill / MCP config /
+        instruction file / n8n export / slash command an agent is ABOUT to install,
+        before it ever touches disk. ``artifact_type`` selects the detection path
+        ("skill" / "instructions" / "command" / "mcp" / "n8n" / "settings"); the
+        default "auto" infers it from a ``filename`` hint, then from the content
+        shape (valid JSON with ``mcpServers`` → mcp, with ``nodes``+``connections`` →
+        n8n, otherwise prose → skill). ``filename``, when given, is also used verbatim
+        as each finding's ``file_path`` locator so a caller can label the snippet;
+        absent one, a per-kind virtual name is used.
+
+        Raises :class:`ValueError` for an unknown ``artifact_type`` — a clear boundary
+        error, never a silently-wrong scan. Composite-severity boosting and the
+        ``min_confidence`` filter run exactly as in :meth:`scan_directory`; rule-ID
+        suppression is intentionally skipped, since there is no on-disk
+        ``.shellockolmignore`` tree to discover for an in-memory string.
+        """
+        kind = (artifact_type or "auto").strip().lower()
+        if kind not in self.TEXT_ARTIFACT_TYPES:
+            raise ValueError(
+                f"Unknown artifact_type: {artifact_type!r}. "
+                f"Use one of: {', '.join(sorted(self.TEXT_ARTIFACT_TYPES))}."
+            )
+
+        # Be lenient about the input type: accept bytes (decoded via the same
+        # BOM-aware path the directory walk uses) so a caller holding raw bytes can
+        # pass them straight through; coerce anything else to str defensively.
+        if isinstance(text, (bytes, bytearray)):
+            text = self._decode_bytes(bytes(text))
+        elif not isinstance(text, str):
+            text = str(text)
+
+        if kind == "auto":
+            kind = self._classify_text_artifact(text, filename)
+
+        label = filename if filename else self._TEXT_DEFAULT_NAME[kind]
+        fp = Path(label)
+        result = self.create_result(label, scan_type="local")
+
+        # Match scan_directory's stat keys (all present, only the scanned kind = 1) so
+        # the MCP/CLI items-scanned aggregation counts this single artifact correctly.
+        counts = {
+            "skills_scanned": 0,
+            "mcp_configs_scanned": 0,
+            "n8n_workflows_scanned": 0,
+            "instruction_files_scanned": 0,
+            "commands_scanned": 0,
+            "claude_settings_scanned": 0,
+        }
+        try:
+            if kind == "skill":
+                result.findings.extend(self._scan_skill(fp, text, quick_mode))
+                counts["skills_scanned"] = 1
+            elif kind == "instructions":
+                result.findings.extend(self._scan_instructions(fp, text, quick_mode))
+                counts["instruction_files_scanned"] = 1
+            elif kind == "command":
+                result.findings.extend(self._scan_command(fp, text, quick_mode))
+                counts["commands_scanned"] = 1
+            elif kind == "mcp":
+                result.findings.extend(self._scan_mcp(fp, text))
+                counts["mcp_configs_scanned"] = 1
+            elif kind == "n8n":
+                result.findings.extend(self._scan_n8n(fp, text))
+                counts["n8n_workflows_scanned"] = 1
+            elif kind == "settings":
+                result.findings.extend(self._scan_settings(fp, text))
+                counts["claude_settings_scanned"] = 1
+        except Exception as exc:  # defensive: a rule bug must never crash the tool
+            self._record_read_error(result, fp, exc)
+
+        # Composite scoring + confidence filter mirror scan_directory; rule-ID
+        # suppression is deliberately omitted (no on-disk ignore tree for a string).
+        self._apply_composite_severity(result.findings)
+        below_conf = self._apply_confidence_filter(result.findings, min_confidence)
+
+        result = self.finalize_result(result)
+        result.stats.update({
+            **counts,
+            "artifact_type": kind,
+            "findings_below_confidence": below_conf,
+            "min_confidence": _normalize_confidence(min_confidence),
+        })
+        return result
+
+    def _classify_text_artifact(self, text: str, filename: Optional[str]) -> str:
+        """Infer the artifact kind for :meth:`scan_text`'s "auto" mode.
+
+        Prefers a decisive ``filename`` (the same name rules the directory walk uses),
+        then falls back to the content shape. Defaults to "skill" — the broadest
+        model-facing prose path with the full rule set — so an unrecognized snippet
+        still gets the most thorough scan rather than being silently under-scanned.
+        """
+        if filename:
+            fp = Path(filename)
+            name = fp.name.lower()
+            if name in self.SKILL_NAMES or name.endswith(".skill.md"):
+                return "skill"
+            if name in self.MCP_NAMES or name.endswith(".mcp.json"):
+                return "mcp"
+            if name in self.INSTRUCTION_NAMES:
+                return "instructions"
+            if self._is_command_file(fp):
+                return "command"
+            if name in self.SETTINGS_NAMES:
+                return "settings"
+            if name.endswith(".md"):
+                # A generic markdown hint with no .claude/commands ancestry is prose.
+                return "skill"
+            # A bare .json (or anything else) falls through to content sniffing below.
+
+        # Content shape: JSON configs are distinguishable; everything else is prose.
+        if '"nodes"' in text and '"connections"' in text:
+            return "n8n"
+        if text.lstrip()[:1] in "{[":
+            try:
+                data = json.loads(text)
+            except (ValueError, TypeError):
+                data = None
+            if isinstance(data, dict):
+                if "mcpServers" in data or "servers" in data:
+                    return "mcp"
+                if "nodes" in data and "connections" in data:
+                    return "n8n"
+                if "hooks" in data:
+                    return "settings"
+        return "skill"
 
     # ---------------------------------------------------------------- internals
 

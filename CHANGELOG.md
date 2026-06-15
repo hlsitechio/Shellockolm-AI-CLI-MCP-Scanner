@@ -46,6 +46,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full suite **484 green** (was 456).
 
 ### Added
+- **MCP tool `scan_text` — vet a raw artifact string in-memory, no disk I/O.** The in-memory sibling
+  of `scan_agent_artifacts`: pass the raw **text** of an artifact the agent is *about to install or
+  paste* — a skill / `SKILL.md`, an `mcp.json` config, an instruction file
+  (`CLAUDE.md`/`AGENTS.md`/`.cursorrules`), an n8n workflow export, a `settings.json` hooks block, or a
+  slash command — and get back the same **structured findings** (rule id, severity, confidence, attack
+  class, line, remediation) + stable `schema_version` 1.0 JSON document, *before the content ever
+  touches disk*. The new `AgentSupplyChainScanner.scan_text()` routes the string to the right detection
+  path; `artifact_type` selects it explicitly (`skill`/`instructions`/`command`/`mcp`/`n8n`/`settings`)
+  while the default `auto` infers it from an optional `filename` hint, then from the content shape
+  (valid JSON with `mcpServers` → mcp, with `nodes`+`connections` → n8n, otherwise prose → skill).
+  Composite-severity boosting and the `min_confidence` filter run exactly as in `scan_directory`;
+  rule-ID `.shellockolmignore` suppression is intentionally skipped (there is no on-disk ignore tree
+  for a string). It reuses the flagship `build_agent_scan_payload` so `scan_text` and
+  `scan_agent_artifacts` share one contract (plus an additive `scan.artifact_type` showing what `auto`
+  resolved to); a missing/blank `text`, an unknown `artifact_type`, and an invalid `min_confidence` are
+  clear errors, never a silently-wrong scan. Verified end-to-end over the real stdio transport
+  (`tests/mcp_live_check.py` now also vets a smuggled skill string in-memory) and with 24 new tests
+  (`tests/test_mcp_scan_text.py`: per-kind routing, `auto` classification by filename + content, bytes
+  input, the no-disk-I/O guarantee, the `min_confidence` filter, the ValueError boundary, tool
+  registration, and end-to-end handler runs for malicious skill/MCP text, a benign baseline, and every
+  error path). Full suite **638 green** (was 614).
 - **MCP tool `scan_agent_artifacts` — the flagship "agents scanning agents" feature.** The agent
   supply-chain scanner is now exposed directly through the MCP server as a dedicated tool, so an AI
   agent can vet a skill, MCP server, or repo mid-session — *before* installing or trusting it — and
