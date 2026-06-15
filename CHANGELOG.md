@@ -46,6 +46,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full suite **484 green** (was 456).
 
 ### Added
+- **Scan-volume stats in the footer — items scanned + scanners run, surfaced consistently.**
+  The per-scanner artifact/unit counts (`skills_scanned`, `mcp_configs_scanned`, `packages_scanned`,
+  `files_scanned`, …) and the scanner count were already tracked on each `ScanResult` but never
+  surfaced together. The human `INVESTIGATION SUMMARY` footer now reports **Items scanned** and
+  **Scanners run** alongside the existing duration, and the `--json` `summary` block gains matching
+  `items_scanned` / `scanners_run` keys (additive — the documented `schema_version` 1.0 contract only
+  ever grows). A single pure helper `aggregate_scan_stats()` is the source of truth for both paths: it
+  sums every integer stat whose key ends in `_scanned`, so a new scanner that follows the naming
+  convention is counted with no further changes (bools and the `min_confidence` string are excluded).
+  10 new tests (`tests/test_scan_stats.py`: suffix summation, scanner count, duration rounding,
+  non-count-stat exclusion, empty-results zero case, JSON propagation parity, e2e human-footer +
+  `--json` over a real benign-skill fixture); full suite **577 green** (was 567).
 - **Config file (`shellockolm.toml` / `[tool.shellockolm]`) — pin scan defaults.** A project
   can commit its scan settings so every contributor and CI runs the same scan without retyping
   flags. The CLI reads the **nearest** `shellockolm.toml` (top-level keys or a `[tool.shellockolm]`

@@ -679,6 +679,41 @@ def _user_passed(ctx, name: str) -> bool:
     return getattr(src, "name", None) == "COMMANDLINE"
 
 
+# Stat keys that hold an integer count of artifacts/units a scanner examined all
+# share the ``_scanned`` suffix (``skills_scanned``, ``mcp_configs_scanned``,
+# ``packages_scanned``, ``files_scanned``, ``instruction_files_scanned``,
+# ``commands_scanned``, ``claude_settings_scanned``, ``total_projects_scanned``,
+# …). Summing every such key gives one "items scanned" figure for the footer, and
+# a new scanner that follows the convention is counted here automatically.
+_SCANNED_STAT_SUFFIX = "_scanned"
+
+
+def aggregate_scan_stats(results: List[ScanResult]) -> Dict[str, float]:
+    """Roll per-scanner scan-volume stats up into one footer-ready summary.
+
+    Returns the total number of artifacts/units scanned (the sum of every integer
+    stat whose key ends in ``_scanned`` — skills, MCP configs, packages, files, …),
+    the number of scanners that ran, and the total elapsed wall-clock time. These
+    are tracked per-`ScanResult` already; this is the single place that surfaces
+    them consistently across the human summary and the ``--json`` document.
+    """
+    items_scanned = 0
+    for r in results:
+        for key, value in r.stats.items():
+            # bool is an int subclass; exclude flag-style stats defensively.
+            if (
+                key.endswith(_SCANNED_STAT_SUFFIX)
+                and isinstance(value, int)
+                and not isinstance(value, bool)
+            ):
+                items_scanned += value
+    return {
+        "items_scanned": items_scanned,
+        "scanners_run": len(results),
+        "duration_seconds": round(sum(r.duration_seconds for r in results), 4),
+    }
+
+
 def build_json_report(
     results: List[ScanResult],
     *,
@@ -731,6 +766,8 @@ def build_json_report(
         for e in r.errors
     ]
 
+    _scan_stats = aggregate_scan_stats(results)
+
     return {
         "schema_version": JSON_SCHEMA_VERSION,
         "tool": {"name": "shellockolm", "version": __version__},
@@ -745,6 +782,10 @@ def build_json_report(
         "summary": {
             "total_findings": len(findings_json),
             "by_severity": by_severity,
+            # Scan-volume stats, surfaced consistently with the human footer:
+            # total artifacts/units examined and how many scanners ran.
+            "items_scanned": _scan_stats["items_scanned"],
+            "scanners_run": _scan_stats["scanners_run"],
             # Findings removed by a .shellockolmignore rule allowlist.
             "findings_suppressed": sum(
                 r.stats.get("findings_suppressed", 0) for r in results
@@ -818,11 +859,14 @@ def print_summary(results: List[ScanResult], output_json: Optional[str] = None):
             else:
                 non_actionable += 1
 
+    agg = aggregate_scan_stats(results)
     console.print("[title]═══ INVESTIGATION SUMMARY ═══[/title]")
     console.print(f"  📊 Total findings:  [danger]{total_findings}[/danger]")
     console.print(f"  🔴 Critical:        [critical]{critical}[/critical]")
     console.print(f"  🟠 High:            [high]{high}[/high]")
-    console.print(f"  ⏱️  Duration:        [info]{sum(r.duration_seconds for r in results):.2f}s[/info]")
+    console.print(f"  📂 Items scanned:   [info]{agg['items_scanned']}[/info]")
+    console.print(f"  🔬 Scanners run:    [info]{agg['scanners_run']}[/info]")
+    console.print(f"  ⏱️  Duration:        [info]{agg['duration_seconds']:.2f}s[/info]")
 
     # Show actionable breakdown
     if non_actionable > 0:

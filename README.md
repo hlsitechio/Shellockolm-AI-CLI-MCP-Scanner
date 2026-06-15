@@ -406,6 +406,8 @@ hook's `entry`, so it survives an `args:` override.
   "summary": {
     "total_findings": 1,
     "by_severity": { "critical": 0, "high": 1, "medium": 0, "low": 0, "info": 0 },
+    "items_scanned": 12,               // total artifacts/units examined (skills, mcp configs, packages, …)
+    "scanners_run": 1,                 // number of scanners that ran
     "findings_suppressed": 0,          // dropped by a .shellockolmignore rule allowlist
     "findings_below_confidence": 0,    // hidden by --min-confidence
     "findings_diff_filtered": 0,       // dropped because the file is outside --diff scope
