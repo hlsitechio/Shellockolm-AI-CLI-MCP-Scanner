@@ -1,4 +1,4 @@
-import { Copy, Check, Terminal, Github, Bot } from "lucide-react";
+import { Copy, Check, Terminal, Github, Bot, Plug, AppWindow, MousePointer2, Wind } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 
@@ -18,8 +18,8 @@ const InstallSection = () => {
       title: "Clone & Install",
       commands: [
         "git clone https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner.git",
-        "cd shellockolm",
-        "pip install -r requirements.txt",
+        "cd Shellockolm-AI-CLI-MCP-Scanner",
+        "pip install -e .",
       ],
     },
   ];
@@ -43,8 +43,47 @@ const InstallSection = () => {
       id: "mcp",
       icon: Bot,
       title: "AI Assistant",
-      command: "python src/server.py",
-      description: "MCP server for Claude, Cursor, etc.",
+      command: "shellockolm-mcp",
+      description: "MCP server for Claude, Cursor, Windsurf",
+    },
+  ];
+
+  const mcpConfig = `{
+  "mcpServers": {
+    "shellockolm": {
+      "command": "shellockolm-mcp"
+    }
+  }
+}`;
+
+  const mcpClients = [
+    {
+      id: "claude-code",
+      icon: Terminal,
+      title: "Claude Code",
+      detail: "One command, no file editing:",
+      command: "claude mcp add shellockolm -- shellockolm-mcp",
+    },
+    {
+      id: "claude-desktop",
+      icon: AppWindow,
+      title: "Claude Desktop",
+      detail: "Settings → Developer → Edit Config, then paste the block into:",
+      command: "%APPDATA%\\Claude\\claude_desktop_config.json",
+    },
+    {
+      id: "cursor",
+      icon: MousePointer2,
+      title: "Cursor",
+      detail: "Paste the block, then enable shellockolm under Settings → MCP:",
+      command: "~/.cursor/mcp.json",
+    },
+    {
+      id: "windsurf",
+      icon: Wind,
+      title: "Windsurf",
+      detail: "Paste the block (or Settings → Cascade → Add Server), then refresh:",
+      command: "~/.codeium/windsurf/mcp_config.json",
     },
   ];
 
@@ -159,6 +198,92 @@ const InstallSection = () => {
                       aria-label={`Copy command: ${useCase.command}`}
                     >
                       {copied === useCase.id ? (
+                        <Check className="w-3 h-3 text-success" aria-hidden="true" />
+                      ) : (
+                        <Copy className="w-3 h-3 text-muted-foreground" aria-hidden="true" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Step 3 — Add to your AI agent (MCP) */}
+          <div>
+            <h3 className="font-display text-lg sm:text-xl font-semibold mb-4 flex items-center gap-3">
+              <span
+                className="w-8 h-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-sm font-bold shrink-0"
+                aria-hidden="true"
+              >
+                3
+              </span>
+              Add to Your AI Agent (MCP)
+            </h3>
+            <p className="text-sm text-muted-foreground mb-4 leading-relaxed">
+              After installing, your agent can call all 11 security tools over the{" "}
+              <a
+                href="https://modelcontextprotocol.io"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary hover:underline"
+              >
+                Model Context Protocol
+              </a>
+              . Every client below uses the{" "}
+              <span className="text-foreground font-medium">same</span> one-paste server block:
+            </p>
+
+            {/* One-paste config block */}
+            <div className="terminal-window mb-5">
+              <div className="terminal-header">
+                <div className="terminal-dot bg-danger" aria-hidden="true" />
+                <div className="terminal-dot bg-gold" aria-hidden="true" />
+                <div className="terminal-dot bg-success" aria-hidden="true" />
+                <span className="ml-4 text-sm text-muted-foreground font-mono flex items-center gap-2">
+                  <Plug className="w-4 h-4" aria-hidden="true" />
+                  mcp config
+                </span>
+                <button
+                  onClick={() => copyToClipboard(mcpConfig, "mcp-config")}
+                  className="ml-auto p-1.5 hover:bg-secondary rounded shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                  aria-label="Copy MCP server config"
+                >
+                  {copied === "mcp-config" ? (
+                    <Check className="w-4 h-4 text-success" aria-hidden="true" />
+                  ) : (
+                    <Copy className="w-4 h-4 text-muted-foreground" aria-hidden="true" />
+                  )}
+                </button>
+              </div>
+              <div className="terminal-body">
+                <pre className="text-foreground text-xs sm:text-sm overflow-x-auto leading-relaxed">
+                  <code>{mcpConfig}</code>
+                </pre>
+              </div>
+            </div>
+
+            {/* Per-client grid */}
+            <div className="grid sm:grid-cols-2 gap-4">
+              {mcpClients.map((client) => (
+                <div key={client.id} className="card-noir p-5 flex flex-col gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 rounded-lg bg-primary/10 text-primary shrink-0">
+                      <client.icon className="w-5 h-5" aria-hidden="true" />
+                    </div>
+                    <h4 className="font-semibold text-foreground text-sm">{client.title}</h4>
+                  </div>
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    {client.detail}
+                  </p>
+                  <div className="flex items-center justify-between p-3 rounded-lg bg-secondary/60 font-mono text-xs mt-auto">
+                    <code className="text-primary truncate">{client.command}</code>
+                    <button
+                      onClick={() => copyToClipboard(client.command, client.id)}
+                      className="ml-2 p-1.5 hover:bg-secondary rounded shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-secondary"
+                      aria-label={`Copy: ${client.command}`}
+                    >
+                      {copied === client.id ? (
                         <Check className="w-3 h-3 text-success" aria-hidden="true" />
                       ) : (
                         <Copy className="w-3 h-3 text-muted-foreground" aria-hidden="true" />

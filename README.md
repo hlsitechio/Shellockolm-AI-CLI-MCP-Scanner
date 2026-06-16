@@ -243,6 +243,70 @@ detection path; the default `auto` infers it from an optional `filename` hint, t
 content shape (JSON with `mcpServers` → MCP, with `nodes`+`connections` → n8n, otherwise prose →
 skill). Use it to vet untrusted content in the moment, before it lands anywhere.
 
+### 🔌 Add Shellockolm to your AI agent (MCP)
+
+Installing the package ships a **`shellockolm-mcp`** command that speaks the
+[Model Context Protocol](https://modelcontextprotocol.io) over stdio, so any MCP-capable agent
+can call all 11 tools (`scan_agent_artifacts`, `scan_text`, `explain_finding`, `scan_directory`,
+`quick_scan`, `scan_live`, …). Every client below uses the **same** one-paste server block — no
+clone path, no `PYTHONPATH`:
+
+```json
+{
+  "mcpServers": {
+    "shellockolm": {
+      "command": "shellockolm-mcp"
+    }
+  }
+}
+```
+
+> **Prerequisite:** `pip install -e .` (from a clone) or `pipx install shellockolm` so the
+> `shellockolm-mcp` command is on your `PATH`.
+
+**Claude Code** — one command, no file editing:
+
+```bash
+claude mcp add shellockolm -- shellockolm-mcp                # this project
+claude mcp add --scope user shellockolm -- shellockolm-mcp   # all your projects
+```
+
+…or commit a `.mcp.json` at the repo root with the server block above so the whole team gets it.
+
+**Claude Desktop** — Settings → Developer → *Edit Config*, then add the server block to:
+
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+
+(a ready-to-copy `claude_desktop_config_EXAMPLE.json` ships in the repo root.)
+
+**Cursor** — add the server block to `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (this
+project), then enable **shellockolm** under Settings → MCP.
+
+**Windsurf** — add the server block to `~/.codeium/windsurf/mcp_config.json` (or Settings →
+Cascade → *Add Server* → paste), then hit refresh.
+
+<details>
+<summary>No global install? Run it straight from a clone</summary>
+
+If you didn't `pip install`, point the client's `command`/`args` at the server script with an
+absolute path instead — the `mcpServers` shape is otherwise identical:
+
+```json
+{
+  "mcpServers": {
+    "shellockolm": {
+      "command": "python",
+      "args": ["/absolute/path/to/Shellockolm-Scanner/src/mcp_server.py"]
+    }
+  }
+}
+```
+</details>
+
+Then just ask your agent: *"use shellockolm to scan this skill before I install it."* See
+[docs/MCP_SETUP.md](docs/MCP_SETUP.md) for the full per-tool reference and troubleshooting.
+
 **Suppressing accepted findings.** Drop a `.shellockolmignore` at your repo root to allowlist
 findings your team has reviewed and accepted — by rule ID, optionally scoped to a path glob
 (gitignore-style). Suppressed findings are removed from results and reported as a count, so the
