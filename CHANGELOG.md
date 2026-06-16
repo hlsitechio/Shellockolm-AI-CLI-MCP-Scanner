@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **MCP resource reads no longer error over the real transport.** The server's
+  `read_resource` callback was typed `uri: str` and called string-only methods
+  (`uri.startswith("cve://")`, `uri.replace(...)`), but the MCP framework hands that
+  callback a parsed pydantic **`AnyUrl`** when a client reads a resource over stdio — so
+  every transport-level `cve://…` read failed with `'AnyUrl' object has no attribute
+  'startswith'`. (The internal `get_cve_info` tool was unaffected because it calls the
+  handler with a plain string.) The handler now coerces `uri` to `str` up front, so both
+  callers work. Surfaced by the new MCP server self-test, which is the first thing to
+  exercise the resource path through the genuine client⇆server transport.
 - **Packaging: pure CLI-helper modules are now installed.** `diff_scan`, `baseline`, and `doctor`
   (added in earlier build-loop tasks) were imported by `cli` but missing from `[tool.setuptools]`
   `py-modules`, so a `pip install` would build a package whose `shellockolm` console script fails to
@@ -46,6 +55,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full suite **484 green** (was 456).
 
 ### Added
+- **MCP server self-test — the client⇆server stdio transport is now covered by CI.** A new
+  `tests/test_mcp_server_selftest.py` launches `src/mcp_server.py` as a **subprocess** and drives it
+  through the genuine MCP JSON-RPC **stdio** transport exactly as an AI client would (Claude Code /
+  Desktop / Cursor / Windsurf): `initialize` → `list_tools` → `call_tool` for **all 11 tools** →
+  `list_resources` / `read_resource`. This is the pytest-native promotion of the previously manual
+  `tests/mcp_live_check.py` script, so the full handshake — not just the in-process handler functions —
+  is exercised on every run. It is offline by construction: each scanning tool runs against a tiny
+  **local** temp fixture (a vulnerable `package.json` and a malicious/benign `SKILL.md`), and `scan_live`
+  is probed with a `127.0.0.1` loopback URL that the SSRF guard rejects *before* any socket opens. The
+  server is spawned once (a module-scoped fixture captures every response); 18 granular tests assert
+  per-tool behavior — CVE detection (`quick_scan`→CVE-2024-21508, `scan_directory`→CVE-2025-29927, both
+  scanner-pinned for determinism), agent supply-chain detection + a zero-finding benign baseline,
+  `explain_finding` resolving both a rule id and a CVE id, the SSRF block, and the exact 11-tool surface.
+  Full suite **656 green** (was 638). _(This is also what surfaced the `read_resource` AnyUrl fix above.)_
 - **MCP tool `scan_text` — vet a raw artifact string in-memory, no disk I/O.** The in-memory sibling
   of `scan_agent_artifacts`: pass the raw **text** of an artifact the agent is *about to install or
   paste* — a skill / `SKILL.md`, an `mcp.json` config, an instruction file

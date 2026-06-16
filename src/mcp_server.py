@@ -521,6 +521,12 @@ async def handle_list_resources() -> list[types.Resource]:
 @server.read_resource()
 async def handle_read_resource(uri: str) -> str:
     """Read CVE details"""
+    # The MCP framework hands this callback a parsed pydantic ``AnyUrl`` over the real
+    # transport (string-only methods like .startswith/.replace fail on it), whereas the
+    # internal ``get_cve_info`` path calls it with a plain ``str``. Coerce to ``str``
+    # up front so both callers work — without this, every transport-level resource read
+    # errored with "'AnyUrl' object has no attribute 'startswith'".
+    uri = str(uri)
     if uri.startswith("cve://"):
         cve_id = uri.replace("cve://", "").upper()
         vuln = db.get_by_cve(cve_id)
