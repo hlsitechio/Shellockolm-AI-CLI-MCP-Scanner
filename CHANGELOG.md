@@ -55,6 +55,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full suite **484 green** (was 456).
 
 ### Added
+- **MCP tool `check_mcp_config` — audit the agent's OWN installed MCP configs (the 12th tool).**
+  Scans the well-known MCP-server config locations per OS — Claude Desktop
+  (`%APPDATA%\Claude\…` / `~/Library/Application Support/Claude/…` / `~/.config/Claude/…`),
+  Claude Code (`~/.claude.json`), Cursor (`~/.cursor/mcp.json`), Windsurf
+  (`~/.codeium/windsurf/mcp_config.json`), VS Code (`…/Code/User/mcp.json`), plus this project's
+  `.mcp.json` / `mcp.json` / `.cursor/mcp.json` / `.vscode/mcp.json` — for a poisoned server entry:
+  code fetched from a raw-paste URL or public IP (AGENT-MCP-005), a broad host credential forwarded
+  to an unrelated server (AGENT-MCP-004), a `curl|bash` launcher (AGENT-MCP-001), an unpinned remote
+  package (AGENT-MCP-002), or a hardcoded secret. Reports which configs exist, which were scanned,
+  and any structured findings + a stable `schema_version` 1.0 JSON document (the same per-finding
+  shape as `scan_agent_artifacts`). Each existing file is routed through the agent scanner's
+  structured MCP path regardless of its actual filename, so a config not literally named `mcp.json`
+  (`~/.claude.json`, Windsurf's `mcp_config.json`) is still parsed for `mcpServers` entries. It is
+  **read-only** (never modifies a config), bounds each read at 5 MB (a runaway `~/.claude.json` is
+  marked `skipped`, never a silent gap), and any matched secret is redacted in the output. The
+  candidate-location enumeration lives in a pure, exhaustively-tested `src/mcp_config_locations.py`
+  (mirrors the `diff_scan`/`baseline`/`doctor`/`config_file` split — no filesystem access, fully
+  parameterized by `system`/`home`/`env`/`project_root`). Pro rules are gated by the active license
+  exactly as on the CLI. Args: `path` (project root, default cwd), `include_user`, `include_project`,
+  `min_confidence`. Verified live against the real machine's configs (correctly surfaced a CRITICAL
+  secret-in-URL and HIGH hardcoded credentials, both redacted). 26 new tests
+  (`tests/test_mcp_check_config.py`: per-OS location enumeration incl. APPDATA fallback + de-dup, the
+  disk-probing scan incl. absent/oversize/forced-mcp-path, the payload contract + CRITICAL→INFO
+  ordering, the markdown/JSON formatter, tool registration, and every e2e error path) + the live
+  stdio self-test now exercises it as the 12th tool. Full suite **684 green** (was 656).
 - **MCP server self-test — the client⇆server stdio transport is now covered by CI.** A new
   `tests/test_mcp_server_selftest.py` launches `src/mcp_server.py` as a **subprocess** and drives it
   through the genuine MCP JSON-RPC **stdio** transport exactly as an AI client would (Claude Code /

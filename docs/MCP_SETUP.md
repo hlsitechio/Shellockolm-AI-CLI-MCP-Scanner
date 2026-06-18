@@ -127,7 +127,7 @@ npx @modelcontextprotocol/inspector shellockolm-mcp
 
 ## 🛠️ Available MCP Tools
 
-The server exposes **11 tools**. Run `shellockolm rules list` / `list_cves` for the full catalogs.
+The server exposes **12 tools**. Run `shellockolm rules list` / `list_cves` for the full catalogs.
 
 ### Agent supply-chain (the differentiator)
 
@@ -151,6 +151,18 @@ Explain any finding — an `AGENT-*` rule **or** a tracked `CVE-*` — with seve
 example attack, and remediation.
 
 **Parameters:** `finding_id` (required)
+
+#### **check_mcp_config**
+Audit the agent's **own** installed MCP configs — the well-known per-OS locations (Claude Desktop,
+Claude Code's `~/.claude.json`, Cursor, Windsurf, VS Code; plus this project's `.mcp.json` /
+`.cursor/mcp.json` / `.vscode/mcp.json`) — for a poisoned server entry (raw-URL/IP launcher, a host
+credential forwarded to an unrelated server, `curl|bash`). Read-only; secrets are redacted.
+
+```
+Use shellockolm to check my MCP config for tampering
+```
+
+**Parameters:** `path` (project root, optional), `include_user`, `include_project`, `min_confidence`
 
 ### CVEs, malware & secrets
 

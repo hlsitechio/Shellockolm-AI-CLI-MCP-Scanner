@@ -23,6 +23,7 @@ SRC_MODULES = [
     "baseline",
     "doctor",
     "config_file",
+    "mcp_config_locations",
     "scan",
     "scan_simple",
     "auto_fix",

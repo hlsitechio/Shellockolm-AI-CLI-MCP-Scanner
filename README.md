@@ -243,13 +243,22 @@ detection path; the default `auto` infers it from an optional `filename` hint, t
 content shape (JSON with `mcpServers` → MCP, with `nodes`+`connections` → n8n, otherwise prose →
 skill). Use it to vet untrusted content in the moment, before it lands anywhere.
 
+The **`check_mcp_config`** MCP tool audits the agent's **own** installed MCP setup: it scans the
+well-known config locations per OS (Claude Desktop, Claude Code's `~/.claude.json`, Cursor,
+Windsurf, VS Code — plus this project's `.mcp.json` / `.cursor/mcp.json` / `.vscode/mcp.json`) for a
+poisoned server entry — code fetched from a raw-paste URL or public IP, a broad host credential
+forwarded to an unrelated server, or a `curl|bash` launcher. It reports which configs exist, which
+were scanned, and any structured findings + JSON document. It's **read-only** — it never modifies a
+config — and any matched secret is redacted in the output. Use it to check whether the agent's own
+MCP wiring has been tampered with.
+
 ### 🔌 Add Shellockolm to your AI agent (MCP)
 
 Installing the package ships a **`shellockolm-mcp`** command that speaks the
 [Model Context Protocol](https://modelcontextprotocol.io) over stdio, so any MCP-capable agent
-can call all 11 tools (`scan_agent_artifacts`, `scan_text`, `explain_finding`, `scan_directory`,
-`quick_scan`, `scan_live`, …). Every client below uses the **same** one-paste server block — no
-clone path, no `PYTHONPATH`:
+can call all 12 tools (`scan_agent_artifacts`, `scan_text`, `explain_finding`, `check_mcp_config`,
+`scan_directory`, `quick_scan`, `scan_live`, …). Every client below uses the **same** one-paste
+server block — no clone path, no `PYTHONPATH`:
 
 ```json
 {

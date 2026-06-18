@@ -135,6 +135,33 @@ def _finding_severity(finding) -> str:
     return (sev.value if hasattr(sev, "value") else str(sev)).upper()
 
 
+def _agent_finding_dict(finding) -> Dict[str, Any]:
+    """Serialize one agent-scanner ``ScanFinding`` to the stable per-finding dict shape.
+
+    Shared by ``build_agent_scan_payload`` (scan_agent_artifacts / scan_text) and
+    ``build_mcp_config_payload`` (check_mcp_config) so every agentic tool emits the
+    SAME finding shape: rule id, severity, confidence, attack class, tier, file:line,
+    remediation. The agent scanner stores the ``AGENT-*`` rule id in ``cve_id``.
+    """
+    from scanners.agent_supply_chain import agent_rule_class, agent_rule_tier
+
+    rule_id = finding.cve_id
+    return {
+        "id": rule_id,
+        "title": finding.title,
+        "severity": _finding_severity(finding),
+        "confidence": getattr(finding, "confidence", "high"),
+        "attack_class": agent_rule_class(rule_id),
+        "tier": agent_rule_tier(rule_id),
+        "cvss_score": finding.cvss_score,
+        # file_path carries the ``<path>:<line>`` / ``<path> » server:<name>`` locator
+        # exactly as the scanner emits it, so callers can resolve the artifact + line.
+        "file_path": finding.file_path,
+        "description": finding.description,
+        "remediation": finding.remediation,
+    }
+
+
 def build_agent_scan_payload(
     result: ScanResult,
     *,
@@ -151,10 +178,6 @@ def build_agent_scan_payload(
     Findings are sorted CRITICAL→INFO for deterministic output, and ``ensure_ascii``
     JSON serialization keeps an invisible-Unicode injection payload pipe-safe.
     """
-    # Imported lazily so the module's import surface stays light and the helper is
-    # patchable in tests; the scanner package is already a hard dependency.
-    from scanners.agent_supply_chain import agent_rule_class, agent_rule_tier
-
     by_severity = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
     findings: List[Dict[str, Any]] = []
     for f in result.findings:
@@ -162,22 +185,7 @@ def build_agent_scan_payload(
         key = sev.lower()
         if key in by_severity:
             by_severity[key] += 1
-        # For the agent scanner the finding's ``cve_id`` field carries the AGENT-* rule id.
-        rule_id = f.cve_id
-        findings.append({
-            "id": rule_id,
-            "title": f.title,
-            "severity": sev,
-            "confidence": getattr(f, "confidence", "high"),
-            "attack_class": agent_rule_class(rule_id),
-            "tier": agent_rule_tier(rule_id),
-            "cvss_score": f.cvss_score,
-            # file_path carries the ``<path>:<line>`` / ``<path> » server:<name>`` locator
-            # exactly as the CLI emits it, so callers can resolve the artifact + line.
-            "file_path": f.file_path,
-            "description": f.description,
-            "remediation": f.remediation,
-        })
+        findings.append(_agent_finding_dict(f))
 
     findings.sort(key=lambda d: _AGENT_SEVERITY_ORDER.get(d["severity"], 5))
 
@@ -270,6 +278,245 @@ def format_agent_scan_results(payload: Dict[str, Any]) -> str:
     lines.append("```json")
     lines.append(json.dumps(payload, indent=2, ensure_ascii=True))
     lines.append("```")
+    return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────────────────────────
+# CHECK MCP CONFIG — scan the caller's OWN installed MCP configs (well-known paths)
+# ─────────────────────────────────────────────────────────────────
+
+# Stable contract version for the check_mcp_config structured document. Within a major
+# version, fields are only ADDED. Reuses the same per-finding shape as the agent scan.
+MCP_CONFIG_SCHEMA_VERSION = "1.0"
+
+# Skip a config file larger than this (a runaway ~/.claude.json can carry MBs of
+# project history); recorded as "skipped" so it is never a silent gap.
+MAX_MCP_CONFIG_BYTES = 5_000_000
+
+
+def scan_known_mcp_configs(
+    locations,
+    *,
+    min_confidence: str = "low",
+    quick_mode: bool = False,
+):
+    """Probe each candidate MCP-config location and scan the ones that exist.
+
+    Takes the PURE candidate list from
+    :func:`mcp_config_locations.known_mcp_config_locations` and turns it into per-location
+    records: an absent file is ``"absent"`` (skipped), an oversize one ``"skipped"``, an
+    unreadable one ``"unreadable"`` (note kept), and an existing readable one ``"scanned"``
+    with its findings. Each file is routed through the agent scanner's structured MCP path
+    (``artifact_type="mcp"``) regardless of its actual filename, so a config that is not
+    literally named ``mcp.json`` (``~/.claude.json``, Windsurf's ``mcp_config.json``) is
+    still parsed for ``mcpServers`` / ``servers`` entries.
+
+    Returns ``(records, pro)`` where ``pro`` reflects the active license (Pro rules are
+    gated exactly as on the CLI). The scanner is constructed once and reused.
+    """
+    from scanners.agent_supply_chain import AgentSupplyChainScanner
+
+    scanner = AgentSupplyChainScanner()
+    records: List[Dict[str, Any]] = []
+
+    for loc in locations:
+        record: Dict[str, Any] = {
+            "client": loc.client,
+            "scope": loc.scope,
+            "path": str(loc.path),
+            "status": "absent",
+            "note": None,
+            "findings": [],
+        }
+        try:
+            if not loc.path.is_file():
+                records.append(record)
+                continue
+            if loc.path.stat().st_size > MAX_MCP_CONFIG_BYTES:
+                record["status"] = "skipped"
+                record["note"] = (
+                    f"file larger than {MAX_MCP_CONFIG_BYTES} bytes — not scanned"
+                )
+                records.append(record)
+                continue
+            raw = loc.path.read_bytes()
+        except OSError as exc:
+            record["status"] = "unreadable"
+            record["note"] = f"{type(exc).__name__}: {exc}"
+            records.append(record)
+            continue
+
+        try:
+            result = scanner.scan_text(
+                raw,
+                artifact_type="mcp",
+                filename=str(loc.path),
+                quick_mode=bool(quick_mode),
+                min_confidence=str(min_confidence),
+            )
+        except Exception as exc:  # defensive: a rule bug must never crash the tool
+            record["status"] = "unreadable"
+            record["note"] = f"scan error: {type(exc).__name__}: {exc}"
+            records.append(record)
+            continue
+
+        record["status"] = "scanned"
+        record["findings"] = list(result.findings)
+        records.append(record)
+
+    return records, scanner.pro
+
+
+def build_mcp_config_payload(
+    records: List[Dict[str, Any]],
+    *,
+    system: str,
+    min_confidence: str = "low",
+    pro: bool = False,
+) -> Dict[str, Any]:
+    """Assemble the stable check_mcp_config document from per-location scan records.
+
+    Surfaces a ``locations`` array (which well-known config each client uses, whether it
+    is present, and how many findings it carried) plus a flat ``findings`` list sorted
+    CRITICAL→INFO using the SAME per-finding shape as ``scan_agent_artifacts`` — so a
+    client gets both "where are my MCP configs" and "what's wrong in them" in one call.
+    """
+    by_severity = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+    findings: List[Dict[str, Any]] = []
+    location_entries: List[Dict[str, Any]] = []
+
+    present = scanned = 0
+    for rec in records:
+        status = rec["status"]
+        if status != "absent":
+            present += 1
+        if status == "scanned":
+            scanned += 1
+        rec_findings = rec.get("findings", []) if status == "scanned" else []
+        for f in rec_findings:
+            sev = _finding_severity(f)
+            key = sev.lower()
+            if key in by_severity:
+                by_severity[key] += 1
+            findings.append(_agent_finding_dict(f))
+
+        entry = {
+            "client": rec["client"],
+            "scope": rec["scope"],
+            "path": rec["path"],
+            "status": status,
+            "findings": len(rec_findings),
+        }
+        if rec.get("note"):
+            entry["note"] = rec["note"]
+        location_entries.append(entry)
+
+    findings.sort(key=lambda d: _AGENT_SEVERITY_ORDER.get(d["severity"], 5))
+
+    mc = str(min_confidence).strip().lower()
+    if mc not in _VALID_CONFIDENCE:
+        mc = "low"
+
+    return {
+        "schema_version": MCP_CONFIG_SCHEMA_VERSION,
+        "tool": {"name": "shellockolm", "scanner": "agent", "mode": "check_mcp_config"},
+        "scan": {
+            "time": datetime.now().isoformat(),
+            "system": system,
+            "min_confidence": mc,
+            "pro": bool(pro),
+        },
+        "summary": {
+            "total_findings": len(findings),
+            "by_severity": by_severity,
+            "locations_checked": len(records),
+            "locations_present": present,
+            "locations_scanned": scanned,
+        },
+        "locations": location_entries,
+        "findings": findings,
+    }
+
+
+# Per-status glyph for the human summary line.
+_MCP_STATUS_GLYPH = {
+    "scanned": "•",
+    "absent": "·",
+    "skipped": "⚠",
+    "unreadable": "⚠",
+}
+
+
+def format_mcp_config_results(payload: Dict[str, Any]) -> str:
+    """Render the check_mcp_config payload as a markdown summary + an embedded JSON block."""
+    scan = payload["scan"]
+    s = payload["summary"]
+    bs = s["by_severity"]
+    tier = "Pro" if scan.get("pro") else "Free"
+
+    lines = [
+        "# MCP Config Audit",
+        "",
+        (
+            f"**System**: {scan['system']}  |  **Tier**: {tier}  |  "
+            f"**Min confidence**: {scan['min_confidence']}"
+        ),
+        (
+            f"**Configs**: {s['locations_present']} present / "
+            f"{s['locations_checked']} known locations checked "
+            f"({s['locations_scanned']} scanned)"
+        ),
+        (
+            f"**Total findings**: {s['total_findings']}  "
+            f"(CRITICAL {bs['critical']}, HIGH {bs['high']}, MEDIUM {bs['medium']}, "
+            f"LOW {bs['low']}, INFO {bs['info']})"
+        ),
+        "",
+        "## Locations",
+    ]
+    for loc in payload["locations"]:
+        glyph = _MCP_STATUS_GLYPH.get(loc["status"], "·")
+        if loc["status"] == "scanned":
+            detail = (
+                f"{loc['findings']} finding(s)"
+                if loc["findings"]
+                else "clean"
+            )
+        elif loc["status"] == "absent":
+            detail = "not present"
+        else:
+            detail = f"{loc['status']}: {loc.get('note', '')}".strip().rstrip(":")
+        lines.append(
+            f"- {glyph} **{loc['client']}** ({loc['scope']}) — {detail}\n"
+            f"  `{loc['path']}`"
+        )
+
+    if s["total_findings"] == 0:
+        present_note = (
+            "✅ **No threats in your installed MCP configs.**"
+            if s["locations_present"]
+            else "ℹ️ **No MCP config files found in the well-known locations.**"
+        )
+        lines += ["", present_note]
+    else:
+        lines += ["", "## Findings", ""]
+        for f in payload["findings"]:
+            conf = f.get("confidence", "high")
+            conf_note = "" if conf == "high" else f" · confidence: {conf}"
+            lines.append(
+                f"- **[{f['severity']}] {f['id']}** "
+                f"({f['attack_class']}, {f['tier']}{conf_note}) — {f['title']}\n"
+                f"  `{f['file_path']}`\n"
+                f"  _Fix_: {f['remediation']}"
+            )
+
+    lines += [
+        "",
+        "## Structured findings (JSON)",
+        "```json",
+        json.dumps(payload, indent=2, ensure_ascii=True),
+        "```",
+    ]
     return "\n".join(lines)
 
 
@@ -700,6 +947,45 @@ async def handle_list_tools() -> list[types.Tool]:
             }
         ),
         types.Tool(
+            name="check_mcp_config",
+            description=(
+                "Audit the CALLER'S OWN installed MCP server configs — scan the "
+                "well-known mcp.json / config locations per OS (Claude Desktop, Claude "
+                "Code's ~/.claude.json, Cursor, Windsurf, VS Code; plus this project's "
+                ".mcp.json / .cursor/mcp.json / .vscode/mcp.json) for a poisoned server "
+                "entry: code fetched from a raw-paste URL or public IP, a broad host "
+                "credential forwarded to an unrelated server, or a curl|bash launcher. "
+                "Reports which configs exist, which were scanned, and any STRUCTURED "
+                "findings (rule id, severity, attack class, file, remediation) + a JSON "
+                "document. Read-only; never modifies a config. Use this to check whether "
+                "the agent's own MCP setup has been tampered with."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Project root for the project-scoped configs (.mcp.json, .cursor/mcp.json, .vscode/mcp.json). Defaults to the current working directory."
+                    },
+                    "include_user": {
+                        "type": "boolean",
+                        "description": "Check the per-user install configs under the home dir (Claude Desktop/Code, Cursor, Windsurf, VS Code)",
+                        "default": True
+                    },
+                    "include_project": {
+                        "type": "boolean",
+                        "description": "Check the project-scoped configs under 'path'",
+                        "default": True
+                    },
+                    "min_confidence": {
+                        "type": "string",
+                        "description": "Drop findings below this detection certainty: low | medium | high (default low keeps everything)",
+                        "default": "low"
+                    }
+                }
+            }
+        ),
+        types.Tool(
             name="find_packages",
             description="FAST: Find npm packages (package.json files) in a directory. By default excludes node_modules (40x faster). Returns list in ~0.1 seconds. Use this when user asks to 'find' or 'list' packages.",
             inputSchema={
@@ -1028,6 +1314,54 @@ async def handle_call_tool(
         # Additive field (schema 1.0 only grows): surface what "auto" resolved to.
         payload["scan"]["artifact_type"] = resolved
         return [types.TextContent(type="text", text=format_agent_scan_results(payload))]
+
+    if name == "check_mcp_config":
+        include_user = arguments.get("include_user", True)
+        include_project = arguments.get("include_project", True)
+        min_confidence = arguments.get("min_confidence", "low")
+        path = arguments.get("path")
+
+        # Validate min_confidence at the boundary (mirrors the other agent tools).
+        if str(min_confidence).strip().lower() not in _VALID_CONFIDENCE:
+            return [types.TextContent(
+                type="text",
+                text=(
+                    f"❌ Invalid min_confidence: {min_confidence!r}. "
+                    "Use one of: low, medium, high."
+                )
+            )]
+
+        # The project root for project-scoped configs; default to the server's cwd.
+        if path is not None and not isinstance(path, str):
+            return [types.TextContent(
+                type="text",
+                text=f"❌ Invalid path: {path!r}. Must be a string."
+            )]
+        project_root = Path(path) if path else Path.cwd()
+
+        import platform as _platform
+        from mcp_config_locations import known_mcp_config_locations
+
+        locations = known_mcp_config_locations(
+            project_root=project_root,
+            include_user=bool(include_user),
+            include_project=bool(include_project),
+        )
+
+        try:
+            records, pro = scan_known_mcp_configs(
+                locations, min_confidence=str(min_confidence)
+            )
+        except Exception as e:
+            return [types.TextContent(type="text", text=f"❌ Error checking MCP configs: {e}")]
+
+        payload = build_mcp_config_payload(
+            records,
+            system=_platform.system(),
+            min_confidence=str(min_confidence),
+            pro=pro,
+        )
+        return [types.TextContent(type="text", text=format_mcp_config_results(payload))]
 
     if name == "find_packages":
         path = arguments.get("path", ".")
