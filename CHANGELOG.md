@@ -55,6 +55,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full suite **484 green** (was 456).
 
 ### Added
+- **Pro-gating regression suite for the MCP path — the open-core invariant is now CI-locked.**
+  A new `tests/test_mcp_pro_gating.py` proves that Pro rules are gated identically through the MCP
+  server as on the CLI: the agentic tools (`scan_agent_artifacts`, `scan_text`, `check_mcp_config`)
+  construct `AgentSupplyChainScanner()` with **no** `pro=` argument, so the active license alone
+  decides — and the headline guarantee, **the free tier still returns every free finding**, holds
+  regardless. The 11 tests drive the real async `handle_call_tool` entry point (where the scanner is
+  built internally, not handed an explicit tier) over a single artifact that trips exactly one FREE
+  rule (a smuggled `AGENT-PI-007`) and one PRO rule (`AGENT-PRO-003` context exfiltration), and
+  assert: free → only the free finding (Pro rule absent, `scan.pro=false`); Pro → free **plus** the
+  Pro rule (`scan.pro=true`, finding `tier="pro"`); Pro gating is **strictly additive** (the free id
+  set is a proper subset of the Pro set, the only delta being genuine pro-tier rules — Pro never
+  drops or rewrites a free finding); the MCP handler's finding set is **byte-identical** to a
+  directly license-pinned `AgentSupplyChainScanner(pro=…)` at both tiers; and no free-tier scan
+  across any of the three tools ever leaks a `tier="pro"` finding. The license is forced offline by
+  replacing `licensing.LicenseManager` with a fake (the scanner re-reads that module attribute on
+  each construction), so the result never depends on the host's real license file, env var, or
+  network. Full suite **695 green** (was 684).
 - **MCP tool `check_mcp_config` — audit the agent's OWN installed MCP configs (the 12th tool).**
   Scans the well-known MCP-server config locations per OS — Claude Desktop
   (`%APPDATA%\Claude\…` / `~/Library/Application Support/Claude/…` / `~/.config/Claude/…`),
