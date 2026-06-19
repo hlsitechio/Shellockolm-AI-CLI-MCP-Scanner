@@ -225,7 +225,10 @@ flagship "agents scanning agents" feature — so an agent can vet a skill, MCP s
 mid-session and get back **structured findings** (rule id, severity, confidence, attack class,
 `file:line`, remediation) plus a stable JSON document. Pro rules are respected through the MCP
 path exactly as on the CLI; the free tier still returns every free finding. Supports
-`recursive`, `max_depth`, `min_confidence` (`low|medium|high`), and `quick_mode` arguments.
+`recursive`, `max_depth`, `min_confidence` (`low|medium|high`), `quick_mode`, and `time_budget`
+arguments. **Rate/size safety:** the walk is bounded by a `time_budget` (default **120 s** over MCP;
+`0` = unbounded; the CLI stays unbounded) so a huge or looping tree can't hang the call — on timeout
+it returns **partial results** flagged with `summary.partial` and a warning instead of blocking.
 
 The companion **`explain_finding`** MCP tool turns any finding into a why/impact/remediation
 write-up: pass it a rule ID (`AGENT-PI-013`, from an agent-artifact scan) **or** a CVE ID
@@ -241,7 +244,9 @@ workflow export, a `settings.json` hooks block, or a slash command — **without
 disk**, and returns the same structured findings + JSON document. `artifact_type` selects the
 detection path; the default `auto` infers it from an optional `filename` hint, then from the
 content shape (JSON with `mcpServers` → MCP, with `nodes`+`connections` → n8n, otherwise prose →
-skill). Use it to vet untrusted content in the moment, before it lands anywhere.
+skill). Use it to vet untrusted content in the moment, before it lands anywhere. Input is capped at
+1,000,000 characters — a larger string is truncated (head still scanned) and the result is flagged
+`summary.partial` with a warning, so an oversized paste can't hang the scan.
 
 The **`check_mcp_config`** MCP tool audits the agent's **own** installed MCP setup: it scans the
 well-known config locations per OS (Claude Desktop, Claude Code's `~/.claude.json`, Cursor,

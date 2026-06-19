@@ -128,6 +128,12 @@ _AGENT_SEVERITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO"
 # Accepted detection-certainty thresholds for the min_confidence argument.
 _VALID_CONFIDENCE = {"low", "medium", "high"}
 
+# Default wall-clock budget (seconds) for the scan_agent_artifacts directory walk, so a
+# pathological or hostile tree can never hang an interactive agent's tool call. The walk
+# stops at the budget and returns PARTIAL results with a warning rather than blocking.
+# Callers can override per-call (0 = unbounded for a deliberate full local scan).
+DEFAULT_AGENT_SCAN_TIME_BUDGET = 120.0
+
 
 def _finding_severity(finding) -> str:
     """Normalize a finding's severity to an UPPERCASE string (enum or str safe)."""
@@ -201,6 +207,11 @@ def build_agent_scan_payload(
     if mc not in _VALID_CONFIDENCE:
         mc = "low"
 
+    # Partial-scan notices (input truncated to the size cap, or the directory walk
+    # stopped at its time budget) — distinct from per-file read `errors`. `partial`
+    # is the at-a-glance flag a client checks before trusting "0 findings" as clean.
+    warnings = [str(w) for w in getattr(result, "warnings", [])]
+
     return {
         "schema_version": AGENT_SCAN_SCHEMA_VERSION,
         "tool": {"name": "shellockolm", "scanner": "agent"},
@@ -219,6 +230,9 @@ def build_agent_scan_payload(
             "findings_suppressed": stats.get("findings_suppressed", 0),
             # Findings hidden by the min_confidence threshold.
             "findings_below_confidence": stats.get("findings_below_confidence", 0),
+            # True when coverage was bounded (size cap / time budget) — results partial.
+            "partial": bool(warnings),
+            "warnings": warnings,
         },
         "findings": findings,
         "errors": [str(e) for e in result.errors],
@@ -266,6 +280,12 @@ def format_agent_scan_results(payload: Dict[str, Any]) -> str:
                 f"  `{f['file_path']}`\n"
                 f"  _Fix_: {f['remediation']}"
             )
+
+    if s.get("warnings"):
+        lines.append("")
+        lines.append("## ⚠️ Partial scan (coverage was bounded)")
+        for w in s["warnings"]:
+            lines.append(f"- {w}")
 
     if payload["errors"]:
         lines.append("")
@@ -870,6 +890,11 @@ async def handle_list_tools() -> list[types.Tool]:
                         "type": "boolean",
                         "description": "Skip the most expensive heuristics for a faster pass",
                         "default": False
+                    },
+                    "time_budget": {
+                        "type": "number",
+                        "description": "Wall-clock cap in seconds for the directory walk so a huge/hostile tree can't hang the call; on timeout it returns PARTIAL results with a warning (default 120; 0 = unbounded full scan)",
+                        "default": 120
                     }
                 },
                 "required": ["path"]
@@ -1196,6 +1221,22 @@ async def handle_call_tool(
                 text=f"❌ Invalid max_depth: {arguments.get('max_depth')!r}. Must be an integer."
             )]
 
+        # Rate/size safety: bound the walk so a pathological/hostile tree can't hang the
+        # call. Defaults to DEFAULT_AGENT_SCAN_TIME_BUDGET; a client may raise it or pass
+        # 0 for an unbounded full scan. A non-numeric value is a clear boundary error.
+        try:
+            time_budget = float(arguments.get("time_budget", DEFAULT_AGENT_SCAN_TIME_BUDGET))
+        except (TypeError, ValueError):
+            return [types.TextContent(
+                type="text",
+                text=(
+                    f"❌ Invalid time_budget: {arguments.get('time_budget')!r}. "
+                    "Must be a number of seconds (0 = unbounded)."
+                )
+            )]
+        # 0 / negative → unbounded (explicit opt-out of the cap).
+        time_budget = time_budget if time_budget > 0 else None
+
         from scanners.agent_supply_chain import AgentSupplyChainScanner
 
         # Pro rules are gated by the active license, resolved inside the scanner's
@@ -1208,6 +1249,7 @@ async def handle_call_tool(
                 max_depth=max_depth,
                 quick_mode=bool(quick_mode),
                 min_confidence=str(min_confidence),
+                time_budget=time_budget,
             )
         except Exception as e:
             return [types.TextContent(type="text", text=f"❌ Error scanning agent artifacts: {e}")]

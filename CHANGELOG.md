@@ -55,6 +55,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full suite **484 green** (was 456).
 
 ### Added
+- **MCP rate/size safety — a hostile or accidental giant input can no longer hang an agent's
+  tool call.** Two complementary caps, both surfacing **partial-scan warnings** instead of blocking:
+  (1) `scan_text` (and every in-memory caller) now bounds its input at `MAX_TEXT_CHARS`
+  (1,000,000 chars); a larger string is truncated to the cap — the head, where frontmatter and the
+  opening injection prose live, is still scanned — and the cut is announced, never silent. (2)
+  `scan_directory` gained an optional `time_budget` (seconds): the directory walk is now iterated
+  **lazily** (the previous eager `list(...)` materialization was itself the hang on a huge tree) and
+  the deadline is checked before each candidate file, so a pathological/looping tree stops at the
+  budget with a partial result rather than blocking. The `scan_agent_artifacts` MCP tool applies a
+  **120 s default** budget (override per-call; `0` = unbounded for a deliberate full local scan);
+  the CLI default stays unbounded (`time_budget=None`), so existing behavior is unchanged. A new
+  `ScanResult.warnings` channel (distinct from per-file read `errors`) carries the notices through to
+  the structured payload (`summary.partial` / `summary.warnings`) and the human-readable tool output.
+  28 new tests (`tests/test_mcp_rate_size_safety.py`: truncation + head-still-scanned, the
+  zero-false-partial baseline on a normal input, lazy-walk timeout via a deterministic fake clock,
+  `time_budget` boundary validation, and the `partial`/`warnings` contract end-to-end through both
+  agent MCP tools).
 - **Pro-gating regression suite for the MCP path — the open-core invariant is now CI-locked.**
   A new `tests/test_mcp_pro_gating.py` proves that Pro rules are gated identically through the MCP
   server as on the CLI: the agentic tools (`scan_agent_artifacts`, `scan_text`, `check_mcp_config`)

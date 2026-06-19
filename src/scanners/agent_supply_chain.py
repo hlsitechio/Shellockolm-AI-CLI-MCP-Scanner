@@ -30,6 +30,7 @@ import json
 import os
 import re
 import stat as _stat
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Generator, Set
@@ -1592,6 +1593,13 @@ class AgentSupplyChainScanner(BaseScanner):
     }
 
     MAX_FILE_BYTES = 2_000_000
+    # Rate/size safety cap for the in-memory scan_text() path: a hostile or accidental
+    # giant string would otherwise drive the per-character stealth scans (invisible/
+    # tag-smuggle/bidi/confusable) and the regex passes to O(n) work and balloon memory.
+    # Beyond this many characters the input is truncated and a partial-scan warning is
+    # recorded (never silently cut, never left to hang). Generous — every real agent
+    # artifact (skill, MCP config, n8n export, instruction file) is far smaller.
+    MAX_TEXT_CHARS = 1_000_000
     # Cap on how many per-file read errors we record so a pathological tree (e.g. a
     # share full of locked or long-path files) can't balloon the result. The scan
     # always continues regardless; this only bounds the reported list.
@@ -1636,7 +1644,18 @@ class AgentSupplyChainScanner(BaseScanner):
         max_depth: int = 10,
         quick_mode: bool = False,
         min_confidence: str = "low",
+        time_budget: Optional[float] = None,
     ) -> ScanResult:
+        """Walk ``path`` and scan every agent artifact found.
+
+        ``time_budget`` (seconds), when positive, bounds total wall-clock: the walk is
+        iterated LAZILY and the deadline is checked before each candidate file, so a
+        pathological tree (millions of files, a deep junction loop the depth cap alone
+        wouldn't make *fast*) stops at the budget with a partial-scan warning instead of
+        hanging the caller. ``None``/``0`` (the default) means unbounded — the CLI's
+        existing full-scan behavior. Per-file work is already bounded by
+        ``MAX_FILE_BYTES``, so the deadline never needs to preempt a single file mid-scan.
+        """
         result = self.create_result(path, scan_type="local")
         root = Path(path)
 
@@ -1644,10 +1663,23 @@ class AgentSupplyChainScanner(BaseScanner):
             result.errors.append(f"Path not found: {path}")
             return self.finalize_result(result)
 
-        targets = [root] if root.is_file() else list(self._walk(root, recursive, max_depth))
+        deadline = None
+        if time_budget is not None and time_budget > 0:
+            deadline = time.monotonic() + float(time_budget)
+
+        # Iterate the walk lazily (not list(...)) so the time budget bounds the *walk*
+        # itself, not just the scanning — on a huge tree the eager materialization was
+        # itself the hang.
+        targets = iter([root]) if root.is_file() else self._walk(root, recursive, max_depth)
 
         skills = mcps = workflows = instrs = commands = settings = 0
+        examined = 0
+        timed_out = False
         for fp in targets:
+            if deadline is not None and time.monotonic() > deadline:
+                timed_out = True
+                break
+            examined += 1
             name = fp.name.lower()
             is_skill = name in self.SKILL_NAMES or name.endswith(".skill.md")
             is_mcp = name in self.MCP_NAMES or name.endswith(".mcp.json")
@@ -1689,6 +1721,13 @@ class AgentSupplyChainScanner(BaseScanner):
             elif is_json and '"nodes"' in text and '"connections"' in text:
                 workflows += 1
                 result.findings.extend(self._scan_n8n(fp, text))
+
+        if timed_out:
+            result.warnings.append(
+                f"Scan stopped after the {time_budget}s time budget; {examined} file(s) "
+                "examined before the cutoff — results are PARTIAL. Narrow the path, lower "
+                "max_depth, or raise the time budget for a complete scan."
+            )
 
         # Composite scoring: escalate PI findings that share a file with an exfil
         # sink. Runs before finalize_result so the summary counts reflect the boost.
@@ -1854,12 +1893,26 @@ class AgentSupplyChainScanner(BaseScanner):
         elif not isinstance(text, str):
             text = str(text)
 
+        # Rate/size safety: bound the in-memory input so an oversized (hostile or
+        # accidental) payload can't drive the per-character stealth scans / regex passes
+        # to a hang or blow up memory. Truncate to MAX_TEXT_CHARS and flag a partial scan
+        # below — the head (frontmatter, the opening prose where injection lives) is still
+        # scanned, and the cut is announced, never silent.
+        truncated = len(text) > self.MAX_TEXT_CHARS
+        if truncated:
+            text = text[: self.MAX_TEXT_CHARS]
+
         if kind == "auto":
             kind = self._classify_text_artifact(text, filename)
 
         label = filename if filename else self._TEXT_DEFAULT_NAME[kind]
         fp = Path(label)
         result = self.create_result(label, scan_type="local")
+        if truncated:
+            result.warnings.append(
+                f"Input exceeded {self.MAX_TEXT_CHARS} characters; scanned the first "
+                f"{self.MAX_TEXT_CHARS} and truncated the rest — results are PARTIAL."
+            )
 
         # Match scan_directory's stat keys (all present, only the scanned kind = 1) so
         # the MCP/CLI items-scanned aggregation counts this single artifact correctly.

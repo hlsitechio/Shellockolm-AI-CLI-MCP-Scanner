@@ -70,6 +70,12 @@ class ScanResult:
     end_time: Optional[datetime] = None
     findings: List[ScanFinding] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
+    # Non-fatal partial-scan notices, distinct from `errors` (which are per-file read
+    # failures). A warning means the scan SUCCEEDED but was deliberately bounded — an
+    # over-cap in-memory input truncated, or a directory walk stopped at its time
+    # budget — so the result is partial rather than wrong. Surfaced (never silent) in
+    # CLI/MCP output so a caller knows coverage was limited.
+    warnings: List[str] = field(default_factory=list)
     stats: Dict[str, int] = field(default_factory=dict)
 
     @property
@@ -121,6 +127,7 @@ class ScanResult:
                 for f in self.findings
             ],
             "errors": self.errors,
+            "warnings": self.warnings,
             "stats": self.stats,
         }
 
