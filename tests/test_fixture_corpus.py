@@ -108,7 +108,10 @@ def test_no_undocumented_fixture_files():
     on_disk = {
         p.resolve()
         for p in FIXTURES.rglob("*")
-        if p.is_file() and "__pycache__" not in p.parts
+        # ``legit-corpus/`` is a *separate* false-positive regression corpus with its own
+        # provenance + contract (tests/test_false_positive_regression.py), not part of
+        # this manifest — don't treat its vendored files as orphans here.
+        if p.is_file() and "__pycache__" not in p.parts and "legit-corpus" not in p.parts
     }
     orphans = on_disk - declared - allowed_extra
     assert not orphans, "undocumented fixture files (add them to manifest.json): " + ", ".join(
