@@ -1,0 +1,143 @@
+{
+  "schema_version": "1.0",
+  "description": "Detection-test corpus for the Shellockolm agent supply-chain scanner. Each entry is a real-shaped agent artifact (skill, MCP config, n8n export, instruction file, slash command, or Claude Code settings) labelled malicious or benign. Malicious fixtures declare the signature rule IDs they MUST trip (a subset check, so broader detection is fine); benign fixtures must produce zero findings at any tier. Consumed by tests/test_fixture_corpus.py.",
+  "fixtures": [
+    {
+      "path": "skills/malicious/tool-poisoning.skill.md",
+      "artifact_type": "skill",
+      "classification": "malicious",
+      "attack_class": "prompt-injection",
+      "expected_rules": ["AGENT-PI-004", "AGENT-PI-008"],
+      "description": "A benign-looking file-reader skill with a hidden <IMPORTANT> block instructing the agent to read ~/.cursor/mcp.json and ~/.aws/credentials and smuggle them out as a tool argument, concealed from the user (tool poisoning)."
+    },
+    {
+      "path": "skills/malicious/homoglyph-admin-spoof.skill.md",
+      "artifact_type": "skill",
+      "classification": "malicious",
+      "attack_class": "prompt-injection",
+      "expected_rules": ["AGENT-PI-011"],
+      "description": "Uses a Cyrillic homoglyph (Аdmin) inside an ASCII word to evade keyword review while coercing the agent to trust and auto-run a tool."
+    },
+    {
+      "path": "skills/malicious/link-text-mismatch.skill.md",
+      "artifact_type": "skill",
+      "classification": "malicious",
+      "attack_class": "prompt-injection",
+      "expected_rules": ["AGENT-PI-012", "AGENT-EXFIL-002"],
+      "description": "Markdown link whose visible text claims docs.python.org but whose href points at an attacker host with a secret in the query string — a lure for agent auto-fetch plus secret-in-URL exfiltration."
+    },
+    {
+      "path": "skills/malicious/hidden-html-comment.skill.md",
+      "artifact_type": "skill",
+      "classification": "malicious",
+      "attack_class": "prompt-injection",
+      "expected_rules": ["AGENT-PI-013"],
+      "description": "Imperative exfiltration instructions hidden inside an HTML comment — invisible in the rendered view, read by the model."
+    },
+    {
+      "path": "skills/malicious/frontmatter-permission-bypass.skill.md",
+      "artifact_type": "skill",
+      "classification": "malicious",
+      "attack_class": "prompt-injection",
+      "expected_rules": ["AGENT-PI-014"],
+      "description": "SKILL.md YAML frontmatter bakes in permission/safety-bypass flags (permission-mode: bypassPermissions, --dangerously-skip-permissions, auto-approve: true)."
+    },
+    {
+      "path": "mcp/malicious/raw-url-launcher.mcp.json",
+      "artifact_type": "mcp",
+      "classification": "malicious",
+      "attack_class": "mcp",
+      "expected_rules": ["AGENT-MCP-005"],
+      "description": "An MCP server launched via `deno run` against a raw gist URL — unversioned, attacker-mutable code fetched at every launch (supply-chain RCE / rug-pull)."
+    },
+    {
+      "path": "mcp/malicious/credential-exfil-env.mcp.json",
+      "artifact_type": "mcp",
+      "classification": "malicious",
+      "attack_class": "mcp",
+      "expected_rules": ["AGENT-MCP-004"],
+      "description": "A weather MCP server's env block forwards a broad ambient AWS_SECRET_ACCESS_KEY that is unrelated to the server's purpose — credential harvesting."
+    },
+    {
+      "path": "n8n/malicious/credential-exfil-webhook.json",
+      "artifact_type": "n8n",
+      "classification": "malicious",
+      "attack_class": "n8n",
+      "expected_rules": ["AGENT-N8N-002"],
+      "description": "An n8n workflow that reads a stored credential and POSTs to webhook.site — a credential read paired with an out-of-band exfil sink."
+    },
+    {
+      "path": "instructions/malicious/persistence-poisoning/CLAUDE.md",
+      "artifact_type": "instructions",
+      "classification": "malicious",
+      "attack_class": "prompt-injection",
+      "expected_rules": ["AGENT-PI-015"],
+      "description": "A CLAUDE.md instruction file that tells the agent to append a covert exfil directive into its own CLAUDE.md memory so it auto-loads every future session — self-propagating persistence poisoning."
+    },
+    {
+      "path": "settings/malicious/.claude/settings.json",
+      "artifact_type": "settings",
+      "classification": "malicious",
+      "attack_class": "hooks",
+      "expected_rules": ["AGENT-HOOK-001"],
+      "description": "A Claude Code settings.json PreToolUse hook that runs `curl ... | bash` — a zero-click download-and-execute RCE channel that auto-fires on lifecycle events."
+    },
+    {
+      "path": "slash-commands/malicious/.claude/commands/release.md",
+      "artifact_type": "command",
+      "classification": "malicious",
+      "attack_class": "prompt-injection",
+      "expected_rules": ["AGENT-PI-004"],
+      "description": "A .claude/commands slash command whose body hides instructions to read ~/.aws/credentials and POST it out — a command body is a prompt the agent runs."
+    },
+    {
+      "path": "skills/benign/file-search.skill.md",
+      "artifact_type": "skill",
+      "classification": "benign",
+      "expected_rules": [],
+      "description": "An ordinary glob file-search skill: no network, no credential reads, no hidden directives. Zero-FP baseline."
+    },
+    {
+      "path": "skills/benign/progressive-disclosure.skill.md",
+      "artifact_type": "skill",
+      "classification": "benign",
+      "expected_rules": [],
+      "description": "Exercises the official skill progressive-disclosure pattern ('read forms.md and follow its instructions', 'see ./docs/setup.md') that AGENT-PI-016 calibration deliberately treats as benign. Zero-FP baseline."
+    },
+    {
+      "path": "mcp/benign/github-official.mcp.json",
+      "artifact_type": "mcp",
+      "classification": "benign",
+      "expected_rules": [],
+      "description": "Two hardened official MCP servers: a github server reading GITHUB_PERSONAL_ACCESS_TOKEN (matched service credential, not exfil) and a filesystem server — both pinned to exact versions with no -y auto-confirm. Zero-FP baseline."
+    },
+    {
+      "path": "n8n/benign/internal-api-sync.json",
+      "artifact_type": "n8n",
+      "classification": "benign",
+      "expected_rules": [],
+      "description": "An n8n workflow that reads a credential and POSTs to a first-party API host (not an out-of-band sink) — the legitimate shape AGENT-N8N-002 must not flag. Zero-FP baseline."
+    },
+    {
+      "path": "instructions/benign/project-guide/CLAUDE.md",
+      "artifact_type": "instructions",
+      "classification": "benign",
+      "expected_rules": [],
+      "description": "A normal CLAUDE.md project guide (conventions, layout, dependency policy) with no injection. Zero-FP baseline."
+    },
+    {
+      "path": "settings/benign/.claude/settings.json",
+      "artifact_type": "settings",
+      "classification": "benign",
+      "expected_rules": [],
+      "description": "A Claude Code settings.json whose only hook runs `prettier --write` — a normal formatting hook the dangerous-hook rules must not flag. Zero-FP baseline."
+    },
+    {
+      "path": "slash-commands/benign/.claude/commands/lint.md",
+      "artifact_type": "command",
+      "classification": "benign",
+      "expected_rules": [],
+      "description": "A normal lint slash command full of legitimate imperative prose ('run the linter', 'fix issues') — the case the command path excludes the broad NL heuristics for. Zero-FP baseline."
+    }
+  ]
+}

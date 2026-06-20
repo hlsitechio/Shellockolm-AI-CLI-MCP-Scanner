@@ -55,6 +55,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full suite **484 green** (was 456).
 
 ### Added
+- **Committed detection-test fixture corpus** (`tests/fixtures/`). A tree of real-shaped,
+  defanged agent artifacts — skills, MCP configs, n8n exports, `CLAUDE.md` instruction files,
+  `.claude` slash commands, and Claude Code `settings.json` — each labelled `malicious` or
+  `benign` in a machine-readable `manifest.json` (schema_version 1.0). A new
+  `tests/test_fixture_corpus.py` consumes the manifest and enforces the corpus contract per
+  fixture: malicious fixtures must trip every rule ID they declare (a *subset* check), benign
+  fixtures must produce **zero** findings at **both** the free and Pro tier, and the manifest
+  stays in sync with the on-disk tree (no undocumented files). The corpus doubles as a living,
+  self-describing regression net — a calibration change that breaks a detection or introduces a
+  false positive now fails a named test. `.gitignore`'s blanket `fixtures/` rule is narrowed so
+  this corpus under `tests/` is tracked while ad-hoc local `fixtures/` dirs stay ignored. A
+  README documents the layout and every fixture. (64 new tests; full suite 778 green, was 714.)
 - **MCP rate/size safety — a hostile or accidental giant input can no longer hang an agent's
   tool call.** Two complementary caps, both surfacing **partial-scan warnings** instead of blocking:
   (1) `scan_text` (and every in-memory caller) now bounds its input at `MAX_TEXT_CHARS`

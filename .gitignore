@@ -351,3 +351,7 @@ TODO.md
 TASKS.md
 .notes/
 
+
+# ...but the committed detection-test corpus under tests/ must be tracked.
+!tests/fixtures/
+!tests/fixtures/**
