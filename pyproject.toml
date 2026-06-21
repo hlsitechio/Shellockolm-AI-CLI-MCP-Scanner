@@ -69,6 +69,11 @@ dev = [
     # .pre-commit-hooks.yaml. Required for the suite to collect under a clean
     # `pip install .[dev]`.
     "pyyaml>=6.0",
+    # Property-based redaction tests (tests/test_redaction_properties.py) that
+    # assert secrets are never echoed unredacted in finding output across the
+    # full generated space of every credential shape. The module skips if absent,
+    # but it must be installed for the dev suite to actually run the properties.
+    "hypothesis>=6.0",
 ]
 
 [project.urls]
