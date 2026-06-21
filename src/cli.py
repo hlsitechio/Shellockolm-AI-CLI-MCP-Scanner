@@ -18,7 +18,7 @@ import re
 import inspect
 import tempfile
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime
 from io import StringIO
 
@@ -4872,7 +4872,6 @@ def interactive_shell():
                                 (r'reverse.shell|bind.shell', 'shell backdoor'),
                             ]
 
-                            import re
                             files_scanned = 0
                             malware_hits = []
 
@@ -5708,8 +5707,8 @@ def interactive_shell():
                         # 1. CVE Scan
                         task = progress.add_task("[warning]Running CVE scan...", total=None)
                         try:
-                            scanners = get_all_scanners()
-                            for scanner in scanners:
+                            all_scanners = get_all_scanners()
+                            for scanner in all_scanners:
                                 result = scanner.scan_directory(path, recursive=True, max_depth=10)
                                 if result.findings:
                                     sarif_gen.from_scan_results(result.findings)
@@ -7075,8 +7074,6 @@ def interactive_shell():
                 elif cmd_name == "clawdbot-remediate":
                     # Remediation guide
                     console.print("[title]🤖 Clawdbot/Moltbot Remediation Guide[/title]\n")
-
-                    from rich.panel import Panel
 
                     steps = [
                         (

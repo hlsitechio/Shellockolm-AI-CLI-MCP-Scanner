@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Three latent `UnboundLocalError`/`NameError` crashes in the interactive CLI menu,
+  surfaced by the new ruff lint gate.** In the large interactive-menu function, a
+  module-level name was shadowed by a redundant *local* re-import/assignment further down
+  the same scope, which makes Python treat the name as local throughout — so the earlier
+  use raised `UnboundLocalError` whenever that menu path ran: `re` (a redundant local
+  `import re`), `Panel` (a redundant local `from rich.panel import Panel`), and the
+  `scanners` command (a local `scanners = get_all_scanners()` that shadowed the command
+  function called earlier). The redundant locals were removed and the shadowing variable
+  renamed; all three now resolve to their module-level definition. Also fixed a missing
+  `Dict` import (`cli.py` annotated four functions with `Dict[...]` without importing it —
+  a `NameError` under `typing.get_type_hints()`).
 - **MCP resource reads no longer error over the real transport.** The server's
   `read_resource` callback was typed `uri: str` and called string-only methods
   (`uri.startswith("cve://")`, `uri.replace(...)`), but the MCP framework hands that
@@ -55,6 +66,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full suite **484 green** (was 456).
 
 ### Added
+- **CI: ruff lint gate + Python 3.10–3.14 test matrix.** The test job now runs across
+  the full supported interpreter range (`3.10`, `3.11`, `3.12`, `3.13`, `3.14`) on the
+  existing Windows + Linux matrix. A dedicated, **build-blocking** `lint` job runs
+  `ruff check src`, replacing the prior non-blocking flake8 + black steps. The rule
+  selection and the deferred-backlog `ignore` list live in exactly one place —
+  `[tool.ruff.lint]` in `pyproject.toml` (shared by CI and a local `ruff check src`) — so
+  the gate can't drift. It enforces the high-signal correctness families (`E`/`F`/`W`)
+  clean; the genuine-bug codes (undefined names `F821`/`F823`, redefinitions, syntax
+  errors) are never ignored, while a pre-existing cosmetic backlog (line length,
+  whitespace, placeholder-less f-strings, unused imports, the CLI's intentional deferred
+  imports) is explicitly deferred and ratcheted down over time — never up. `ruff` is now
+  a `dev` dependency and the 3.13/3.14 classifiers were added. A 9-test contract suite
+  (`tests/test_ci_workflow.py`) asserts the matrix coverage, the blocking ruff job, the
+  single-source-of-truth config, that the enforced bug codes stay un-ignored, and (when
+  ruff is installed) that the committed `src/` passes its own gate.
 - **Coverage gate wired into CI.** A non-regression floor on line coverage over `src/`,
   enforced by a dedicated, build-blocking `coverage` job in `.github/workflows/ci.yml`
   (`pytest tests/ --cov=src --cov-report=term-missing --cov-report=xml`). The threshold
