@@ -55,6 +55,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full suite **484 green** (was 456).
 
 ### Added
+- **Coverage gate wired into CI.** A non-regression floor on line coverage over `src/`,
+  enforced by a dedicated, build-blocking `coverage` job in `.github/workflows/ci.yml`
+  (`pytest tests/ --cov=src --cov-report=term-missing --cov-report=xml`). The threshold
+  lives in exactly one place — `[tool.coverage.report] fail_under` in `pyproject.toml`
+  (read by both CI and local `pytest --cov=src` runs) — so it can't drift. Current
+  measured coverage is **30.2%** across the suite; the floor starts at **28%** (a small
+  cushion below the measured value to absorb platform/interpreter variance — a handful of
+  tests are Windows-only and skip on the Linux coverage job) and is ratcheted **up** as
+  real coverage grows, never down. The legacy CLI/GUI/scanner-shim modules dominate the
+  denominator and are largely untested; the agent detection engine and the CLI-helper
+  modules it ships already sit at 93–100%. `coverage` is intentionally kept **out** of the
+  default pytest `addopts`, so the suite still runs with `pytest-cov` absent. A new
+  `tests/test_coverage_gate.py` contract suite (7 tests, stdlib-only file parsing so it
+  collects on every supported Python) asserts the wiring stays intact — the `fail_under`
+  threshold is declared and not gutted below the established floor, CI runs `--cov=src` in
+  a step that can actually fail the build (no `continue-on-error`), and `pytest-cov`
+  genuinely enforces `fail_under` here (an isolated subprocess proves an unreachable floor
+  exits non-zero). **Also added `pyyaml` to the `dev` extras**: the existing workflow
+  contract tests (`test_github_action.py`, `test_pre_commit_hooks.py`) import `yaml`
+  unguarded, but PyYAML was never declared, so a clean `pip install .[dev]` left the suite
+  unable to collect — declaring it makes the gate (and the rest of the suite) reproducibly
+  green in CI. (Full suite **838 green**, was 831.)
 - **Committed detection-test fixture corpus** (`tests/fixtures/`). A tree of real-shaped,
   defanged agent artifacts — skills, MCP configs, n8n exports, `CLAUDE.md` instruction files,
   `.claude` slash commands, and Claude Code `settings.json` — each labelled `malicious` or

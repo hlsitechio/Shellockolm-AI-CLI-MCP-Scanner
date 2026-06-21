@@ -61,6 +61,11 @@ dev = [
     "black>=23.0.0",
     "flake8>=6.0.0",
     "mypy>=1.0.0",
+    # Used by the workflow/contract tests (test_github_action.py,
+    # test_pre_commit_hooks.py) to parse the shipped action.yml /
+    # .pre-commit-hooks.yaml. Required for the suite to collect under a clean
+    # `pip install .[dev]`.
+    "pyyaml>=6.0",
 ]
 
 [project.urls]
@@ -148,8 +153,43 @@ python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
 # Coverage is intentionally NOT in default addopts so the suite runs without
-# pytest-cov installed. Run coverage explicitly with: pytest --cov=src
+# pytest-cov installed. Run the coverage gate explicitly with:
+#     pytest tests/ --cov=src --cov-report=term-missing
+# The fail-under threshold lives in [tool.coverage.report] below, so it is
+# enforced identically whether run locally or in CI (no duplicated number).
 addopts = "-v"
+
+# ---------------------------------------------------------------------------
+# Coverage gate (build-loop task #41).
+#
+# A non-regression floor on line coverage over src/. Current measured coverage
+# is ~30% across 831 tests (the legacy CLI/GUI/scanner-shim modules are largely
+# untested and dominate the denominator; the agent detection engine and the
+# CLI-helper modules it ships sit at 93-100%). The CI floor is set just under
+# the measured value to absorb platform/interpreter variance (a few tests are
+# Windows-only and skip on the Linux coverage job) and is ratcheted UP as real
+# coverage grows — never down. pytest-cov reads `fail_under` from this config,
+# so the threshold is defined in exactly one place.
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+source = ["src"]
+branch = false
+omit = [
+    "*/tests/*",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+fail_under = 28
+precision = 2
+show_missing = false
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@(abc\\.)?abstractmethod",
+]
 
 [tool.mypy]
 python_version = "3.10"
