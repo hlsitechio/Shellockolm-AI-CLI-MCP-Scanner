@@ -686,6 +686,16 @@ Prefer a hand-rolled step? The CLI is the same either way:
 - **Exit codes** — `0` clean / `1` findings / `2` error, with `--fail-on <severity>` to gate the build by severity (`none` = report-only)
 - **Watch mode** for continuous monitoring
 
+**Dogfooding — we scan ourselves.** This repo's own CI has a build-blocking
+[`self-scan`](.github/workflows/ci.yml) job that runs the agent supply-chain
+scanner against this very repository on every run and fails on any **HIGH+**
+finding in a real agent artifact. The deliberate detection corpus under
+`tests/fixtures/` is excluded via the committed [`shellockolm.toml`](shellockolm.toml)
+(it's intentionally malicious test data, not a real threat), and the excluded
+count is always announced — never silently dropped. Agent-only keeps the gate
+deterministic and fully offline, so a red build always means a genuine
+regression in our own artifacts.
+
 </details>
 
 <details>

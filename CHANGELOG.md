@@ -66,6 +66,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full suite **484 green** (was 456).
 
 ### Added
+- **CI: self-scan (dogfooding) gate — shellockolm scans its own repo.** A dedicated,
+  **build-blocking** `self-scan` job in `.github/workflows/ci.yml` runs the flagship agent
+  supply-chain scanner against this repository on every CI run and fails the build on any
+  **HIGH/CRITICAL** finding in a real agent artifact (`shellockolm scan -s agent --fail-on
+  high .`), writing a JSON + SARIF report as an artifact. A committed `shellockolm.toml`
+  excludes ONLY the deliberate detection corpus under `tests/fixtures/` (intentionally
+  malicious/benign test data the detection suite asserts on, not real threats) — and only
+  `ignore`, so a contributor's plain `shellockolm scan .` is never silently narrowed; the
+  excluded count is always announced. The gate is currently green: a self-scan reports
+  **zero** HIGH+ findings across the repo's real artifacts (42 agent items scanned, 36
+  fixture findings correctly excluded), so the "we scan ourselves" claim is true before
+  it's made. Agent-only keeps the gate deterministic and fully offline (bundled rules, no
+  live CVE feed), so a red build always means a genuine regression. A 9-test suite
+  (`tests/test_self_scan.py`) asserts the job wiring (agent scanner, build-blocking,
+  `--fail-on high` ∈ the CLI's accepted choices), the config excludes the fixtures without
+  pinning `scanner`/`fail_on`, and — the real proof — that the repo is clean at HIGH+ today
+  **and** that the exclusion is load-bearing (without it the fixtures trip HIGH+ → exit 1,
+  so the gate is never vacuously green). Full suite **856 green** (was 847).
 - **CI: ruff lint gate + Python 3.10–3.14 test matrix.** The test job now runs across
   the full supported interpreter range (`3.10`, `3.11`, `3.12`, `3.13`, `3.14`) on the
   existing Windows + Linux matrix. A dedicated, **build-blocking** `lint` job runs
