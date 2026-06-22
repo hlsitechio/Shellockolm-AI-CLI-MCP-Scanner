@@ -575,6 +575,14 @@ rule's ID, severity, tier, confidence, attack class, full description, an exampl
 remediation. It is **auto-generated** from the rule catalog by `scripts/generate_rules_md.py`
 (`--check` drift-gates it in CI), so it never falls out of sync with the code.
 
+**Threat model (`THREAT_MODEL.md`).** For the bigger picture — the agentic supply-chain attack
+surface, what the attacker is after, and **exactly which rule covers which attack class** — see
+**[THREAT_MODEL.md](THREAT_MODEL.md)**. It frames the trust boundary your agent crosses when it
+auto-loads skills / MCP servers / instruction files / hooks, then maps every attack class to its
+covering rules and states the tool's honest scope and limits. Like `RULES.md`, the rule-coverage
+section is **auto-generated** from the live catalog by `scripts/generate_threat_model.py`
+(`--check` drift-gates it in CI), so the coverage claims can never over-state what ships.
+
 **Explain one rule (`rules explain`).** `shellockolm rules explain <RULE-ID>` is the deep-dive
 companion to `rules list`: it prints a single rule's severity, tier, confidence, attack class and
 CVSS, then the **full description**, a concrete **example attack**, and the **remediation** — the

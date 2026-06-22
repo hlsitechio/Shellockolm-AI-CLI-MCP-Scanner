@@ -1,4 +1,4 @@
-import { Github, FileText, Shield, Heart, ListChecks } from "lucide-react";
+import { Github, FileText, Shield, Heart, ListChecks, Crosshair } from "lucide-react";
 
 const Footer = () => {
   const links = [
@@ -11,6 +11,11 @@ const Footer = () => {
       label: "Rule Reference",
       href: "https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/blob/main/RULES.md",
       icon: ListChecks,
+    },
+    {
+      label: "Threat Model",
+      href: "https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/blob/main/THREAT_MODEL.md",
+      icon: Crosshair,
     },
     {
       label: "GitHub Scanner",
