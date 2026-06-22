@@ -10,6 +10,7 @@ import {
   Sparkles,
   RefreshCw,
   FileText,
+  Clock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -39,7 +40,12 @@ const freeFeatures: { label: string; detail?: string }[] = [
   { label: "MIT licence", detail: "Fork it. Embed it. Ship it. No strings." },
 ];
 
-const proFeatures: { label: string; detail?: string }[] = [
+// Pro features. `status: "roadmap"` marks capabilities that are NOT yet shipped —
+// they render with a distinct "Roadmap" treatment so the page never presents an
+// unbuilt feature as a live deliverable. Only list a feature as available once the
+// product actually ships it. Available today: the three additive Pro detection
+// rules (AGENT-PRO-001/002/003) gated by the server-validated license.
+const proFeatures: { label: string; detail?: string; status?: "roadmap" }[] = [
   {
     label: "Everything in Free — forever",
     detail: "The open-source repo is never paywalled; Pro adds on top",
@@ -47,24 +53,27 @@ const proFeatures: { label: string; detail?: string }[] = [
   {
     label: "Advanced agent supply-chain Pro rule packs",
     detail:
-      "Indirect & second-order prompt injection, tool/skill shadowing, conversation-context exfiltration",
+      "3 additive detections today — indirect/second-order prompt injection (PRO-001), tool/skill shadowing (PRO-002), conversation-context exfiltration (PRO-003)",
+  },
+  {
+    label: "Priority issue tracker access",
+    detail: "Bug reports and rule requests jump the queue",
+  },
+  {
+    label: "More Pro detection rule packs",
+    detail: "New agent supply-chain detections, shipped to subscribers as they land",
+    status: "roadmap",
   },
   {
     label: "Premium report formats",
     detail: "Executive PDF summaries, compliance-ready JSON, Jira/Linear ticket export",
+    status: "roadmap",
   },
   {
     label: "Continuous monitoring",
     detail:
       "Server-delivered scan runs on a schedule; new findings land in your inbox automatically",
-  },
-  {
-    label: "Early access to new detections",
-    detail: "Pro rule packs ship ahead of open-source merges",
-  },
-  {
-    label: "Priority issue tracker access",
-    detail: "Bug reports and rule requests jump the queue",
+    status: "roadmap",
   },
 ];
 
@@ -74,25 +83,39 @@ interface FeatureRowProps {
   label: string;
   detail?: string;
   iconColor?: string;
+  status?: "roadmap";
 }
 
-const FeatureRow = ({ label, detail, iconColor = "text-success" }: FeatureRowProps) => (
-  <li className="flex items-start gap-3 text-sm">
-    <Check
-      className={`w-4 h-4 shrink-0 mt-0.5 ${iconColor}`}
-      aria-hidden="true"
-    />
-    <span>
-      <span className="text-foreground font-medium">{label}</span>
-      {detail && (
-        <>
-          <span className="text-muted-foreground/70 mx-1">—</span>
-          <span className="text-muted-foreground">{detail}</span>
-        </>
-      )}
-    </span>
-  </li>
-);
+const FeatureRow = ({ label, detail, iconColor = "text-success", status }: FeatureRowProps) => {
+  const isRoadmap = status === "roadmap";
+  const RowIcon = isRoadmap ? Clock : Check;
+  return (
+    <li className="flex items-start gap-3 text-sm">
+      <RowIcon
+        className={`w-4 h-4 shrink-0 mt-0.5 ${isRoadmap ? "text-muted-foreground/60" : iconColor}`}
+        aria-hidden="true"
+      />
+      <span>
+        <span className={`font-medium ${isRoadmap ? "text-foreground/70" : "text-foreground"}`}>
+          {label}
+        </span>
+        {isRoadmap && (
+          <span
+            className="ml-2 inline-flex items-center rounded-full border border-muted-foreground/30 px-1.5 py-0.5 align-middle text-[10px] font-medium uppercase tracking-wide text-muted-foreground/80"
+          >
+            Roadmap
+          </span>
+        )}
+        {detail && (
+          <>
+            <span className="text-muted-foreground/70 mx-1">—</span>
+            <span className="text-muted-foreground">{detail}</span>
+          </>
+        )}
+      </span>
+    </li>
+  );
+};
 
 // ── Main component ────────────────────────────────────────────────────────────
 
@@ -237,9 +260,12 @@ const ProTierSection = () => {
             >
               <Zap className="w-4 h-4 text-primary shrink-0 mt-0.5" aria-hidden="true" />
               <p className="text-primary/90 leading-relaxed">
-                <strong className="font-semibold">Pro adds server-delivered features</strong>{" "}
-                on top of the open-source core. Nothing is removed from the repo.
-                The MIT licence stays.
+                <strong className="font-semibold">
+                  Pro unlocks additive, license-gated detection rule packs
+                </strong>{" "}
+                on top of the open-source core — with premium reports and continuous
+                monitoring on the roadmap. Nothing is removed from the repo; the MIT
+                licence stays.
               </p>
             </div>
 
@@ -250,6 +276,7 @@ const ProTierSection = () => {
                   key={f.label}
                   label={f.label}
                   detail={f.detail}
+                  status={f.status}
                   iconColor={f.label === "Everything in Free — forever" ? "text-gold" : "text-primary"}
                 />
               ))}
