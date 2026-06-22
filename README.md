@@ -570,6 +570,11 @@ shellockolm rules list -s critical     # critical-severity rules
 shellockolm rules list --json | jq '.rules[] | {id, severity, tier}'
 ```
 
+The same catalog is committed as a browsable reference in **[RULES.md](RULES.md)** — every
+rule's ID, severity, tier, confidence, attack class, full description, an example attack, and
+remediation. It is **auto-generated** from the rule catalog by `scripts/generate_rules_md.py`
+(`--check` drift-gates it in CI), so it never falls out of sync with the code.
+
 **Explain one rule (`rules explain`).** `shellockolm rules explain <RULE-ID>` is the deep-dive
 companion to `rules list`: it prints a single rule's severity, tier, confidence, attack class and
 CVSS, then the **full description**, a concrete **example attack**, and the **remediation** — the
