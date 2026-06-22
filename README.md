@@ -47,9 +47,40 @@ curl -fsSL https://raw.githubusercontent.com/hlsitechio/Shellockolm-AI-CLI-MCP-S
 
 </div>
 
-**Then run:** `python src/cli.py scan .` → ✅ **Instant security audit**
+### ⏱️ 60 seconds, three commands, one real finding
 
-🤖 **Want AI integration?** `python src/configure_mcp.py` → Use Shellockolm inside Claude/Copilot!
+Prefer a manual install? From a clone, these three commands take you from zero to
+a real CVE — every command below is exercised by `tests/test_quickstart.py`, so
+it works exactly as written:
+
+```bash
+# 1. Install — exposes the `shellockolm` command
+pip install -e .
+
+# 2. Scan the bundled, intentionally-vulnerable demo project
+shellockolm scan examples/vulnerable-demo
+
+# 3. Dig into the finding it reports
+shellockolm info CVE-2025-29927
+```
+
+Step 2 prints the finding and exits non-zero (findings gate the build):
+
+```
+🚨 VULNERABILITIES DETECTED
+
+┌─ CVE-2025-29927: Next.js Middleware Authorization Bypass
+│  File: examples/vulnerable-demo/package.json
+│  Package: next @ 15.2.2
+│  Fix: 15.2.3
+│  CVSS: 9.1 | Difficulty: Trivial
+│  Production code - ACTION REQUIRED
+└─ Upgrade next to 15.2.3
+```
+
+▶️ **Replay it:** [`docs/quickstart.cast`](docs/quickstart.cast) (asciinema — `asciinema play docs/quickstart.cast`) · 📁 demo: [`examples/vulnerable-demo/`](examples/vulnerable-demo/)
+
+🤖 **Want AI integration?** Add Shellockolm's MCP server to Claude/Cursor/Windsurf — see [Add Shellockolm to your AI agent](#-add-shellockolm-to-your-ai-agent-mcp).
 
 <div align="center">
 
@@ -137,29 +168,35 @@ curl -fsSL https://raw.githubusercontent.com/hlsitechio/Shellockolm-AI-CLI-MCP-S
 ### CLI One-Liners
 ```bash
 # Full security audit
-python src/cli.py scan .
+shellockolm scan .
+
+# Try it now: scan the bundled intentionally-vulnerable demo (finds CVE-2025-29927)
+shellockolm scan examples/vulnerable-demo
 
 # Scan before installing npm package (-s is short for --scanner)
-python src/cli.py scan -s npm ./suspicious-package
+shellockolm scan -s npm ./suspicious-package
 
 # Export to JSON for CI/CD
-python src/cli.py scan . -o security-report.json
+shellockolm scan . -o security-report.json
 
 # Machine-readable JSON to stdout (CI mode) — pipe straight to jq
-python src/cli.py scan -s agent --json ./skills | jq '.summary'
+shellockolm scan -s agent --json ./skills | jq '.summary'
 
 # Live probe a URL for exploits
-python src/cli.py live https://target.com
+shellockolm live https://target.com
 
 # Hunt for a specific CVE
-python src/cli.py info CVE-2025-55182
+shellockolm info CVE-2025-55182
 
 # List CVEs in one category (-c is short for --category)
-python src/cli.py cves -c nextjs
+shellockolm cves -c nextjs
 
 # Launch the interactive shell (also opens when run with no args)
-python src/cli.py shell
+shellockolm shell
 ```
+
+> 💡 Running from a clone without `pip install -e .`? Swap `shellockolm` for
+> `python src/cli.py` in any command above.
 
 ---
 

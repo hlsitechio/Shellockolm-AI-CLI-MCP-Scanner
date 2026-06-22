@@ -54,28 +54,39 @@ python3 src/cli.py
 After installation:
 
 ```bash
-# 1. Navigate to your project
-cd C:\Users\YourName\my-react-app
+# 1. Install — exposes the `shellockolm` command (from a clone)
+pip install -e .
 
-# 2. Run the scan
-python src/cli.py scan .
+# 2. Scan the bundled, intentionally-vulnerable demo project
+shellockolm scan examples/vulnerable-demo
 
-# Or if you added to PATH:
-shellockolm scan .
-
-# 3. See results instantly
+# 3. Dig into the finding it reports
+shellockolm info CVE-2025-29927
 ```
 
-**Example output:**
+> Running from a clone without `pip install -e .`? Use `python src/cli.py scan ...`
+> in place of `shellockolm scan ...`. To scan your own code, point step 2 at it:
+> `shellockolm scan /path/to/my-react-app`.
+
+**Real output of step 2** (the scanner reports the bypass and exits non-zero —
+findings gate the build):
 ```
-╔═══════════════════════════════════════════════════════════╗
-║  Scan Complete - Found 3 vulnerabilities                  ║
-╠═══════════════════════════════════════════════════════════╣
-║  🔴 CRITICAL: React Server Components RCE (CVE-2025-55182)║
-║  🟡 HIGH: Next.js middleware bypass (CVE-2025-29927)      ║
-║  🟠 MEDIUM: API key exposed in .env                        ║
-╚═══════════════════════════════════════════════════════════╝
+🚨 VULNERABILITIES DETECTED
+
+┌─ CVE-2025-29927: Next.js Middleware Authorization Bypass
+│  File: examples/vulnerable-demo/package.json
+│  Package: next @ 15.2.2
+│  Fix: 15.2.3
+│  CVSS: 9.1 | Difficulty: Trivial
+│  Production code - ACTION REQUIRED
+└─ Upgrade next to 15.2.3
+
+═══ INVESTIGATION SUMMARY ═══
+  📊 Total findings:  1
+  🔴 Critical:        1
 ```
+
+> 🎬 Replay the whole session: [`docs/quickstart.cast`](quickstart.cast) — `asciinema play docs/quickstart.cast`.
 
 ---
 

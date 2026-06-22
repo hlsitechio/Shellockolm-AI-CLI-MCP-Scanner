@@ -1,0 +1,16 @@
+{
+  "name": "vulnerable-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Intentionally vulnerable demo project for the Shellockolm 60-second quickstart. DO NOT deploy.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "next": "15.2.2",
+    "react": "19.0.0",
+    "react-dom": "19.0.0"
+  }
+}

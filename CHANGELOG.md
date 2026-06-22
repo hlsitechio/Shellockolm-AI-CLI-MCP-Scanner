@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **60-second quickstart with a real, reproducible finding.** A bundled,
+  intentionally-vulnerable demo project (`examples/vulnerable-demo/`, a Next.js
+  `package.json` pinned to `next@15.2.2`) gives the quickstart a target that
+  deterministically reports **CVE-2025-29927** (middleware authorization bypass,
+  CVSS 9.1) and exits non-zero — so the README's *install → scan → finding in
+  three commands* path (`pip install -e .` → `shellockolm scan
+  examples/vulnerable-demo` → `shellockolm info CVE-2025-29927`) produces a real
+  result, not a placeholder. The demo is not an agent artifact, so the agent-only
+  self-scan CI gate still passes. An asciinema recording of the session
+  (`docs/quickstart.cast`) is generated drift-proof by
+  `scripts/generate_quickstart_cast.py` (with a `--check` CI gate), and
+  `tests/test_quickstart.py` (14 tests) runs the documented commands through the
+  real CLI to prove they work exactly as written.
+
+### Changed
+- **README + `docs/QUICKSTART.md` quickstart now uses the installed `shellockolm`
+  console script** (not `python src/cli.py`) and shows the **real** scanner output.
+  The old QUICKSTART "example output" was fabricated — it invented "3
+  vulnerabilities" and mislabelled CVE-2025-29927 as *HIGH* when the tool reports
+  it *CRITICAL (CVSS 9.1)*; it's replaced with the verified finding text.
+
 ### Fixed
 - **Three latent `UnboundLocalError`/`NameError` crashes in the interactive CLI menu,
   surfaced by the new ruff lint gate.** In the large interactive-menu function, a
