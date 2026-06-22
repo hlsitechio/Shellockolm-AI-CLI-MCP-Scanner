@@ -78,7 +78,7 @@ class NextJSScanner(BaseScanner):
 
     def _scan_package_quick(self, package_json: Path) -> List[ScanFinding]:
         """QUICK SCAN: Only check package.json version"""
-        findings = []
+        findings: List[ScanFinding] = []
         
         data = self.parse_package_json(package_json)
         if not data:
@@ -150,7 +150,7 @@ class NextJSScanner(BaseScanner):
 
     def _scan_package(self, package_json: Path) -> List[ScanFinding]:
         """Scan a single package.json for Next.js vulnerabilities"""
-        findings = []
+        findings: List[ScanFinding] = []
 
         data = self.parse_package_json(package_json)
         if not data:

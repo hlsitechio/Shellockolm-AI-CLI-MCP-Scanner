@@ -33,7 +33,7 @@ import stat as _stat
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Dict, Any, Generator, Set
+from typing import List, Optional, Dict, Any, Generator, Set, Tuple
 
 from .base import BaseScanner, ScanResult, ScanFinding, FindingSeverity
 
@@ -728,7 +728,7 @@ _MCP_SENSITIVE_ENV = [
 _MCP_ENV_REF = re.compile(r"\$\{?(?:env:)?([A-Za-z_][A-Za-z0-9_]*)\}?")
 
 
-def _mcp_sensitive_service(varname: str):
+def _mcp_sensitive_service(varname: str) -> Optional[Tuple[str, ...]]:
     """Service tokens that justify forwarding `varname`, or None if it's not a
     recognized broad ambient credential."""
     name = varname.strip()
@@ -2049,7 +2049,7 @@ class AgentSupplyChainScanner(BaseScanner):
         return bool(attrs & reparse)
 
     def _walk(self, root: Path, recursive: bool, max_depth: int) -> Generator[Path, None, None]:
-        def rec(current: Path, depth: int):
+        def rec(current: Path, depth: int) -> Generator[Path, None, None]:
             if depth > max_depth:
                 return
             try:
@@ -2231,7 +2231,11 @@ class AgentSupplyChainScanner(BaseScanner):
         if not leaked:
             return []
         seen: Set[str] = set()
-        uniq = [x for x in leaked if not (x in seen or seen.add(x))]
+        uniq: List[str] = []
+        for x in leaked:
+            if x not in seen:
+                seen.add(x)
+                uniq.append(x)
         snippet = "env forwards " + ", ".join(uniq[:6]) + " to unrelated server"
         return [self._mk(MCP_ENV_EXFIL_RULE, f"{fp} » server:{name}", "mcp-config", snippet)]
 

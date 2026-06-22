@@ -66,6 +66,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full suite **484 green** (was 456).
 
 ### Added
+- **CI: mypy static type-check gate over the detection-critical core.** A dedicated,
+  **build-blocking** `typecheck` job in `.github/workflows/ci.yml` runs `mypy` on every CI
+  run, and the checked surface — the modular scanners (`src/scanners`, where the agent
+  supply-chain rules live) and the server-authoritative licensing client
+  (`src/licensing.py`) — is now **clean at strict settings** (`disallow_untyped_defs`,
+  `warn_return_any`). Scope, import resolution, and strictness are the single source of
+  truth in `[tool.mypy]` in `pyproject.toml` (`mypy_path = "src"` resolves the project's
+  flat imports from the repo root; `follow_imports = "silent"` keeps the gate scoped to the
+  target files), so CI and a local bare `mypy` enforce exactly the same gate. Like the
+  ruff/coverage gates, the checked surface is a **ratchet** — widened over time, never
+  narrowed. Getting to clean fixed **65 real type errors** with genuine fixes (no blanket
+  `# type: ignore`): widening `create_finding(file_path=…)` to `str | Path` (it already
+  `str()`-converts internally), annotating the per-scanner vulnerability tables
+  (`PACKAGE_VULNERABILITIES`/`COMPROMISED_PACKAGES`/`VULNS`) so their entries stop typing as
+  `object`, restoring the `quick_mode` parameter on three subclass `scan_directory`
+  overrides that had dropped it (an LSP break), widening `ScanResult.stats` to the
+  free-form `Dict[str, Any]` it actually is (it holds string metadata like `min_confidence`
+  alongside int counts), making `parse_package_json` return `None` for a non-object
+  top-level JSON, and rewriting an `object`-typed dedup that used `set.add()`'s return value
+  in a comprehension. Behaviour is unchanged (full suite green before and after). A 7-test
+  contract suite (`tests/test_type_check.py`, stdlib-only config/workflow parsing so it
+  collects on every supported Python) asserts the wiring can't silently rot — mypy is a dev
+  dependency, the core scope + `mypy_path` + strictness flags are present, the `typecheck`
+  job is build-blocking — and, the real proof, that the committed core passes its own gate
+  **and** that the gate has teeth (an int/str return mismatch fails under the repo config).
+  Full suite **870 green** (was 863).
 - **CI: self-scan (dogfooding) gate — shellockolm scans its own repo.** A dedicated,
   **build-blocking** `self-scan` job in `.github/workflows/ci.yml` runs the flagship agent
   supply-chain scanner against this repository on every CI run and fails the build on any

@@ -99,7 +99,7 @@ class ReactRSCScanner(BaseScanner):
         QUICK SCAN: Only check package.json versions against CVE database
         Skips deep file analysis, RSC detection, etc.
         """
-        findings = []
+        findings: List[ScanFinding] = []
 
         data = self.parse_package_json(package_json)
         if not data:
@@ -124,7 +124,7 @@ class ReactRSCScanner(BaseScanner):
 
     def _scan_package(self, package_json: Path) -> List[ScanFinding]:
         """Scan a single package.json for React RSC vulnerabilities"""
-        findings = []
+        findings: List[ScanFinding] = []
 
         data = self.parse_package_json(package_json)
         if not data:
@@ -224,7 +224,7 @@ class ReactRSCScanner(BaseScanner):
 
     def _check_lockfiles(self, project_dir: Path, package_json: Path) -> List[ScanFinding]:
         """Check lockfiles for accurate version information"""
-        findings = []
+        findings: List[ScanFinding] = []
         lockfiles = self.find_lockfiles(project_dir)
 
         for lockfile_name, lockfile_path in lockfiles.items():

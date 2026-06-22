@@ -24,7 +24,7 @@ class SupplyChainScanner(BaseScanner):
     SUPPORTED_PACKAGES = []  # Dynamic - checks known compromised packages
 
     # Known compromised packages and versions
-    COMPROMISED_PACKAGES = {
+    COMPROMISED_PACKAGES: Dict[str, Dict[str, Any]] = {
         # eslint-config-prettier supply chain attack
         "eslint-config-prettier": {
             "malicious_versions": ["8.10.1", "9.1.1", "10.1.6", "10.1.7"],
@@ -110,7 +110,8 @@ class SupplyChainScanner(BaseScanner):
         self,
         path: str,
         recursive: bool = True,
-        max_depth: int = 10
+        max_depth: int = 10,
+        quick_mode: bool = False
     ) -> ScanResult:
         """Scan directory for supply chain attacks and malware"""
         result = self.create_result(path)
@@ -142,7 +143,7 @@ class SupplyChainScanner(BaseScanner):
 
     def _scan_package(self, package_json: Path) -> List[ScanFinding]:
         """Scan a package.json for supply chain issues"""
-        findings = []
+        findings: List[ScanFinding] = []
 
         data = self.parse_package_json(package_json)
         if not data:
@@ -217,7 +218,7 @@ class SupplyChainScanner(BaseScanner):
 
     def _scan_for_indicators(self, root_path: Path) -> List[ScanFinding]:
         """Scan for malware indicator files"""
-        findings = []
+        findings: List[ScanFinding] = []
 
         if not root_path.exists():
             return findings

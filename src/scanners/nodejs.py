@@ -75,7 +75,7 @@ class NodeJSScanner(BaseScanner):
     # Linux-specific CVEs
     LINUX_CVES = ["CVE-2026-21636"]
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.current_platform = platform.system()
         self.system_node_version = self._get_system_node_version()
@@ -138,7 +138,7 @@ class NodeJSScanner(BaseScanner):
 
     def _scan_package(self, package_json: Path) -> List[ScanFinding]:
         """Scan a package.json for Node.js version requirements"""
-        findings = []
+        findings: List[ScanFinding] = []
 
         data = self.parse_package_json(package_json)
         if not data:
@@ -191,7 +191,7 @@ class NodeJSScanner(BaseScanner):
         context: str
     ) -> List[ScanFinding]:
         """Check a Node.js version for vulnerabilities"""
-        findings = []
+        findings: List[ScanFinding] = []
 
         try:
             clean_version = version.lstrip("v").split()[0]

@@ -235,8 +235,24 @@ exclude_lines = [
     "@(abc\\.)?abstractmethod",
 ]
 
+# ---------------------------------------------------------------------------
+# Static type checking (mypy). Like the ruff/coverage gates, this is a ratchet:
+# the checked surface starts at the detection-critical core — the modular
+# scanners (`src/scanners`, where the agent supply-chain rules live) and the
+# server-authoritative licensing client (`src/licensing.py`) — and is widened
+# over time, never narrowed. `mypy_path = "src"` resolves the project's flat
+# imports (e.g. `from vulnerability_database import ...`) from the repo root, and
+# `follow_imports = "silent"` type-checks dependencies for accuracy while keeping
+# the gate scoped to the target files (out-of-scope modules pulled in via imports
+# are not reported). The CI `typecheck` job runs `mypy` build-blocking; a local
+# bare `mypy` checks the same `files` set with no arguments.
+# ---------------------------------------------------------------------------
 [tool.mypy]
 python_version = "3.10"
+mypy_path = "src"
+files = ["src/scanners", "src/licensing.py"]
+follow_imports = "silent"
+ignore_missing_imports = true
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true

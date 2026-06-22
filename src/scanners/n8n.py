@@ -5,7 +5,7 @@ Detects CVE-2026-21858 (Ni8mare - Unauth RCE) and CVE-2025-68613 (Auth RCE)
 
 import re
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 
 try:
@@ -30,7 +30,7 @@ class N8NScanner(BaseScanner):
     SUPPORTED_PACKAGES = ["n8n", "n8n-workflow", "@n8n/config"]
 
     # Version thresholds
-    VULNS = {
+    VULNS: Dict[str, Dict[str, Any]] = {
         "CVE-2026-21858": {
             "package": "n8n",
             "fixed": "1.121.0",
@@ -67,7 +67,8 @@ class N8NScanner(BaseScanner):
         self,
         path: str,
         recursive: bool = True,
-        max_depth: int = 10
+        max_depth: int = 10,
+        quick_mode: bool = False
     ) -> ScanResult:
         """Scan directory for n8n installations"""
         result = self.create_result(path)
@@ -146,7 +147,7 @@ class N8NScanner(BaseScanner):
 
     def _scan_package(self, package_json: Path) -> List[ScanFinding]:
         """Scan a package.json for n8n dependencies"""
-        findings = []
+        findings: List[ScanFinding] = []
 
         data = self.parse_package_json(package_json)
         if not data:

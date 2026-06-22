@@ -129,6 +129,7 @@ class ClawdbotScanner(BaseScanner):
         path: str,
         recursive: bool = True,
         max_depth: int = 10,
+        quick_mode: bool = False,
     ) -> ScanResult:
         """Scan for Clawdbot/Moltbot installations and credential exposure"""
         result = self.create_result(path)
@@ -256,7 +257,7 @@ class ClawdbotScanner(BaseScanner):
         cred_info: Dict[str, Any],
     ) -> List[ScanFinding]:
         """Scan a credential file for exposed tokens"""
-        findings = []
+        findings: List[ScanFinding] = []
 
         try:
             content = file_path.read_text(encoding="utf-8", errors="ignore")
@@ -724,7 +725,7 @@ class ClawdbotScanner(BaseScanner):
 
     def _scan_package(self, package_json: Path) -> List[ScanFinding]:
         """Check package.json for Clawdbot/Moltbot dependencies"""
-        findings = []
+        findings: List[ScanFinding] = []
 
         data = self.parse_package_json(package_json)
         if not data:

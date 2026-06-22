@@ -76,6 +76,33 @@ jobs:
       # so CI and a local `ruff check src` enforce exactly the same gate.
       run: ruff check src
 
+  typecheck:
+    name: Type check (mypy)
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+        cache: 'pip'
+
+    - name: Upgrade pip tooling
+      run: python -m pip install --upgrade pip setuptools wheel
+
+    - name: Install package and dev dependencies
+      run: pip install .[dev]
+
+    - name: Type check with mypy (build-blocking)
+      # BLOCKS the build on any type error in the checked surface. The scope
+      # (src/scanners + src/licensing.py), import resolution, and strictness are
+      # the single source of truth in [tool.mypy] in pyproject.toml (shared with
+      # a local bare `mypy`), so CI and local runs enforce exactly the same gate.
+      # The scope is a ratchet — widened over time, never narrowed.
+      run: mypy
+
   coverage:
     name: Coverage gate
     runs-on: ubuntu-latest
