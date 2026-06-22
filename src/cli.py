@@ -32,7 +32,7 @@ try:
 
     __version__ = _pkg_version("shellockolm")
 except Exception:
-    __version__ = "3.0.0"
+    __version__ = "3.1.0"
 
 
 # ─────────────────────────────────────────────────────────────────

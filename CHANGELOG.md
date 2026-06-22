@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-06-22
+
+The first open-core feature batch since the 3.0.0 packaging fix — additive
+throughout: the OSS core stays free and MIT, and Pro remains a strictly
+additive, license-gated detection rule pack. Highlights:
+
+- **Detection depth** — the agent supply-chain scanner gained new
+  prompt-injection, MCP, n8n, hook, and secret rules, plus a `confidence` axis
+  and composite-severity scoring (see `RULES.md` / `THREAT_MODEL.md`).
+- **CI-grade CLI** — `--json`, `--sarif`, a documented `--fail-on` exit-code
+  contract, `--diff`, `--baseline`, `--table`, a discoverable `shellockolm.toml`
+  config file, and new `rules list|explain` + `doctor` commands, plus a
+  pre-commit hook and a GitHub Action.
+- **Agent-native MCP** — four new tools (`scan_agent_artifacts`, `scan_text`,
+  `explain_finding`, `check_mcp_config`), a real stdio self-test, and per-tier
+  Pro gating + input rate/size safety.
+- **Trust hardening** — a fixture + false-positive regression corpus, a
+  ratcheting coverage floor, build-blocking ruff and strict-mypy gates, a
+  dogfooding self-scan in CI, and generated, drift-checked docs.
+
 ### Added
 - **60-second quickstart with a real, reproducible finding.** A bundled,
   intentionally-vulnerable demo project (`examples/vulnerable-demo/`, a Next.js

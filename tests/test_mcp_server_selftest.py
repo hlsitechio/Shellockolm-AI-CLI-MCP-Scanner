@@ -254,7 +254,7 @@ def _embedded_json(text: str) -> dict:
 
 def test_server_initializes_over_stdio(live):
     assert live["server_name"] == "shellockolm"
-    assert live["server_version"] == "3.0.0"
+    assert live["server_version"] == "3.1.0"
 
 
 def test_all_expected_tools_are_exposed(live):
