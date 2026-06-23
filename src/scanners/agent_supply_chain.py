@@ -490,6 +490,62 @@ _PI017_TOKEN = re.compile(
 _PI017_FENCE = re.compile(r"(?:^|\n)[ \t]*(```+|~~~+)[^\n]*\n.*?\n[ \t]*\1", re.DOTALL)
 
 
+# --- AGENT-PI-002 calibration: a skill documenting its OWN activation conditions ----
+# AGENT-PI-002 ("when the user does X …") is the low-confidence hidden-conditional-
+# trigger heuristic. A legitimate skill, however, *advertises* exactly when it should
+# be used — that is its job — and the official Claude skill-authoring format puts that
+# advertisement in two places that naturally carry the same "when the user does X"
+# shape:
+#   (1) the YAML `description:` field — the activation contract the format tells
+#       authors to phrase as "This skill should be used when the user asks to …"
+#       (matched on the real frontmatter line AND on a documented `description:`
+#       example shown inside a ```yaml fence in skill-authoring docs), and
+#   (2) a "When to use this skill" documentation section — part of the standard
+#       skill scaffold ("## When to use this skill\nWhen the user asks for …").
+# Both are the skill describing *when it applies*, not a covert trigger. A genuine
+# hidden trigger hides in ordinary body prose to dodge review, and its *action*
+# clause ("…then secretly run rm -rf", "…exfiltrate ~/.aws/credentials") is still
+# caught by the high-confidence rules (PI-001 / PI-003 / PI-006 / EXFIL / DESTRUCT).
+# So PI-002 is suppressed when its match sits in one of these activation-doc contexts.
+# Scoped to PI-002 by id — every other rule is unchanged, so a `description:` or a
+# "When to use" section that itself carries a real override / exfil string still fires.
+_DESCRIPTION_KEY_LINE = re.compile(r"^[ \t]*-?[ \t]*[\"']?description[\"']?[ \t]*:", re.IGNORECASE)
+_WHEN_TO_USE_HEADING = re.compile(
+    r"^[ \t]*#{1,6}[ \t]*(?:when\s+to\s+use|when\s+to\s+apply|when\s+this\s+skill|usage)\b[^\n]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_ANY_HEADING = re.compile(r"^[ \t]*#{1,6}[ \t]+\S", re.MULTILINE)
+_ACTIVATION_DOC_RULE_IDS: Set[str] = {"AGENT-PI-002"}
+
+
+def _on_description_key_line(text: str, pos: int) -> bool:
+    """True when the physical line containing offset `pos` is a YAML `description:` key line."""
+    line_start = text.rfind("\n", 0, pos) + 1
+    nl = text.find("\n", pos)
+    line = text[line_start:nl if nl != -1 else len(text)]
+    return _DESCRIPTION_KEY_LINE.match(line) is not None
+
+
+def _in_when_to_use_section(text: str, pos: int) -> bool:
+    """True when offset `pos` falls inside a "When to use" markdown section — from the
+    heading line through the next markdown heading of any level (or end of text)."""
+    for hm in _WHEN_TO_USE_HEADING.finditer(text):
+        if hm.start() > pos:
+            break
+        sec_start = hm.end()
+        nxt = _ANY_HEADING.search(text, sec_start)
+        sec_end = nxt.start() if nxt else len(text)
+        if sec_start <= pos < sec_end:
+            return True
+    return False
+
+
+def _is_activation_doc_context(text: str, pos: int) -> bool:
+    """True when a match at `pos` is the skill documenting its own activation conditions
+    (a `description:` field line or a "When to use" section) — see PI-002 calibration."""
+    return _on_description_key_line(text, pos) or _in_when_to_use_section(text, pos)
+
+
 # Free-text instruction content (skills, tool descriptions)
 PROMPT_INJECTION_RULES: List[AgentRule] = [
     AgentRule(
@@ -2435,7 +2491,18 @@ class AgentSupplyChainScanner(BaseScanner):
         for rule in rules:
             if rule.pattern is None:
                 continue
-            m = rule.pattern.search(text)
+            if rule.id in _ACTIVATION_DOC_RULE_IDS:
+                # PI-002 calibration: skip a match in an activation-documentation context
+                # (the `description:` field or a "When to use" section — where a skill
+                # legitimately advertises when it applies) and report the first match — if
+                # any — in ordinary body prose instead. No-ops when neither context applies.
+                m = next(
+                    (mm for mm in rule.pattern.finditer(text)
+                     if not _is_activation_doc_context(text, mm.start())),
+                    None,
+                )
+            else:
+                m = rule.pattern.search(text)
             if not m:
                 continue
             line_no = text.count("\n", 0, m.start()) + 1

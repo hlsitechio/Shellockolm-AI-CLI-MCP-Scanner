@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`AGENT-PI-002` false positives on a skill's own activation docs** — the
+  low-confidence hidden-conditional-trigger heuristic no longer fires when its
+  "when the user does X" match sits where a skill legitimately *advertises* when
+  it applies: the YAML `description:` field (the official format's activation
+  contract, incl. documented `description:` examples shown inside a ```yaml
+  fence) or a "When to use" section. A genuine covert trigger in ordinary body
+  prose still fires, and a malicious description's action clause is still caught
+  by the high-confidence rules (PI-001/PI-003/PI-006/EXFIL/DESTRUCT). Drops the
+  legit-corpus PI-002 false-positive count from 13 to 0.
+
 ## [3.1.0] - 2026-06-22
 
 The first open-core feature batch since the 3.0.0 packaging fix — additive

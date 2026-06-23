@@ -16,9 +16,15 @@ legitimate skill may ever be rated CRITICAL.** The corpus is scanned at the Pro 
   CI gate is clean).
 
 It deliberately does NOT require zero findings overall: a few low/medium-confidence
-natural-language heuristics (``AGENT-PI-002`` etc.) legitimately match the prose of
-some real skills — that is what the ``confidence`` axis and the high-confidence gate
-exist to handle. Tightening those is separate calibration work, not a corpus failure.
+natural-language heuristics (``AGENT-PI-006``, ``AGENT-DESTRUCT-001``, ``AGENT-PRO-*``)
+legitimately match the prose of some real skills — that is what the ``confidence`` axis
+and the high-confidence gate exist to handle. Tightening those is ongoing calibration
+work, not a corpus failure.
+
+``AGENT-PI-002`` (the hidden-conditional-trigger heuristic) HAS now been calibrated:
+every one of its former hits on this corpus was a skill documenting its own activation
+conditions (the ``description:`` field or a "When to use" section), which the scanner
+suppresses — so the suite below also locks in ``AGENT-PI-002 == 0`` on the corpus.
 """
 
 import sys
@@ -118,6 +124,21 @@ def test_no_high_confidence_blocking_findings():
         "high-confidence CRITICAL/HIGH false positive(s) on legit skills "
         f"(a deterministic rule fired on benign content): {_fmt(offenders)}"
     )
+
+
+def test_pi002_calibrated_out_on_legit_corpus():
+    """AGENT-PI-002 no longer false-positives on the legit corpus.
+
+    Every former PI-002 hit here was a skill documenting its own activation conditions
+    (the ``description:`` frontmatter field or a "When to use" section) — exactly where
+    the official skill format expects "use when the user asks to …" phrasing. The PI-002
+    calibration suppresses those activation-doc contexts while still firing on a covert
+    trigger in ordinary body prose, so the corpus is now clean of PI-002. Locks the win.
+    """
+    scanner = AgentSupplyChainScanner(pro=True)
+    result = scanner.scan_directory(str(CORPUS))
+    pi002 = [f for f in result.findings if f.cve_id == "AGENT-PI-002"]
+    assert not pi002, f"AGENT-PI-002 false positive(s) on legit skills: {_fmt(pi002)}"
 
 
 def test_min_confidence_high_gate_is_clean():
