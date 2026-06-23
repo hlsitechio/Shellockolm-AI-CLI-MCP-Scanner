@@ -16,10 +16,9 @@ legitimate skill may ever be rated CRITICAL.** The corpus is scanned at the Pro 
   CI gate is clean).
 
 It deliberately does NOT require zero findings overall: a few low/medium-confidence
-natural-language heuristics (``AGENT-PI-006``, ``AGENT-DESTRUCT-001``, ``AGENT-PRO-001``)
-legitimately match the prose of some real skills — that is what the ``confidence`` axis
-and the high-confidence gate exist to handle. Tightening those is ongoing calibration
-work, not a corpus failure.
+natural-language heuristics (``AGENT-PI-006``, ``AGENT-DESTRUCT-001``) legitimately match
+the prose of some real skills — that is what the ``confidence`` axis and the high-confidence
+gate exist to handle. Tightening those is ongoing calibration work, not a corpus failure.
 
 ``AGENT-PI-002`` (the hidden-conditional-trigger heuristic) HAS now been calibrated:
 every one of its former hits on this corpus was a skill documenting its own activation
@@ -30,6 +29,12 @@ suppresses — so the suite below also locks in ``AGENT-PI-002 == 0`` on the cor
 matched the bare comparative preposition "instead of" in benign instructional prose, so
 it now only fires on "instead of" when a *qualified existing/trusted* tool is the target
 (the genuine hijack shape) — the suite locks in ``AGENT-PRO-002 == 0`` on the corpus too.
+
+``AGENT-PRO-001`` (indirect injection via fetched content) has likewise been calibrated:
+its former hit was the official skill-creator instruction to read the skill's own bundled
+``SKILL.md`` and follow it — a *local* read, not the remote fetch the rule names — so it now
+fires only on a genuine *external* fetch (remote verb or a URL/web/link/remote indicator),
+leaving local read-and-follow to ``AGENT-PI-016``; the suite locks in ``AGENT-PRO-001 == 0``.
 """
 
 import sys
@@ -160,6 +165,24 @@ def test_pro002_calibrated_out_on_legit_corpus():
     result = scanner.scan_directory(str(CORPUS))
     pro002 = [f for f in result.findings if f.cve_id == "AGENT-PRO-002"]
     assert not pro002, f"AGENT-PRO-002 false positive(s) on legit skills: {_fmt(pro002)}"
+
+
+def test_pro001_calibrated_out_on_legit_corpus():
+    """AGENT-PRO-001 (indirect injection via fetched content) no longer false-positives
+    on the legit corpus.
+
+    The former hit was the official skill-creator *test-running* instruction — "for each
+    test case, read the skill's SKILL.md, then follow its instructions" — which reads a
+    file already in the trusted bundle, not the remote/attacker-controlled page the rule
+    names. PRO-001 now fires only on a genuine *external* fetch (a remote verb, or a URL/
+    web/link/remote indicator in the window); a local read-and-follow is left to PI-016
+    (the staged-payload rule, gated on a suspicious path or covert framing). The corpus is
+    now clean of PRO-001 while genuine remote fetch-then-follow still trips it. Locks the win.
+    """
+    scanner = AgentSupplyChainScanner(pro=True)
+    result = scanner.scan_directory(str(CORPUS))
+    pro001 = [f for f in result.findings if f.cve_id == "AGENT-PRO-001"]
+    assert not pro001, f"AGENT-PRO-001 false positive(s) on legit skills: {_fmt(pro001)}"
 
 
 def test_min_confidence_high_gate_is_clean():
