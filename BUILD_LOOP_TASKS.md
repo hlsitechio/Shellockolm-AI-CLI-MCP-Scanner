@@ -80,5 +80,28 @@ Status legend: `[ ]` open · `[x] (hash)` done · `[~]` blocked (note why).
 
 ---
 
+## Calibration follow-ups (post-backlog)
+
+The 50-task backlog above is complete. Subsequent build-loop runs do focused
+detection-quality work (the scheduled task's fallback): each item is a verified,
+committed false-positive / precision fix or detection expansion, under the same
+contract as the backlog (fixtures + a zero-false-positive benign baseline).
+
+- C1. [x] **AGENT-PI-002 FP on a skill's own activation docs** — the low-confidence
+  hidden-conditional-trigger heuristic no longer false-positives when a skill
+  legitimately *advertises* when it applies: its YAML `description:` field (the
+  official format's activation contract — "This skill should be used when the user
+  asks to …" — incl. a documented `description:` example inside a fenced yaml block)
+  or a "When to use" markdown section (the standard scaffold). Implemented as a
+  finditer-skip in `_apply_rules` scoped to PI-002 by id, so the first match in
+  ordinary body prose still fires and every other rule is unchanged; a covert trigger
+  in body prose still fires and a malicious description's *action* clause is still
+  caught by the high-confidence rules (PI-001/PI-003/PI-006/EXFIL/DESTRUCT). Legit-
+  corpus PI-002 false positives **13 → 0**; 8 new behavioral tests + a corpus lock
+  (`AGENT-PI-002 == 0`); full suite **928 green** (was 920); ruff + strict-mypy clean;
+  self-scan gate still 0 HIGH+. Closes the task #40 PI-002 calibration follow-up. _(commit e8ee2b5)_
+
+---
+
 Completed prior to this backlog (context): AGENT-PI-001…010, MCP structured scan,
 webhook/paste exfil, server-authoritative licensing, CLI menu/README agent-scan surfacing.
