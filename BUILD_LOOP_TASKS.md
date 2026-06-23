@@ -118,6 +118,26 @@ contract as the backlog (fixtures + a zero-false-positive benign baseline).
   ruff + strict-mypy clean; self-scan gate still 0 HIGH+. Continues the task #40 PRO-*
   calibration follow-up. _(commit 3129e3f)_
 
+- C3. [x] **AGENT-PRO-001 FP on the official progressive-disclosure pattern** — the
+  Pro indirect-injection rule names *fetched **external** content* ("fetch a remote /
+  attacker-controlled page, then obey it" — its own example is a `https://evil.tld`
+  fetch), but its broad "<fetch/read/open…> … then <follow/do…>" phrasing also matched
+  two benign **local** shapes: ordinary dev prose (*"read the changed files then run the
+  tests"*) and the official skill-creator test-running instruction (*"for each test
+  case, read the skill's SKILL.md, then follow its instructions"* — the last residual
+  legit-corpus FP). Both read a file already in the trusted bundle; neither is the
+  remote-fetch attack. PRO-001 now fires only on a genuine **external** fetch — a remote
+  verb (fetch/download/retrieve/visit) OR a URL/web/link/remote indicator in the match
+  window — gated by id in `_apply_rules` (same mechanism as C1/C2). A local
+  read-and-follow is left to **AGENT-PI-016** (staged payload, already gated on a
+  suspicious path or covert/override framing), so **no genuine attack is lost**; the rule
+  catalog/description/example are unchanged so RULES.md/THREAT_MODEL.md don't drift.
+  Legit-corpus residual findings **3 → 2** (PRO-001 FP removed). 14 new tests (7
+  external-fetch positives, 5 local read-and-follow negatives incl. the exact corpus
+  phrasing, a gate-helper unit test, and a corpus lock `AGENT-PRO-001 == 0`); full suite
+  **946 green** (was 932); ruff + strict-mypy clean; self-scan gate still 0 HIGH+.
+  Closes the task #40 PRO-001 calibration follow-up. _(commit db9017c)_
+
 ---
 
 Completed prior to this backlog (context): AGENT-PI-001…010, MCP structured scan,
