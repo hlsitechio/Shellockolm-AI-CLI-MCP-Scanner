@@ -16,7 +16,7 @@ legitimate skill may ever be rated CRITICAL.** The corpus is scanned at the Pro 
   CI gate is clean).
 
 It deliberately does NOT require zero findings overall: a few low/medium-confidence
-natural-language heuristics (``AGENT-PI-006``, ``AGENT-DESTRUCT-001``, ``AGENT-PRO-*``)
+natural-language heuristics (``AGENT-PI-006``, ``AGENT-DESTRUCT-001``, ``AGENT-PRO-001``)
 legitimately match the prose of some real skills — that is what the ``confidence`` axis
 and the high-confidence gate exist to handle. Tightening those is ongoing calibration
 work, not a corpus failure.
@@ -25,6 +25,11 @@ work, not a corpus failure.
 every one of its former hits on this corpus was a skill documenting its own activation
 conditions (the ``description:`` field or a "When to use" section), which the scanner
 suppresses — so the suite below also locks in ``AGENT-PI-002 == 0`` on the corpus.
+
+``AGENT-PRO-002`` (tool/skill shadowing) has likewise been calibrated: its former hits
+matched the bare comparative preposition "instead of" in benign instructional prose, so
+it now only fires on "instead of" when a *qualified existing/trusted* tool is the target
+(the genuine hijack shape) — the suite locks in ``AGENT-PRO-002 == 0`` on the corpus too.
 """
 
 import sys
@@ -139,6 +144,22 @@ def test_pi002_calibrated_out_on_legit_corpus():
     result = scanner.scan_directory(str(CORPUS))
     pi002 = [f for f in result.findings if f.cve_id == "AGENT-PI-002"]
     assert not pi002, f"AGENT-PI-002 false positive(s) on legit skills: {_fmt(pi002)}"
+
+
+def test_pro002_calibrated_out_on_legit_corpus():
+    """AGENT-PRO-002 (tool/skill shadowing) no longer false-positives on the legit corpus.
+
+    Both former hits matched the weak comparative preposition "instead of" in ordinary
+    instructional prose — "write a standalone HTML file instead of starting a server"
+    and 'say "This skill should be used when…" instead of "Use this skill when…"' — not a
+    claim to displace a real tool. The rule now only fires on "instead of" when it targets
+    a *qualified existing/trusted* tool ("instead of the built-in/official/real … tool"),
+    so the corpus is clean of PRO-002 while genuine shadowing still trips it. Locks the win.
+    """
+    scanner = AgentSupplyChainScanner(pro=True)
+    result = scanner.scan_directory(str(CORPUS))
+    pro002 = [f for f in result.findings if f.cve_id == "AGENT-PRO-002"]
+    assert not pro002, f"AGENT-PRO-002 false positive(s) on legit skills: {_fmt(pro002)}"
 
 
 def test_min_confidence_high_gate_is_clean():

@@ -1004,7 +1004,26 @@ PRO_RULES: List[AgentRule] = [
     AgentRule(
         "AGENT-PRO-002", "Tool / skill shadowing or redefinition",
         FindingSeverity.HIGH, 7.9,
-        _c(r"\b(override|replace|shadow|supersede|redefine|take\s+precedence\s+over|instead\s+of)\b[^\n]{0,30}\b(tool|function|command|skill|server|capability)\b"),
+        # Two branches. The imperative-verb branch (override/replace/shadow/supersede/
+        # redefine/take precedence over … <tool noun>) is the characteristic shadowing
+        # claim and keeps its exact prior window. The weak comparative preposition
+        # "instead of" was its own alternative in the first branch — but "instead of"
+        # is overwhelmingly benign instructional prose ("write a file instead of
+        # starting a server", 'say X instead of "Use this skill when…"'), so it only
+        # fires now when it targets a *qualified existing/trusted* tool ("instead of
+        # the built-in/official/default/real … tool/command/skill") — the genuine
+        # "use this in place of the real one" hijack shape, not a passing comparison.
+        _c(
+            r"(?:"
+            r"\b(?:override|replace|shadow|supersede|redefine|take\s+precedence\s+over)\b"
+            r"[^\n]{0,30}\b(?:tool|function|command|skill|server|capability)\b"
+            r"|"
+            r"\binstead\s+of\b[^\n]{0,30}"
+            r"\b(?:built-?in|official|real|default|system|standard|trusted|existing|"
+            r"native|genuine|legitimate|actual|original|normal)\b"
+            r"[^\n]{0,20}\b(?:tool|function|command|skill|server|capability)\b"
+            r")"
+        ),
         "Claims to override or replace another tool/skill — tool shadowing, used to hijack a trusted tool's behavior.",
         "Audit the redefinition. Skills should not silently supersede other tools.",
         # medium: "replace/override … function/command" also matches legitimate prose and

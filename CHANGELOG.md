@@ -20,6 +20,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prose still fires, and a malicious description's action clause is still caught
   by the high-confidence rules (PI-001/PI-003/PI-006/EXFIL/DESTRUCT). Drops the
   legit-corpus PI-002 false-positive count from 13 to 0.
+- **`AGENT-PRO-002` false positives on benign "instead of" prose** — the
+  tool/skill-shadowing heuristic treated the weak comparative preposition
+  "instead of" the same as the strong imperative verbs (override/replace/shadow/
+  supersede/redefine/take precedence over), so it fired on ordinary instructional
+  prose ("write a standalone HTML file instead of starting a server", 'say "This
+  skill should be used when…" instead of "Use this skill when…"'). The "instead
+  of" branch now fires only when it targets a *qualified existing/trusted* tool
+  ("instead of the built-in/official/real/default … tool/command/skill") — the
+  genuine "use this in place of the real one" hijack shape. The strong imperative
+  verbs are unchanged, so genuine shadowing still trips the rule. Drops the
+  legit-corpus PRO-002 false-positive count from 2 to 0.
 
 ## [3.1.0] - 2026-06-22
 
