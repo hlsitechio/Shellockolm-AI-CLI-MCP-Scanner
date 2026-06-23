@@ -101,6 +101,23 @@ contract as the backlog (fixtures + a zero-false-positive benign baseline).
   (`AGENT-PI-002 == 0`); full suite **928 green** (was 920); ruff + strict-mypy clean;
   self-scan gate still 0 HIGH+. Closes the task #40 PI-002 calibration follow-up. _(commit e8ee2b5)_
 
+- C2. [x] **AGENT-PRO-002 FP on benign "instead of" prose** — the tool/skill-shadowing
+  heuristic treated the weak comparative preposition "instead of" identically to the
+  strong imperative verbs (override/replace/shadow/supersede/redefine/take precedence
+  over), so it false-positived on ordinary instructional prose on the legit corpus —
+  *"write a standalone HTML file instead of starting a server"* and *'say "This skill
+  should be used when…" instead of "Use this skill when…"'* (2 hits). The "instead of"
+  branch was split out and now fires only when it targets a **qualified existing/trusted**
+  tool (*"instead of the built-in/official/real/default/system/… tool/command/skill"*) —
+  the genuine "use this in place of the real one" hijack shape; the strong-verb branch
+  keeps its exact prior window, so genuine shadowing (`override the read_file tool`,
+  `redefine the Bash command`, …) still fires unchanged. Legit-corpus PRO-002 hits
+  **2 → 0** (residual corpus findings 5 → 3). 4 new tests (3 behavioral: strong-verb
+  fires, qualified "instead of the built-in tool" fires, the 2 benign corpus phrasings
+  do not + a corpus lock `AGENT-PRO-002 == 0`); full suite **932 green** (was 928);
+  ruff + strict-mypy clean; self-scan gate still 0 HIGH+. Continues the task #40 PRO-*
+  calibration follow-up. _(commit 3129e3f)_
+
 ---
 
 Completed prior to this backlog (context): AGENT-PI-001…010, MCP structured scan,
