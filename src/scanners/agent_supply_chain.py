@@ -546,6 +546,65 @@ def _is_activation_doc_context(text: str, pos: int) -> bool:
     return _on_description_key_line(text, pos) or _in_when_to_use_section(text, pos)
 
 
+# --- AGENT-PI-006 calibration: bare "silently" / "covertly" precision gate ----------
+# PI-006 flags an instruction to act covertly and hide it from the user. Its STRONG
+# branches — "(don't|never|without) tell/inform/notify… the user/human", "without …
+# knowing/noticing", "keep this secret/hidden/quiet" — are high precision and always
+# fire (the canonical attack, "do not tell the user, leave it out of your summary",
+# matches one of these). But two alternations are a BARE adverb ("silently" /
+# "covertly"), which also appears in ordinary technical prose describing UI / error
+# behaviour rather than concealment from the user:
+#   • "Update context silently (no visible message)"   ← API docs: no chat surface
+#   • "the call fails silently", "silently ignore the error", "do NOT silently continue"
+# Those describe an *output surface / control-flow* outcome, not hiding an action from
+# the human. So a bare-adverb match is suppressed when it is qualified by a
+# no-visible-surface clause OR directly governs a benign control-flow/error verb. A bare
+# adverb modifying a genuine action ("silently exfiltrate", "covertly upload the env")
+# carries no such qualifier and still fires, and every STRONG branch is untouched.
+# Scoped to PI-006 by id in `_apply_rules` (same mechanism as PI-002 / PRO-001).
+_PI006_BARE_ADVERBS = frozenset({"silently", "covertly"})
+_PI006_BENIGN_SURFACE = re.compile(
+    r"(?:no|without)\s+(?:a\s+|any\s+)?(?:visible\s+|new\s+|chat\s+|extra\s+|"
+    r"user[\s-]*facing\s+)?(?:message|notification|output|prompt|pop-?up|dialog|"
+    r"toast|banner|alert|warning|interruption|ui\b)"
+    r"|not\s+(?:visible|shown|displayed|surfaced)"
+    r"|nothing\s+(?:is\s+)?(?:shown|displayed|visible|surfaced)"
+    r"|no\s+visible",
+    re.IGNORECASE,
+)
+_PI006_BENIGN_VERB = re.compile(
+    r"\b(?:fail(?:s|ed|ing)?|ignor(?:e|es|ed|ing)|skip(?:s|ped|ping)?|"
+    r"continu(?:e|es|ed|ing)|return(?:s|ed|ing)?|retr(?:y|ies|ied|ying)|"
+    r"drop(?:s|ped|ping)?|discard(?:s|ed|ing)?|pass(?:es|ed|ing)?|"
+    r"exit(?:s|ed|ing)?|proceed(?:s|ed|ing)?|succeed(?:s|ed|ing)?|"
+    r"complet(?:e|es|ed|ing)|swallow(?:s|ed|ing)?|suppress(?:es|ed|ing)?|"
+    r"recover(?:s|ed|ing)?|abort(?:s|ed|ing)?|fall[s]?\s*back|no-?ops?)\b",
+    re.IGNORECASE,
+)
+
+
+def _pi006_match_fires(text: str, match: "re.Match[str]") -> bool:
+    """True when an AGENT-PI-006 match should fire. A STRONG (phrase) branch —
+    don't-tell-the-user / without-knowing / keep-secret — always fires. A BARE
+    "silently"/"covertly" adverb is suppressed only when it is a benign UI/control-flow
+    qualifier: a no-visible-surface clause near it, or an error/control-flow verb it
+    directly governs. A bare adverb modifying a real action still fires. See the
+    PI-006 calibration note above."""
+    token = match.group(0).strip().lower()
+    if token not in _PI006_BARE_ADVERBS:
+        return True  # a strong (phrase) branch matched — always a true positive
+    # Bare adverb: a no-visible-surface clause in a tight window means it describes an
+    # absent output channel, not concealment from the user.
+    if _PI006_BENIGN_SURFACE.search(text[max(0, match.start() - 30):match.end() + 40]):
+        return False
+    # A benign control-flow/error verb immediately adjacent (within ~14 chars, either
+    # order) is the verb the adverb actually modifies — "fails silently", "silently
+    # continue" — not an exfil/destructive action.
+    if _PI006_BENIGN_VERB.search(text[max(0, match.start() - 14):match.end() + 14]):
+        return False
+    return True
+
+
 # Free-text instruction content (skills, tool descriptions)
 PROMPT_INJECTION_RULES: List[AgentRule] = [
     AgentRule(
@@ -2570,6 +2629,17 @@ class AgentSupplyChainScanner(BaseScanner):
                 m = next(
                     (mm for mm in rule.pattern.finditer(text)
                      if _is_pro001_external_fetch(text, mm)),
+                    None,
+                )
+            elif rule.id == "AGENT-PI-006":
+                # PI-006 calibration: report the first match that is a genuine covert-action
+                # instruction. The strong concealment branches always qualify; a bare
+                # "silently"/"covertly" qualifying a no-visible-surface clause or an
+                # error/control-flow verb (benign UI/output prose) is skipped. No-ops when
+                # every match is a benign bare-adverb qualifier.
+                m = next(
+                    (mm for mm in rule.pattern.finditer(text)
+                     if _pi006_match_fires(text, mm)),
                     None,
                 )
             else:

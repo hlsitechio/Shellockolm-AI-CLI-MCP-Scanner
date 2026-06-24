@@ -15,10 +15,10 @@ legitimate skill may ever be rated CRITICAL.** The corpus is scanned at the Pro 
 * zero CRITICAL/HIGH findings at ``high`` confidence (== the ``--min-confidence high``
   CI gate is clean).
 
-It deliberately does NOT require zero findings overall: a few low/medium-confidence
-natural-language heuristics (``AGENT-PI-006``, ``AGENT-DESTRUCT-001``) legitimately match
-the prose of some real skills — that is what the ``confidence`` axis and the high-confidence
-gate exist to handle. Tightening those is ongoing calibration work, not a corpus failure.
+It deliberately does NOT require zero findings overall: a low/medium-confidence
+natural-language heuristic (``AGENT-DESTRUCT-001``) legitimately matches the prose of one
+real skill — that is what the ``confidence`` axis and the high-confidence gate exist to
+handle. Tightening that is ongoing calibration work, not a corpus failure.
 
 ``AGENT-PI-002`` (the hidden-conditional-trigger heuristic) HAS now been calibrated:
 every one of its former hits on this corpus was a skill documenting its own activation
@@ -35,6 +35,14 @@ its former hit was the official skill-creator instruction to read the skill's ow
 ``SKILL.md`` and follow it — a *local* read, not the remote fetch the rule names — so it now
 fires only on a genuine *external* fetch (remote verb or a URL/web/link/remote indicator),
 leaving local read-and-follow to ``AGENT-PI-016``; the suite locks in ``AGENT-PRO-001 == 0``.
+
+``AGENT-PI-006`` (covert-action phrasing) has likewise been calibrated: its former hit was a
+bare "silently" in an API-doc line ("Update context silently (no visible message)") that
+describes an absent output surface, not concealment from the user. The bare-adverb branch
+now fires only when the adverb modifies a genuine action; a no-visible-surface clause or a
+benign control-flow/error verb ("fails silently", "silently continue") suppresses it, while
+every STRONG concealment branch (don't-tell-the-user / without-knowing / keep-secret) still
+fires — the suite locks in ``AGENT-PI-006 == 0`` on the corpus too.
 """
 
 import sys
@@ -183,6 +191,23 @@ def test_pro001_calibrated_out_on_legit_corpus():
     result = scanner.scan_directory(str(CORPUS))
     pro001 = [f for f in result.findings if f.cve_id == "AGENT-PRO-001"]
     assert not pro001, f"AGENT-PRO-001 false positive(s) on legit skills: {_fmt(pro001)}"
+
+
+def test_pi006_calibrated_out_on_legit_corpus():
+    """AGENT-PI-006 (covert-action phrasing) no longer false-positives on the legit corpus.
+
+    The former hit was a bare "silently" in an API-doc line of Anthropic's build-mcp-app
+    skill — "Update context silently (no visible message)" — describing that the
+    ``updateModelContext`` method produces no chat surface, NOT an instruction to conceal an
+    action from the user. The bare-adverb branch now fires only when the adverb modifies a
+    genuine action; a no-visible-surface clause or a benign control-flow/error verb suppresses
+    it, while every strong concealment branch still fires. The corpus is now clean of PI-006
+    while genuine covert-action instructions still trip it. Locks the win.
+    """
+    scanner = AgentSupplyChainScanner(pro=True)
+    result = scanner.scan_directory(str(CORPUS))
+    pi006 = [f for f in result.findings if f.cve_id == "AGENT-PI-006"]
+    assert not pi006, f"AGENT-PI-006 false positive(s) on legit skills: {_fmt(pi006)}"
 
 
 def test_min_confidence_high_gate_is_clean():
