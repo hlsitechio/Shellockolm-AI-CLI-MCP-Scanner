@@ -138,6 +138,28 @@ contract as the backlog (fixtures + a zero-false-positive benign baseline).
   **946 green** (was 932); ruff + strict-mypy clean; self-scan gate still 0 HIGH+.
   Closes the task #40 PRO-001 calibration follow-up. _(commit db9017c)_
 
+- C4. [x] **AGENT-PI-006 FP on benign bare-adverb prose** — the covert-action rule's
+  STRONG concealment branches (don't-tell-the-user / without-knowing / keep-secret) are
+  high precision, but two of its alternations are a BARE adverb ("silently"/"covertly")
+  that also matches ordinary technical prose describing *UI / control-flow* behaviour
+  rather than concealment from the user — the last residual legit-corpus FP was
+  Anthropic's build-mcp-app skill documenting an API method as *"Update context silently
+  (no visible message)"*, plus shapes like *"the call fails silently"* and *"do NOT
+  silently continue"*. A bare-adverb match is now suppressed when a no-visible-surface
+  clause sits in its window OR it directly governs a benign control-flow/error verb
+  (`fails`/`ignore`/`skip`/`continue`/`retry`…); a bare adverb modifying a genuine action
+  (*"silently exfiltrate"*, *"covertly upload the env"*) carries no such qualifier and
+  still fires, and every strong branch is untouched (the canonical attack *"do not tell
+  the user, leave it out of your summary"* matches a strong branch, not the adverb).
+  Gated by id in `_apply_rules` — same finditer-skip mechanism as C1/C2/C3. Legit-corpus
+  residual findings **2 → 1** (only the documented `AGENT-DESTRUCT-001` example-in-
+  teaching-text remains). 17 new tests (7 benign-prose negatives incl. the exact API-doc
+  line, 7 genuine-covert-action positives incl. all strong branches, a
+  does-not-blind-strong-branches case, a gate-helper unit test, and a corpus lock
+  `AGENT-PI-006 == 0`); full suite **963 green** (was 946); ruff + strict-mypy clean;
+  self-scan gate still 0 HIGH+. Continues the task #40 / HLS-60 PI-006 calibration
+  follow-up. _(commit ae5796c)_
+
 ---
 
 Completed prior to this backlog (context): AGENT-PI-001…010, MCP structured scan,
