@@ -605,6 +605,40 @@ def _pi006_match_fires(text: str, match: "re.Match[str]") -> bool:
     return True
 
 
+# --- AGENT-DESTRUCT-001 calibration: documented detection-pattern example gate -------
+# DESTRUCT-001 (confidence="medium") flags a destructive shell command (rm -rf ~//*,
+# mkfs, fork bomb, del /f, format c:, > /dev/sd) embedded in an agent artifact, because
+# an agent that RUNS it could wipe data. But the very same literal also appears in
+# legitimate rule-authoring / linting skills as the *value of a detection pattern* — a
+# string the rule is meant to MATCH, never to execute. The residual legit-corpus FP is
+# Anthropic's writing-rules skill teaching a regex pitfall:
+#     pattern: rm -rf /tmp   # Only matches exact path   (a "too specific" example)
+# A value under a match-defining key (pattern:/regex:/match:/grep:/search:) is a string
+# to *detect*, not a command to run, so a DESTRUCT-001 match on such a line is suppressed.
+# This is provably non-blinding: a destructive command an agent would actually EXECUTE
+# lives in body prose ("run `rm -rf ~`") or a hook `command:` value (scanned via
+# _check_hook_commands, not this path) — never as the value of a detection pattern. A
+# pattern key whose value is `rm -rf ~` is itself a DEFENSIVE rule that would flag that
+# command, so suppressing it loses no genuine attack. Scoped to DESTRUCT-001 by id in
+# `_apply_rules` (same finditer-skip mechanism as PI-002 / PRO-001 / PI-006).
+_DESTRUCT_PATTERN_KEY_LINE = re.compile(
+    r"^[ \t]*-?[ \t]*[\"']?(?:pattern|regex|match(?:es)?|grep|search)[\"']?[ \t]*:",
+    re.IGNORECASE,
+)
+
+
+def _destruct_match_fires(text: str, match: "re.Match[str]") -> bool:
+    """True when an AGENT-DESTRUCT-001 match should fire. Suppressed only when the match
+    sits on a detection-pattern key line (pattern:/regex:/match:/grep:/search:) — i.e. the
+    destructive command is the value of a rule the artifact MATCHES with, not a command it
+    executes. A run-this command in body prose or a hook `command:` value still fires. See
+    the DESTRUCT-001 calibration note above."""
+    line_start = text.rfind("\n", 0, match.start()) + 1
+    nl = text.find("\n", match.start())
+    line = text[line_start:nl if nl != -1 else len(text)]
+    return _DESTRUCT_PATTERN_KEY_LINE.match(line) is None
+
+
 # Free-text instruction content (skills, tool descriptions)
 PROMPT_INJECTION_RULES: List[AgentRule] = [
     AgentRule(
@@ -2640,6 +2674,17 @@ class AgentSupplyChainScanner(BaseScanner):
                 m = next(
                     (mm for mm in rule.pattern.finditer(text)
                      if _pi006_match_fires(text, mm)),
+                    None,
+                )
+            elif rule.id == "AGENT-DESTRUCT-001":
+                # DESTRUCT-001 calibration: report the first destructive-command match that
+                # is NOT a documented detection-pattern value (a pattern:/regex:/match: line) —
+                # those are strings the artifact MATCHES with, never executes. A real run-this
+                # command in body prose, or a hook `command:` value, still fires. No-ops when
+                # every match is a detection-pattern example.
+                m = next(
+                    (mm for mm in rule.pattern.finditer(text)
+                     if _destruct_match_fires(text, mm)),
                     None,
                 )
             else:

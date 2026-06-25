@@ -15,10 +15,18 @@ legitimate skill may ever be rated CRITICAL.** The corpus is scanned at the Pro 
 * zero CRITICAL/HIGH findings at ``high`` confidence (== the ``--min-confidence high``
   CI gate is clean).
 
-It deliberately does NOT require zero findings overall: a low/medium-confidence
-natural-language heuristic (``AGENT-DESTRUCT-001``) legitimately matches the prose of one
-real skill — that is what the ``confidence`` axis and the high-confidence gate exist to
-handle. Tightening that is ongoing calibration work, not a corpus failure.
+It deliberately does NOT require zero findings overall: the ``confidence`` axis and the
+high-confidence gate exist precisely so a low/medium-confidence natural-language heuristic
+that matches benign prose does not block a build. That said, the corpus is now clean of
+every rule that historically false-positived here (see the per-rule locks below).
+
+``AGENT-DESTRUCT-001`` (destructive shell command) has been calibrated: its last residual
+hit was Anthropic's ``writing-rules`` skill teaching a regex pitfall — ``pattern: rm -rf /tmp``
+shown as a "too specific" detection-pattern example, i.e. a string the rule *matches with*,
+not a command the agent runs. It now suppresses a match on a detection-pattern key line
+(``pattern:``/``regex:``/``match:``/``grep:``/``search:``) while a genuine run-this command in
+body prose or a hook ``command:`` value still fires — the suite locks in
+``AGENT-DESTRUCT-001 == 0`` on the corpus too.
 
 ``AGENT-PI-002`` (the hidden-conditional-trigger heuristic) HAS now been calibrated:
 every one of its former hits on this corpus was a skill documenting its own activation
@@ -208,6 +216,23 @@ def test_pi006_calibrated_out_on_legit_corpus():
     result = scanner.scan_directory(str(CORPUS))
     pi006 = [f for f in result.findings if f.cve_id == "AGENT-PI-006"]
     assert not pi006, f"AGENT-PI-006 false positive(s) on legit skills: {_fmt(pi006)}"
+
+
+def test_destruct001_calibrated_out_on_legit_corpus():
+    """AGENT-DESTRUCT-001 (destructive shell command) no longer false-positives on the corpus.
+
+    The last residual hit was Anthropic's ``writing-rules`` skill teaching regex pitfalls —
+    ``pattern: rm -rf /tmp  # Only matches exact path`` — a destructive command shown as the
+    *value of a detection pattern* (a string the rule matches with, never executes), not an
+    instruction to run it. DESTRUCT-001 now suppresses a match on a detection-pattern key line
+    (``pattern:``/``regex:``/``match:``/``grep:``/``search:``); a genuine run-this command in body
+    prose, or a hook ``command:`` value, still fires. The corpus is now clean of DESTRUCT-001
+    while genuine destructive commands still trip it. Locks the win.
+    """
+    scanner = AgentSupplyChainScanner(pro=True)
+    result = scanner.scan_directory(str(CORPUS))
+    destruct = [f for f in result.findings if f.cve_id == "AGENT-DESTRUCT-001"]
+    assert not destruct, f"AGENT-DESTRUCT-001 false positive(s) on legit skills: {_fmt(destruct)}"
 
 
 def test_min_confidence_high_gate_is_clean():

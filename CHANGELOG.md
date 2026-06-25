@@ -31,6 +31,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   genuine "use this in place of the real one" hijack shape. The strong imperative
   verbs are unchanged, so genuine shadowing still trips the rule. Drops the
   legit-corpus PRO-002 false-positive count from 2 to 0.
+- **`AGENT-PRO-001` false positive on the official progressive-disclosure
+  pattern** — the Pro indirect-injection rule names *fetched external* content
+  ("fetch a remote page, then obey it"), but its broad "<fetch/read…> … then
+  <follow/do…>" phrasing also matched benign *local* shapes ("read the changed
+  files then run the tests"; the skill-creator's "read the skill's SKILL.md, then
+  follow its instructions"). PRO-001 now fires only on a genuine *external* fetch
+  (a remote verb, or a URL/web/link/remote indicator in the match window); a local
+  read-and-follow is left to `AGENT-PI-016`, so no genuine attack is lost.
+- **`AGENT-PI-006` false positive on benign bare-adverb prose** — the
+  covert-action rule's bare "silently"/"covertly" alternations matched ordinary
+  technical prose describing an output surface or control flow ("Update context
+  silently (no visible message)", "the call fails silently", "do NOT silently
+  continue"). A bare-adverb match is now suppressed when a no-visible-surface
+  clause sits in its window or it directly governs a benign control-flow/error
+  verb; a bare adverb modifying a genuine action ("silently exfiltrate") still
+  fires, and every strong concealment branch is untouched.
+- **`AGENT-DESTRUCT-001` false positive on a documented detection-pattern
+  example** — the destructive-shell-command rule (`rm -rf ~//*`, `mkfs`, fork
+  bomb, `del /f`, `format c:`, `> /dev/sd`) also matched a destructive command
+  shown as the *value of a detection pattern* in a rule-authoring skill
+  (Anthropic's `writing-rules`: `pattern: rm -rf /tmp  # Only matches exact
+  path`) — a string the rule matches with, never executes. A match on a
+  detection-pattern key line (`pattern:`/`regex:`/`match:`/`grep:`/`search:`) is
+  now suppressed, while a run-this command in body prose or a hook `command:`
+  value still fires (provably non-blinding — an executed command never lives as a
+  detection-pattern value). Drops the legit-corpus DESTRUCT-001 false-positive
+  count to 0; no change on the live 1,333-skill corpus, confirming tight scope.
 
 ## [3.1.0] - 2026-06-22
 

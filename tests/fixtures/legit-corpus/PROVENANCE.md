@@ -39,14 +39,16 @@ contract the tests enforce:
 
 ## Why some HIGH findings are *expected* (and allowed)
 
-A handful of **low/medium-confidence** natural-language heuristics (e.g. `AGENT-PI-002`
-"when the user does X", `AGENT-PRO-001/002`, `AGENT-DESTRUCT-001`) do match the prose of
-some legitimate skills — for example a skill whose frontmatter `description:` reads
-*"Use when the user asks to …"*. These are advisory by construction, which is exactly
-why the `confidence` axis and the `--min-confidence high` gate exist. The regression
-suite therefore does **not** require zero findings overall; it requires zero
-*high-confidence* CRITICAL/HIGH and zero CRITICAL. Tightening those low/medium
-heuristics is tracked separately as detection-calibration work, not a corpus failure.
+**Low/medium-confidence** natural-language heuristics can, by construction, match the
+prose of a legitimate skill — for example a skill whose frontmatter `description:` reads
+*"Use when the user asks to …"*. These are advisory, which is exactly why the `confidence`
+axis and the `--min-confidence high` gate exist. The regression suite therefore does
+**not** require zero findings overall; it requires zero *high-confidence* CRITICAL/HIGH
+and zero CRITICAL. Where a specific heuristic was found to fire only on benign shapes
+here, it has since been calibrated and the corpus locked to zero for it — `AGENT-PI-002`,
+`AGENT-PRO-001`, `AGENT-PRO-002`, `AGENT-PI-006`, and `AGENT-DESTRUCT-001` each have a
+named lock in the regression suite. Further calibration of low/medium heuristics is
+tracked as ongoing detection-quality work, not a corpus failure.
 
 ## Updating
 
