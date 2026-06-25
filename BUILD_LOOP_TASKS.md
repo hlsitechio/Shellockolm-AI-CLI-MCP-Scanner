@@ -160,6 +160,30 @@ contract as the backlog (fixtures + a zero-false-positive benign baseline).
   self-scan gate still 0 HIGH+. Continues the task #40 / HLS-60 PI-006 calibration
   follow-up. _(commit ae5796c)_
 
+- C5. [x] **AGENT-DESTRUCT-001 FP on a documented detection-pattern example** — the
+  destructive-shell-command rule (`rm -rf ~//*`, `mkfs`, fork bomb, `del /f`,
+  `format c:`, `> /dev/sd`) is `confidence="medium"` precisely because the same literal
+  can appear as a documented example in legitimate prose. The last residual legit-corpus
+  FP was Anthropic's `writing-rules` skill teaching a regex pitfall —
+  `pattern: rm -rf /tmp  # Only matches exact path` — i.e. the destructive command shown
+  as the **value of a detection pattern** (a string the rule MATCHES with, never one the
+  agent executes). DESTRUCT-001 now suppresses a match that sits on a detection-pattern
+  key line (`pattern:`/`regex:`/`match:`/`grep:`/`search:`), gated by id in `_apply_rules`
+  via the same finditer-skip mechanism as C1–C4. **Provably non-blinding:** a destructive
+  command an agent would actually RUN lives in body prose (*"run `rm -rf ~`"*) or a hook
+  `command:` value (scanned via `_check_hook_commands`, not this path) — never as a
+  detection-pattern value; and a pattern whose value is `rm -rf ~` is itself a DEFENSIVE
+  rule that would flag that command, so no genuine attack is lost. The result is a strict
+  subset of prior findings (the gate only skips matches), so zero new FPs by construction.
+  Legit-corpus DESTRUCT-001 **1 → 0** (corpus now clean of every historically-FP rule);
+  on the live ~/.claude/skills corpus (1,333 skills) it is **4 → 4** — over-suppresses
+  nothing real, only the detection-pattern shape. 18 new tests (7 detection-pattern-example
+  negatives, 7 genuine run-this positives incl. an execute `command:` key, a
+  does-not-blind-body-prose case, an unaffected hook-path case, a gate-helper unit test,
+  and a corpus lock `AGENT-DESTRUCT-001 == 0`); full suite **981 green** (was 963); ruff +
+  strict-mypy clean; self-scan gate still 0 HIGH+. Closes the task #40 / #49 DESTRUCT-001
+  calibration follow-up (the last residual legit-corpus finding). _(commit 490c9c6)_
+
 ---
 
 Completed prior to this backlog (context): AGENT-PI-001…010, MCP structured scan,
