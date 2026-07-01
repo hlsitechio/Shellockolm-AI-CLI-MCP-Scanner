@@ -184,6 +184,34 @@ contract as the backlog (fixtures + a zero-false-positive benign baseline).
   strict-mypy clean; self-scan gate still 0 HIGH+. Closes the task #40 / #49 DESTRUCT-001
   calibration follow-up (the last residual legit-corpus finding). _(commit 490c9c6)_
 
+- C6. [x] **Directory-based instruction/rule format coverage** — the scanner classified
+  instruction files by **filename only** (`INSTRUCTION_NAMES` — CLAUDE.md, .cursorrules, …),
+  so it read only the LEGACY single-file forms and was **blind** to the modern
+  *directory-based* rule formats newer IDEs adopted — meaning an attacker could smuggle a
+  prompt injection into a Cursor Project Rule / Windsurf workspace rule / Cline rule /
+  Copilot path-specific instruction and the scanner would never open it. New
+  `_is_instruction_file()` (with a `_has_dir_chain()` helper) now recognizes, path-wise, the
+  four directory formats — Cursor `.cursor/rules/**/*.mdc`, Windsurf `.windsurf/rules/**/*.md`,
+  Cline `.clinerules/**/*.md`, Copilot `.github/instructions/**/*.instructions.md` — and routes
+  them through the **identical** high-precision instruction-scan path (`_scan_instructions`) as
+  the single-file forms: same trust boundary, same rules, **no new detection logic**, so the
+  existing zero-FP calibration transfers. The two classification call sites (the directory
+  walk + `scan_text`'s `auto` mode) both use it, so a pasted `.mdc`/`.instructions.md` string is
+  also auto-detected as `instructions`. The anchors are tight (the distinctive `.mdc` /
+  `.instructions.md` suffixes + the `.cursor/rules` / `.github/instructions` dir chains), so
+  ordinary Markdown (`docs/foo.md`, `README.md`) and a stray `.mdc` outside a rules dir are
+  never misread as an agent instruction file, and a `.md`/`.mdc` fast-bail keeps the per-file
+  walk gate cheap on the non-match majority. **Verified zero FP on real content**: 8 genuine
+  directory-based rule files found on the machine (Copilot `.instructions.md`, a Cursor `.mdc`,
+  a Windsurf `.md`) all produce **0 findings at the strictest Pro tier**; a canonical injection
+  fires `AGENT-PI-001` in every format while benign rule prose stays clean at BOTH tiers; the
+  self-scan gate is unchanged (42 items, 0 HIGH+). 55 new tests
+  (`tests/test_instruction_dir_formats.py`: `_has_dir_chain` units, positive/negative
+  classification incl. nested + non-`.claude` ancestry, legacy-form regression, per-format e2e
+  detection + `instruction_files_scanned` accounting, stray-`.mdc`/ordinary-Markdown negatives,
+  zero-FP benign baselines at free+Pro, and `scan_text` auto-classification); full suite
+  **1036 green** (was 981); ruff + strict-mypy clean. _(commit 7cf1e32)_
+
 ---
 
 Completed prior to this backlog (context): AGENT-PI-001…010, MCP structured scan,
