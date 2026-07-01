@@ -8,6 +8,11 @@ instructions + ambient credentials + auto-execution.
 Artifacts covered:
   - Agent skills:   SKILL.md / *.skill.md (Claude Code, Cursor, Windsurf, OpenClaw)
   - MCP servers:    mcp.json / *.mcp.json / claude_desktop_config.json
+  - Instruction /   CLAUDE.md, AGENTS.md, GEMINI.md, copilot-instructions.md, the
+    rule files:     legacy single-file forms (.cursorrules / .windsurfrules /
+                    .clinerules) AND the modern directory-based rule formats
+                    (Cursor .cursor/rules/**/*.mdc, Windsurf .windsurf/rules/**/*.md,
+                    Cline .clinerules/**/*.md, Copilot .github/instructions/**/*.instructions.md)
   - n8n workflows:  exported workflow JSON (Code/Function nodes, eval, hardcoded creds)
   - Slash commands: .claude/commands/**/*.md (prompt files the agent runs on demand)
   - Hook configs:   .claude/settings.json / settings.local.json `hooks` blocks
@@ -1788,6 +1793,10 @@ class AgentSupplyChainScanner(BaseScanner):
     SETTINGS_NAMES = {"settings.json", "settings.local.json"}
     # AI instruction files that agents read as standing context — prime
     # prompt-injection targets (Claude Code, Cursor, Windsurf, Copilot, Cline, Gemini).
+    # These are the LEGACY single-file forms; the modern directory-based rule formats
+    # (Cursor .cursor/rules/*.mdc, Windsurf .windsurf/rules/*.md, Cline .clinerules/*.md,
+    # Copilot .github/instructions/*.instructions.md) are matched path-wise in
+    # _is_instruction_file() and route through the identical instruction-scan path.
     INSTRUCTION_NAMES = {
         "agents.md", "claude.md", "gemini.md",
         ".cursorrules", ".windsurfrules", ".clinerules",
@@ -1893,7 +1902,7 @@ class AgentSupplyChainScanner(BaseScanner):
             name = fp.name.lower()
             is_skill = name in self.SKILL_NAMES or name.endswith(".skill.md")
             is_mcp = name in self.MCP_NAMES or name.endswith(".mcp.json")
-            is_instr = name in self.INSTRUCTION_NAMES
+            is_instr = self._is_instruction_file(fp)
             is_command = self._is_command_file(fp)
             is_settings = name in self.SETTINGS_NAMES and self._under_claude(fp)
             is_json = name.endswith(".json")
@@ -2185,7 +2194,7 @@ class AgentSupplyChainScanner(BaseScanner):
                 return "skill"
             if name in self.MCP_NAMES or name.endswith(".mcp.json"):
                 return "mcp"
-            if name in self.INSTRUCTION_NAMES:
+            if self._is_instruction_file(fp):
                 return "instructions"
             if self._is_command_file(fp):
                 return "command"
@@ -2235,6 +2244,58 @@ class AgentSupplyChainScanner(BaseScanner):
         if "commands" not in parts:
             return False
         return ".claude" in parts[:parts.index("commands")]
+
+    @staticmethod
+    def _has_dir_chain(parts: List[str], parent: str, child: str) -> bool:
+        """True if the lowercased path-part list contains `parent` immediately
+        followed by `child` (e.g. ".cursor","rules") — an ancestor directory chain.
+        Scans every position so a rules dir nested anywhere in the tree
+        (`frontend/.cursor/rules/...`) still matches."""
+        return any(
+            parts[i] == parent and parts[i + 1] == child
+            for i in range(len(parts) - 1)
+        )
+
+    @classmethod
+    def _is_instruction_file(cls, fp: Path) -> bool:
+        """True if `fp` is an AI-agent instruction / rules artifact the agent
+        auto-loads as standing context.
+
+        Covers the legacy single-file forms (``INSTRUCTION_NAMES`` — CLAUDE.md,
+        AGENTS.md, .cursorrules, …) AND the modern *directory-based* rule formats that
+        newer IDEs adopted, which the filename-only match would miss entirely:
+
+          - Cursor    ``.cursor/rules/**/*.mdc``      (Project Rules; ``.cursorrules`` is legacy)
+          - Windsurf  ``.windsurf/rules/**/*.md``     (workspace rules dir; ``.windsurfrules`` legacy)
+          - Cline     ``.clinerules/**/*.md``         (directory form; ``.clinerules`` file is legacy)
+          - Copilot   ``.github/instructions/**/*.instructions.md``  (path-specific instructions)
+
+        All route through the SAME high-precision instruction-scan path as the
+        single-file forms — identical trust boundary, identical rules, no new
+        detection logic. The path anchors (``.cursor/rules``, ``.github/instructions``,
+        the distinctive ``.mdc`` / ``.instructions.md`` suffixes) keep ordinary
+        Markdown (``docs/foo.md``) from being misread as an agent instruction file.
+        """
+        name = fp.name.lower()
+        if name in cls.INSTRUCTION_NAMES:
+            return True
+        suffix = fp.suffix.lower()
+        # Only the directory-based rule formats use these suffixes — bail fast otherwise
+        # so the per-file walk gate stays cheap on the overwhelming non-match majority.
+        if suffix not in (".mdc", ".md"):
+            return False
+        parts = [p.lower() for p in fp.parts]
+        if suffix == ".mdc":
+            # Cursor Project Rules live under .cursor/rules/ (possibly nested).
+            return cls._has_dir_chain(parts, ".cursor", "rules")
+        # suffix == ".md"
+        if cls._has_dir_chain(parts, ".windsurf", "rules"):
+            return True  # Windsurf workspace rules
+        if ".clinerules" in parts[:-1]:
+            return True  # Cline directory form (single-file .clinerules is in INSTRUCTION_NAMES)
+        if name.endswith(".instructions.md") and cls._has_dir_chain(parts, ".github", "instructions"):
+            return True  # Copilot path-specific custom instructions
+        return False
 
     @staticmethod
     def _is_reparse_point(entry: Path) -> bool:
