@@ -15,6 +15,7 @@ Artifacts covered:
                     Cline .clinerules/**/*.md, Copilot .github/instructions/**/*.instructions.md)
   - n8n workflows:  exported workflow JSON (Code/Function nodes, eval, hardcoded creds)
   - Slash commands: .claude/commands/**/*.md (prompt files the agent runs on demand)
+  - Subagents:      .claude/agents/**/*.md (the body becomes a delegated agent's system prompt)
   - Hook configs:   .claude/settings.json / settings.local.json `hooks` blocks
                     (shell commands the agent auto-runs on lifecycle events)
 
@@ -1783,7 +1784,7 @@ class AgentSupplyChainScanner(BaseScanner):
         "exfiltration, tool poisoning, and auto-running hook RCE"
     )
     CVE_IDS: List[str] = []
-    SUPPORTED_PACKAGES = ["agent-skill", "mcp-config", "n8n-workflow", "agent-command", "claude-settings"]
+    SUPPORTED_PACKAGES = ["agent-skill", "mcp-config", "n8n-workflow", "agent-command", "agent-subagent", "claude-settings"]
 
     SKILL_NAMES = {"skill.md"}
     MCP_NAMES = {"mcp.json", ".mcp.json", "claude_desktop_config.json"}
@@ -1891,7 +1892,7 @@ class AgentSupplyChainScanner(BaseScanner):
         # itself the hang.
         targets = iter([root]) if root.is_file() else self._walk(root, recursive, max_depth)
 
-        skills = mcps = workflows = instrs = commands = settings = 0
+        skills = mcps = workflows = instrs = commands = subagents = settings = 0
         examined = 0
         timed_out = False
         for fp in targets:
@@ -1904,9 +1905,10 @@ class AgentSupplyChainScanner(BaseScanner):
             is_mcp = name in self.MCP_NAMES or name.endswith(".mcp.json")
             is_instr = self._is_instruction_file(fp)
             is_command = self._is_command_file(fp)
+            is_subagent = self._is_subagent_file(fp)
             is_settings = name in self.SETTINGS_NAMES and self._under_claude(fp)
             is_json = name.endswith(".json")
-            if not (is_skill or is_mcp or is_instr or is_command or is_json):
+            if not (is_skill or is_mcp or is_instr or is_command or is_subagent or is_json):
                 continue
 
             try:
@@ -1934,6 +1936,9 @@ class AgentSupplyChainScanner(BaseScanner):
             elif is_command:
                 commands += 1
                 result.findings.extend(self._scan_command(fp, text, quick_mode))
+            elif is_subagent:
+                subagents += 1
+                result.findings.extend(self._scan_subagent(fp, text, quick_mode))
             elif is_settings:
                 settings += 1
                 result.findings.extend(self._scan_settings(fp, text))
@@ -1969,6 +1974,7 @@ class AgentSupplyChainScanner(BaseScanner):
             "n8n_workflows_scanned": workflows,
             "instruction_files_scanned": instrs,
             "commands_scanned": commands,
+            "subagents_scanned": subagents,
             "claude_settings_scanned": settings,
             "findings_suppressed": suppressed,
             "findings_below_confidence": below_conf,
@@ -2141,6 +2147,7 @@ class AgentSupplyChainScanner(BaseScanner):
             "n8n_workflows_scanned": 0,
             "instruction_files_scanned": 0,
             "commands_scanned": 0,
+            "subagents_scanned": 0,
             "claude_settings_scanned": 0,
         }
         try:
@@ -2198,6 +2205,11 @@ class AgentSupplyChainScanner(BaseScanner):
                 return "instructions"
             if self._is_command_file(fp):
                 return "command"
+            if self._is_subagent_file(fp):
+                # A subagent definition (.claude/agents/**/*.md) is a system-prompt
+                # artifact; it shares the command-class detection path (same rule
+                # subset), so classify it as "command" for the in-memory scan.
+                return "command"
             if name in self.SETTINGS_NAMES:
                 return "settings"
             if name.endswith(".md"):
@@ -2244,6 +2256,25 @@ class AgentSupplyChainScanner(BaseScanner):
         if "commands" not in parts:
             return False
         return ".claude" in parts[:parts.index("commands")]
+
+    @staticmethod
+    def _is_subagent_file(fp: Path) -> bool:
+        """A Claude Code subagent definition: a Markdown file under an `agents/`
+        directory inside a `.claude` tree (`.claude/agents/**/*.md`, project or
+        user-level, and the installed-plugin form `.claude/plugins/.../agents/*.md`,
+        including namespaced subdirectories). A subagent file's frontmatter names the
+        delegated agent and its Markdown body becomes that agent's **system prompt**,
+        so a poisoned definition injects standing instructions into a sub-agent the
+        primary agent hands work to — the same trust boundary as a slash command or
+        skill. Requiring a `.claude` ancestor before `agents/` keeps an unrelated
+        `agents/` folder (e.g. a Python package) from being treated as agent
+        artifacts."""
+        if fp.suffix.lower() != ".md":
+            return False
+        parts = [p.lower() for p in fp.parts]
+        if "agents" not in parts:
+            return False
+        return ".claude" in parts[:parts.index("agents")]
 
     @staticmethod
     def _has_dir_chain(parts: List[str], parent: str, child: str) -> bool:
@@ -2399,9 +2430,37 @@ class AgentSupplyChainScanner(BaseScanner):
         the excluded rules produce only false positives there. Skills and instruction
         files are unaffected and keep the full rule set.
         """
+        return self._scan_command_class(fp, text, quick_mode, "agent-command")
+
+    def _scan_subagent(self, fp: Path, text: str, quick_mode: bool) -> List[ScanFinding]:
+        """Scan a Claude Code subagent definition (.claude/agents/**/*.md).
+
+        A subagent file's Markdown body becomes the delegated agent's **system
+        prompt** — instructions the sub-agent obeys the moment the primary agent
+        hands it work — so it is the same prompt-injection / exfiltration target as a
+        slash command or skill (untrusted instructions crossing a trust boundary into
+        a model). It routes through the identical high-precision command-class path:
+        every structural / stealth-channel check plus the unambiguous malicious-content
+        rules, but EXCLUDING the broad natural-language heuristics
+        (_COMMAND_EXCLUDED_RULE_IDS). A subagent system prompt is dense imperative
+        developer prose — "You are the ARCHITECT…", "Always run the tests", "When the
+        user asks to review code, …" — that those heuristics misread exactly as they
+        do a command file's, so the command calibration transfers; the deterministic
+        rules (hardcoded secret, link/domain mismatch, secret-exfiltration instruction,
+        homoglyph smuggle) still fire, surfacing real issues in third-party agents.
+        """
+        return self._scan_command_class(fp, text, quick_mode, "agent-subagent")
+
+    def _scan_command_class(self, fp: Path, text: str, quick_mode: bool,
+                            artifact: str) -> List[ScanFinding]:
+        """Shared detection path for prompt-shaped artifacts whose body is a dense
+        imperative system prompt (slash commands, subagent definitions): the full
+        structural / stealth suite + unambiguous malicious-content rules, minus the
+        broad NL instruction-shape heuristics that legitimately-imperative prose trips
+        (see ``_COMMAND_EXCLUDED_RULE_IDS``)."""
         rules = [r for r in (PROMPT_INJECTION_RULES + GENERIC_TEXT_RULES + self._extra())
                  if r.id not in _COMMAND_EXCLUDED_RULE_IDS]
-        return self._scan_text_artifact(fp, text, quick_mode, "agent-command", rules)
+        return self._scan_text_artifact(fp, text, quick_mode, artifact, rules)
 
     def _scan_mcp(self, fp: Path, text: str) -> List[ScanFinding]:
         findings = self._check_invisible(text, fp, "mcp-config")

@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Subagent-definition coverage (`.claude/agents/**/*.md`)** — the agent scanner
+  now reads Claude Code subagent definitions, a model-facing artifact class it was
+  previously blind to. A subagent file's frontmatter names a delegated agent and
+  its Markdown body becomes that agent's **system prompt**, so a poisoned definition
+  (project-level or an installed plugin's `.claude/plugins/.../agents/*.md`) injects
+  standing instructions into a sub-agent the primary agent hands work to — the same
+  trust boundary as a slash command or skill. New `_is_subagent_file()` recognizes
+  the path (a `.md` under an `agents/` dir with a `.claude` ancestor, incl. namespaced
+  subdirs) and routes it through the **identical high-precision command-class detection
+  path** as slash commands: every structural / stealth-channel check plus the
+  unambiguous malicious-content rules, but excluding the broad natural-language
+  heuristics (`_COMMAND_EXCLUDED_RULE_IDS`) that a dense imperative system prompt
+  ("You are the ARCHITECT…", "When the user asks to …") would trip — so the command
+  calibration transfers and the deterministic rules (hardcoded secret, link/domain
+  mismatch, secret-exfiltration instruction, homoglyph smuggle) still fire. Both the
+  directory walk (new `subagents_scanned` stat) and `scan_text`'s `auto` mode pick it
+  up. Verified over the machine's real subagent corpus (benign definitions produce
+  zero findings) with a canonical injection / hardcoded secret firing in each location
+  and a differential proof that an excluded rule fires on a *skill* but is suppressed
+  on a *subagent* with the identical body; the self-scan gate stays clean at HIGH+.
+
 ### Fixed
 
 - **`AGENT-PI-002` false positives on a skill's own activation docs** — the
