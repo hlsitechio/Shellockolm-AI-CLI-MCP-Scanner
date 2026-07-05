@@ -212,6 +212,39 @@ contract as the backlog (fixtures + a zero-false-positive benign baseline).
   zero-FP benign baselines at free+Pro, and `scan_text` auto-classification); full suite
   **1036 green** (was 981); ruff + strict-mypy clean. _(commit 7cf1e32)_
 
+- C7. [x] **Claude Code subagent-definition coverage** — the scanner classified
+  model-facing prose by skill/instruction/command names only, so it was **blind** to
+  a whole artifact class: **Claude Code subagent definitions** (`.claude/agents/**/*.md`,
+  project-level or an installed plugin's `.claude/plugins/.../agents/*.md`). A subagent
+  file's frontmatter names a delegated agent and its Markdown body becomes that agent's
+  **system prompt** — instructions the sub-agent obeys the moment the primary agent hands
+  it work — so a prompt injection / secret-exfiltration instruction / hardcoded credential
+  smuggled into one would never be read (same trust boundary as a slash command or skill,
+  zero coverage). New `_is_subagent_file()` recognizes the path (a `.md` under an `agents/`
+  dir with a `.claude` ancestor, incl. namespaced subdirs) and routes it through the
+  **identical high-precision command-class detection path** as slash commands (extracted
+  into a shared `_scan_command_class()`): every structural / stealth-channel check + the
+  unambiguous malicious-content rules, but EXCLUDING the broad NL heuristics
+  (`_COMMAND_EXCLUDED_RULE_IDS`) that a dense imperative system prompt ("You are the
+  ARCHITECT…", "When the user asks to …") trips exactly as a command file's — so the
+  command calibration transfers with **no new detection logic**, and the deterministic
+  rules (hardcoded secret, link/domain mismatch, secret-exfil instruction, homoglyph)
+  still fire. Both the directory walk (new `subagents_scanned` stat, auto-summed by the
+  items-scanned aggregation) and `scan_text`'s `auto` mode pick it up. **Verified on real
+  content**: the machine's real subagent corpus (top-level `~/.claude/agents`) produces
+  0 findings; the command subset halves the noise vs the full skill set on the 1,279-file
+  plugin corpus (24 vs 41 files flagged) by suppressing NL-heuristic FPs on system-prompt
+  prose; a canonical injection (`AGENT-PI-001`) and a hardcoded secret (`AGENT-SECRET-001`)
+  fire in every location; a differential proof shows `AGENT-DESTRUCT-001` fires on a *skill*
+  but is suppressed on a *subagent* with the identical body (command-subset routing);
+  benign definitions stay 0 findings at BOTH tiers; self-scan gate unchanged (42 items,
+  0 HIGH+). 33 new tests (`tests/test_subagent_scan.py`: `_is_subagent_file` classification
+  incl. plugin/namespaced/non-`.claude` cases, command↔subagent mutual exclusivity, per-location
+  e2e detection + stat accounting, the command-subset differential, zero-FP benign baselines
+  at free+Pro, walk selectivity, and `scan_text` auto-classification); full suite **1069 green**
+  (was 1036); ruff + strict-mypy clean; README / MCP tool descriptions / CHANGELOG updated.
+  _(commit 803320c)_
+
 ---
 
 Completed prior to this backlog (context): AGENT-PI-001…010, MCP structured scan,
