@@ -65,7 +65,7 @@ _VALID_CONFIDENCE = {"low", "medium", "high"}
 # ──────────────────────────────────────────────────────────────────────────
 def test_catalog_has_every_rule_with_required_keys():
     catalog = agent_rule_catalog()
-    assert len(catalog) == len(ALL_AGENT_RULES) == 38
+    assert len(catalog) == len(ALL_AGENT_RULES) == 39
     required = {"id", "title", "severity", "tier", "confidence", "cvss",
                 "attack_class", "description", "remediation"}
     for entry in catalog:
@@ -214,8 +214,8 @@ def test_rules_list_json_is_pure_document_with_no_banner():
     doc = json.loads(proc.stdout)
     assert doc["schema_version"] == "1.0"
     assert doc["tool"] == "shellockolm"
-    assert doc["rule_count"] == 38
-    assert len(doc["rules"]) == 38
+    assert doc["rule_count"] == 39
+    assert len(doc["rules"]) == 39
     ids = [r["id"] for r in doc["rules"]]
     assert ids == sorted(ids)
     assert "AGENT-PI-013" in ids and "AGENT-PRO-001" in ids

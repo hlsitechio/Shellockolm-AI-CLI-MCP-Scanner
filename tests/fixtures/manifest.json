@@ -59,6 +59,14 @@
       "description": "A weather MCP server's env block forwards a broad ambient AWS_SECRET_ACCESS_KEY that is unrelated to the server's purpose — credential harvesting."
     },
     {
+      "path": "mcp/malicious/cleartext-remote-transport.mcp.json",
+      "artifact_type": "mcp",
+      "classification": "malicious",
+      "attack_class": "mcp",
+      "expected_rules": ["AGENT-MCP-006"],
+      "description": "A remote MCP server (SSE transport) whose `url` is cleartext http:// to a public host while sending a Bearer token — the transport is MITM-able, exposing the token and letting an on-path attacker inject forged tool results the agent trusts."
+    },
+    {
       "path": "n8n/malicious/credential-exfil-webhook.json",
       "artifact_type": "n8n",
       "classification": "malicious",
@@ -110,6 +118,13 @@
       "classification": "benign",
       "expected_rules": [],
       "description": "Two hardened official MCP servers: a github server reading GITHUB_PERSONAL_ACCESS_TOKEN (matched service credential, not exfil) and a filesystem server — both pinned to exact versions with no -y auto-confirm. Zero-FP baseline."
+    },
+    {
+      "path": "mcp/benign/remote-https-and-local-http.mcp.json",
+      "artifact_type": "mcp",
+      "classification": "benign",
+      "expected_rules": [],
+      "description": "The legitimate remote-transport shapes AGENT-MCP-006 must not flag: two remote servers over https:// and three local cleartext http:// endpoints (localhost, 127.0.0.1, host.docker.internal) where http is ordinary development. Zero-FP baseline."
     },
     {
       "path": "n8n/benign/internal-api-sync.json",

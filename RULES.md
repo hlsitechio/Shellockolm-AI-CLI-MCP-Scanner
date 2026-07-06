@@ -4,7 +4,7 @@
 
 These are the **agent supply-chain** detection rules Shellockolm applies to AI-agent coding artifacts — Claude/agent **skills** (`SKILL.md`), **MCP configs** (`mcp.json`, `.mcp.json`, `claude_desktop_config.json`), **n8n** workflow exports, AI **instruction files** (`CLAUDE.md` / `AGENTS.md` / `.cursorrules` / Copilot instructions), `.claude/` **settings hooks**, and `.claude/commands/` **slash commands**. They detect prompt injection, secret exfiltration, tool poisoning, auto-running hook RCE, and other agentic-era supply-chain attacks.
 
-**38 rules** — **35 free** (always on, MIT/OSS) and **3 Pro** (run only with an active Shellockolm Pro license; listed here for reference).
+**39 rules** — **36 free** (always on, MIT/OSS) and **3 Pro** (run only with an active Shellockolm Pro license; listed here for reference).
 
 **Confidence axis** (independent of severity):
 
@@ -28,6 +28,7 @@ These are the **agent supply-chain** detection rules Shellockolm applies to AI-a
 | [`AGENT-MCP-003`](#agent-mcp-003) | HIGH | free | medium | mcp-config | Dangerous execution primitive in MCP config |
 | [`AGENT-MCP-004`](#agent-mcp-004) | HIGH | free | high | mcp-config | Broad host credential forwarded to an unrelated MCP server |
 | [`AGENT-MCP-005`](#agent-mcp-005) | HIGH | free | high | mcp-config | MCP server launches code from a raw URL / gist / paste / IP literal |
+| [`AGENT-MCP-006`](#agent-mcp-006) | MEDIUM | free | high | mcp-config | Remote MCP server uses cleartext http:// transport |
 | [`AGENT-N8N-001`](#agent-n8n-001) | HIGH | free | high | n8n-workflow | n8n Code/Function node runs shell or eval |
 | [`AGENT-N8N-002`](#agent-n8n-002) | HIGH | free | high | n8n-workflow | n8n workflow pairs a credential read with an external exfil sink |
 | [`AGENT-OBF-001`](#agent-obf-001) | HIGH | free | high | obfuscation | Obfuscated payload (base64 decode then execute) |
@@ -303,6 +304,23 @@ An mcp.json server launches code straight from a raw/paste host or IP literal �
 ```
 
 **Remediation:** Don't launch an MCP server from a raw / gist / paste URL or a bare IP. Install it from a trusted registry pinned to an exact version, or vendor and review the code locally; reference servers by package name, not by a mutable URL.
+
+#### AGENT-MCP-006
+
+**Remote MCP server uses cleartext http:// transport**
+
+- **Severity:** MEDIUM &nbsp;·&nbsp; **Tier:** free &nbsp;·&nbsp; **Confidence:** high &nbsp;·&nbsp; **CVSS:** 5.9 &nbsp;·&nbsp; **Attack class:** mcp-config
+
+The MCP server is a REMOTE endpoint reached over cleartext transport — an http:// or ws:// URL to a public host — so its JSON-RPC traffic is unencrypted and unauthenticated on the wire. An on-path attacker can read any bearer token or API key the client sends in the transport headers, and — the sharper risk for an agent — rewrite the server's responses in flight: forged tool RESULTS and tool DEFINITIONS injected over cleartext become prompt injection the agent trusts. Local development endpoints (localhost, 127.0.0.1, private / link-local IPs, *.local / *.internal hosts) are not flagged.
+
+**Example attack**
+
+```text
+A remote MCP server is configured over cleartext http:// to a public host, so an on-path attacker can read the auth token and inject forged tool results the agent then trusts:
+  "type": "sse", "url": "http://mcp.example.com:8080/sse"
+```
+
+**Remediation:** Use https:// (or wss://) for any remote MCP endpoint so the transport is encrypted and the server authenticated. If the server is genuinely local, address it as localhost / 127.0.0.1. Never send tokens to a remote MCP server over http://.
 
 ### n8n-workflow
 

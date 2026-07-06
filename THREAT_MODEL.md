@@ -4,7 +4,7 @@
 
 AI coding agents now **auto-load and trust** a chain of artifacts they did not author: skills, MCP servers, instruction files, lifecycle hooks, slash commands, and workflow exports — pulled from marketplaces, repositories, and teammates. Each is read by the model (or executed on your machine) with the agent's full privileges. A single poisoned artifact turns that trust into prompt-injection, secret exfiltration, tool poisoning, or remote code execution. **This is the agentic supply chain, and it is the attack surface Shellockolm defends.**
 
-Shellockolm ships **38 agent supply-chain rules** (**35 free**, always-on MIT/OSS, and **3 Pro**) across **9 attack classes**. This page maps each class to the rules that cover it; [`RULES.md`](RULES.md) has every rule's full description, example attack, and remediation.
+Shellockolm ships **39 agent supply-chain rules** (**36 free**, always-on MIT/OSS, and **3 Pro**) across **9 attack classes**. This page maps each class to the rules that cover it; [`RULES.md`](RULES.md) has every rule's full description, example attack, and remediation.
 
 ## The trust boundary
 
@@ -42,7 +42,7 @@ Which rules cover which attack class, generated from the live catalog:
 | [hardcoded-secret](#hardcoded-secret) | 2 | 2 | 0 | HIGH |
 | [destructive-command](#destructive-command) | 1 | 1 | 0 | HIGH |
 | [settings-hook](#settings-hook) | 3 | 3 | 0 | CRITICAL, HIGH |
-| [mcp-config](#mcp-config) | 5 | 5 | 0 | CRITICAL, HIGH, MEDIUM |
+| [mcp-config](#mcp-config) | 6 | 6 | 0 | CRITICAL, HIGH, MEDIUM |
 | [n8n-workflow](#n8n-workflow) | 2 | 2 | 0 | HIGH |
 
 ## Threats and the rules that cover them
@@ -170,6 +170,7 @@ _Impact._ RCE on your host and/or credential theft the moment the agent starts t
 | [`AGENT-MCP-003`](RULES.md#agent-mcp-003) | HIGH | free | medium | Dangerous execution primitive in MCP config |
 | [`AGENT-MCP-004`](RULES.md#agent-mcp-004) | HIGH | free | high | Broad host credential forwarded to an unrelated MCP server |
 | [`AGENT-MCP-005`](RULES.md#agent-mcp-005) | HIGH | free | high | MCP server launches code from a raw URL / gist / paste / IP literal |
+| [`AGENT-MCP-006`](RULES.md#agent-mcp-006) | MEDIUM | free | high | Remote MCP server uses cleartext http:// transport |
 
 ### n8n-workflow
 

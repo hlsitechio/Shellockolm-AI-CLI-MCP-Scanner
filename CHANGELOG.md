@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`AGENT-MCP-006` — remote MCP server over cleartext `http://` / `ws://` transport**
+  (MEDIUM, confidence high) closes a deliberate gap in `AGENT-MCP-005`, which inspects
+  a *local* server's launch command and ignores the transport `url` field. A **remote**
+  MCP server configured with a `url` / `serverUrl` / `endpoint` over an unencrypted
+  scheme to a **public** host sends its JSON-RPC traffic in the clear: an on-path
+  attacker can read any bearer token in the transport headers **and** — the sharper
+  risk for an agent — rewrite the server's responses in flight, so forged tool
+  **results** and tool **definitions** injected over the wire become prompt injection
+  the agent trusts. Detection is structural (parse the URL, classify scheme + host):
+  it fires only on `http`/`ws` to a genuinely public host/IP, and never on local
+  development — `localhost`, `127.0.0.1`, `[::1]`, RFC1918 / link-local IPs, and
+  `*.local` / `*.internal` / `*.lan` / `host.docker.internal` are all excluded (cleartext
+  to a local server is ordinary). `https://` / `wss://` and ordinary stdio servers are
+  untouched. The rendered finding drops the URL's userinfo and query string so it never
+  re-emits an embedded token. Verified with a malicious + benign fixture pair and 30 new
+  tests (per-field-key positives, public-IP + `ws://` coverage, redaction, the full
+  local/private zero-FP matrix, an MCP-005-launcher-path differential, and the
+  `_is_local_or_private_host` helper units); the self-scan gate stays clean at HIGH+.
 - **Subagent-definition coverage (`.claude/agents/**/*.md`)** — the agent scanner
   now reads Claude Code subagent definitions, a model-facing artifact class it was
   previously blind to. A subagent file's frontmatter names a delegated agent and
