@@ -245,6 +245,33 @@ contract as the backlog (fixtures + a zero-false-positive benign baseline).
   (was 1036); ruff + strict-mypy clean; README / MCP tool descriptions / CHANGELOG updated.
   _(commit 803320c)_
 
+- C8. [x] **AGENT-MCP-006: cleartext remote MCP transport** — detection expansion closing
+  a deliberate gap in `AGENT-MCP-005` (which inspects a LOCAL server's launch command +
+  args and explicitly ignores the transport `url` field). A **remote** MCP server —
+  configured with a `url` / `serverUrl` / `endpoint` (the HTTP / SSE / streamable-http
+  transports) over a cleartext scheme (`http://` / `ws://`) to a **public** host — sends
+  its JSON-RPC traffic unencrypted: an on-path attacker can read any bearer token in the
+  transport headers AND, the sharper agent risk, rewrite the server's responses in flight,
+  so forged tool **results** and tool **definitions** injected over the wire become prompt
+  injection the agent trusts. New MEDIUM / confidence-high rule (deterministic: parse the
+  URL, classify scheme + host). Fires ONLY on `http`/`ws` to a genuinely public host/IP;
+  a new `_is_local_or_private_host()` helper (mirrors `_is_public_ip_literal`'s `ipaddress`
+  classification) excludes all local development — `localhost`, `127.0.0.1`, `[::1]`,
+  RFC1918 / link-local IPs, and the reserved private-use hostname suffixes
+  `*.local` / `*.internal` / `*.lan` / `host.docker.internal`. `https://` / `wss://` and
+  ordinary stdio servers (no url field) are untouched, and the rule does NOT hijack the
+  MCP-005 launcher-path (a raw URL in `args` stays MCP-005's — differential-tested). The
+  rendered finding drops the URL's userinfo (`user:pass@`) and query/fragment so it never
+  re-emits an embedded token. Fully wired into the catalog (`rules list`/`rules explain`),
+  RULES.md + THREAT_MODEL.md (regenerated; drift `--check` gates green; rule count 38→39,
+  free 35→36). Malicious fixture (SSE server, cleartext `url` + Bearer token) + benign
+  fixture (two https remotes + three local http endpoints) added to the corpus. 30 new
+  tests (`tests/test_mcp_cleartext_transport.py`: per-field-key positives, `ws://` + public-IP
+  coverage, userinfo redaction, the full local/private/mDNS zero-FP matrix, an
+  MCP-005-launcher differential, `_is_local_or_private_host` units, catalog/example
+  wiring) + the catalog-count bump; full suite **1124 green** (was 1069); ruff +
+  strict-mypy clean; self-scan gate still 0 HIGH+ (MEDIUM, below the gate). _(commit fe9903b)_
+
 ---
 
 Completed prior to this backlog (context): AGENT-PI-001…010, MCP structured scan,
