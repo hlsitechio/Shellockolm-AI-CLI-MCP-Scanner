@@ -272,6 +272,32 @@ contract as the backlog (fixtures + a zero-false-positive benign baseline).
   wiring) + the catalog-count bump; full suite **1124 green** (was 1069); ruff +
   strict-mypy clean; self-scan gate still 0 HIGH+ (MEDIUM, below the gate). _(commit fe9903b)_
 
+- C9. [x] **AGENT-MCP-007: blanket MCP tool auto-approval** — detection expansion closing
+  a permission-hygiene gap in the structured MCP path (MCP-004/005/006 cover env-exfil,
+  raw-URL launch, and cleartext transport, but nothing covered auto-approval). Several MCP
+  clients (Cline, Roo Code, Cursor, Windsurf) let a per-server config pre-approve tool calls
+  so the agent runs them **without** the per-call human confirmation that is the primary
+  guardrail against a malicious/compromised server. New MEDIUM / confidence-high rule
+  (deterministic structural parse). Fires **only** on the BLANKET form — a wildcard `"*"`
+  or a boolean `true` on an `alwaysAllow` / `autoApprove` setting (spelling variants
+  `always_allow` / `auto-approve` / `autoApproved` / `autoAllow` / `autoAccept` /
+  `autoExecute` / `autoRun` normalized) — which auto-approves every tool the server exposes,
+  including any tool a later update silently adds (a rug-pull); the MCP analogue of a
+  `SKILL.md` `bypassPermissions` frontmatter flag (PI-014) or an auto-running hook (HOOK-*).
+  An explicit **scoped named allow-list** (`alwaysAllow: ["read_file"]`), an empty list, a
+  falsey value, a plausible tool named `all_files`, or a bare integer `1` are the user's
+  deliberate/safe choices and are **never** flagged (`_mcp_blanket_autoapprove` helper).
+  Wired into the catalog (`rules list`/`rules explain`), RULES.md + THREAT_MODEL.md
+  (regenerated; drift `--check` gates green; rule count 39→40, free 36→37). Malicious fixture
+  (wildcard list + `autoApprove: true`) + benign fixture (named allow-lists + empty + false)
+  added to the corpus. **Verified zero over-firing across the machine's 5 real MCP configs**
+  and self-scan gate still 0 HIGH+ (MEDIUM, below the gate). 58 new tests
+  (`tests/test_mcp_autoapprove.py`: wildcard-list/scalar + boolean-true + spelling-variant
+  positives, the scoped-list/empty/falsey/`all_files`/integer-`1` zero-FP baselines, an
+  MCP-005-launcher compose case, `_mcp_blanket_autoapprove` units, catalog/example drift
+  guards) + the catalog-count bump; full suite **1182 green** (was 1124); ruff +
+  strict-mypy clean. _(commit __PENDING__)_
+
 ---
 
 Completed prior to this backlog (context): AGENT-PI-001…010, MCP structured scan,

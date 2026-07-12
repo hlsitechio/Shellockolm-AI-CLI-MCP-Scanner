@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`AGENT-MCP-007` — MCP server that blanket-auto-approves every tool call**
+  (MEDIUM, confidence high). Several MCP clients (Cline, Roo Code, Cursor, Windsurf)
+  let a per-server config pre-approve tool calls so the agent runs them **without** the
+  usual per-call human confirmation — the primary guardrail against a malicious or
+  compromised server. Detection is structural and deliberately narrow: it fires **only**
+  on a **blanket** approval (a wildcard `"*"` or a boolean `true` on an
+  `alwaysAllow` / `autoApprove` setting, incl. spelling variants like `always_allow` /
+  `auto-approve`), which auto-approves every tool the server exposes — including any tool
+  a later server update silently adds (a rug-pull). An explicit scoped allow-list of
+  specific tool names (`alwaysAllow: ["read_file"]`), an empty list, or a falsey value is
+  the user's deliberate, safe choice and is **never** flagged. This is the MCP analogue of
+  a `SKILL.md` `bypassPermissions` frontmatter flag (`AGENT-PI-014`) or an auto-running
+  settings hook (`AGENT-HOOK-*`). Verified with a malicious + benign fixture pair, zero
+  over-firing across the machine's real MCP configs, and 58 new tests (wildcard-list /
+  wildcard-scalar / boolean-true / spelling-variant positives, the scoped-list / empty /
+  falsey / `all_files`-tool-name / integer-`1` zero-FP baselines, an MCP-005-launcher
+  compose case, helper units, and catalog/example drift guards). Rule catalog 39 → 40
+  (free 36 → 37); `RULES.md` + `THREAT_MODEL.md` regenerated.
 - **`AGENT-MCP-006` — remote MCP server over cleartext `http://` / `ws://` transport**
   (MEDIUM, confidence high) closes a deliberate gap in `AGENT-MCP-005`, which inspects
   a *local* server's launch command and ignores the transport `url` field. A **remote**

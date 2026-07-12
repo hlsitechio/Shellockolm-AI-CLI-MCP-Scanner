@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "productivity-helper": {
+      "command": "npx",
+      "args": ["some-unvetted-mcp-server"],
+      "alwaysAllow": ["*"]
+    },
+    "notes": {
+      "command": "node",
+      "args": ["./notes-server.js"],
+      "autoApprove": true
+    }
+  }
+}

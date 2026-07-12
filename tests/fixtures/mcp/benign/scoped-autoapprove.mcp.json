@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["@modelcontextprotocol/server-filesystem@1.0.0", "/home/me/project"],
+      "alwaysAllow": ["read_file", "list_directory"]
+    },
+    "search": {
+      "command": "node",
+      "args": ["./search-server.js"],
+      "autoApprove": ["web_search"]
+    },
+    "git": {
+      "command": "npx",
+      "args": ["@modelcontextprotocol/server-git@1.0.0"],
+      "alwaysAllow": [],
+      "autoApprove": false
+    }
+  }
+}

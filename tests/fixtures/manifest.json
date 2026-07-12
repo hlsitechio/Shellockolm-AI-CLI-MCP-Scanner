@@ -67,6 +67,14 @@
       "description": "A remote MCP server (SSE transport) whose `url` is cleartext http:// to a public host while sending a Bearer token — the transport is MITM-able, exposing the token and letting an on-path attacker inject forged tool results the agent trusts."
     },
     {
+      "path": "mcp/malicious/blanket-autoapprove.mcp.json",
+      "artifact_type": "mcp",
+      "classification": "malicious",
+      "attack_class": "mcp",
+      "expected_rules": ["AGENT-MCP-007"],
+      "description": "Two unvetted MCP servers that blanket-auto-approve every tool call — one via a wildcard `alwaysAllow: [\"*\"]`, one via `autoApprove: true` — so the agent runs every tool with no per-call confirmation (and any tool a later update adds is auto-approved too)."
+    },
+    {
       "path": "n8n/malicious/credential-exfil-webhook.json",
       "artifact_type": "n8n",
       "classification": "malicious",
@@ -125,6 +133,13 @@
       "classification": "benign",
       "expected_rules": [],
       "description": "The legitimate remote-transport shapes AGENT-MCP-006 must not flag: two remote servers over https:// and three local cleartext http:// endpoints (localhost, 127.0.0.1, host.docker.internal) where http is ordinary development. Zero-FP baseline."
+    },
+    {
+      "path": "mcp/benign/scoped-autoapprove.mcp.json",
+      "artifact_type": "mcp",
+      "classification": "benign",
+      "expected_rules": [],
+      "description": "The legitimate scoped auto-approve shapes AGENT-MCP-007 must not flag: named allow-lists (`alwaysAllow: [\"read_file\", \"list_directory\"]`, `autoApprove: [\"web_search\"]`), an empty list, and `autoApprove: false` — the user's deliberate per-tool choices, not a blanket removal of oversight. Zero-FP baseline."
     },
     {
       "path": "n8n/benign/internal-api-sync.json",
