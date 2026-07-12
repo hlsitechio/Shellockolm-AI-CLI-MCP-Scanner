@@ -296,7 +296,7 @@ contract as the backlog (fixtures + a zero-false-positive benign baseline).
   positives, the scoped-list/empty/falsey/`all_files`/integer-`1` zero-FP baselines, an
   MCP-005-launcher compose case, `_mcp_blanket_autoapprove` units, catalog/example drift
   guards) + the catalog-count bump; full suite **1182 green** (was 1124); ruff +
-  strict-mypy clean. _(commit __PENDING__)_
+  strict-mypy clean. _(commit ef746ed)_
 
 ---
 
