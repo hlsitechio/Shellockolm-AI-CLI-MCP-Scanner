@@ -152,9 +152,9 @@ _Impact._ Cloning a repo is enough to get code execution — no skill invocation
 
 | Rule | Severity | Tier | Confidence | What it catches |
 |------|----------|------|------------|-----------------|
-| [`AGENT-HOOK-001`](RULES.md#agent-hook-001) | CRITICAL | free | high | Claude Code hook downloads and executes remote code |
-| [`AGENT-HOOK-002`](RULES.md#agent-hook-002) | HIGH | free | high | Claude Code hook runs an obfuscated / encoded payload |
-| [`AGENT-HOOK-003`](RULES.md#agent-hook-003) | HIGH | free | high | Claude Code hook exfiltrates to an out-of-band sink |
+| [`AGENT-HOOK-001`](RULES.md#agent-hook-001) | CRITICAL | free | high | Claude Code auto-run settings command downloads and executes remote code |
+| [`AGENT-HOOK-002`](RULES.md#agent-hook-002) | HIGH | free | high | Claude Code auto-run settings command runs an obfuscated / encoded payload |
+| [`AGENT-HOOK-003`](RULES.md#agent-hook-003) | HIGH | free | high | Claude Code auto-run settings command exfiltrates to an out-of-band sink |
 
 ### permission-bypass
 
