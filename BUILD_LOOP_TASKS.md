@@ -339,7 +339,7 @@ contract as the backlog (fixtures + a zero-false-positive benign baseline).
   free+Pro tier coverage, the full documented-semantics zero-FP matrix, `.claude` scoping,
   malformed-JSON safety, prior-hook-fixture regression, `scan_text` routing, catalog/example
   drift guards); full suite **1256 green** (was 1182); ruff (`src`) + strict-mypy clean;
-  self-scan gate still 0 HIGH+ (MEDIUM, below the gate). _(commit c25b41a)_
+  self-scan gate still 0 HIGH+ (MEDIUM, below the gate). _(commit 0683d63)_
 
 ---
 
