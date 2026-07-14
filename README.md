@@ -227,7 +227,7 @@ shellockolm shell
 | **n8n** | Ni8mare unauthenticated RCE, expression injection | CVE-2026-21858, CVE-2025-68613, CVE-2025-68668 |
 | **Supply Chain** | Shai-Hulud worm, eslint-config-prettier compromise | CVE-2025-54313 + 10 campaign CVEs |
 | **Clawdbot/Moltbot** | AI gateway credential leaks, OAuth piggybacking | 4 critical auth bypass patterns |
-| **🤖 Agent Supply Chain** | Prompt injection, secret-exfiltration & tool-poisoning in `SKILL.md` skills, MCP configs, n8n workflows, slash commands, subagent definitions & `settings.json` hooks; unpinned (rug-pull) MCP servers; auto-running hook RCE/exfil; invisible-char / Unicode-Tags ASCII smuggling | Agentic-era threat model (offline, pattern-based) |
+| **🤖 Agent Supply Chain** | Prompt injection, secret-exfiltration & tool-poisoning in `SKILL.md` skills, MCP configs, n8n workflows, slash commands, subagent definitions & `settings.json` hooks; unpinned (rug-pull) MCP servers; auto-running hook RCE/exfil; disabled tool-call confirmation prompts; invisible-char / Unicode-Tags ASCII smuggling | Agentic-era threat model (offline, pattern-based) |
 
 **Total: 32 unique CVEs tracked — plus the AI-agent coding supply chain**
 
@@ -244,7 +244,7 @@ Traditional scanners check *your dependencies*. The **agent scanner** checks the
 - **n8n workflows** — exported workflow JSON (Code/Function nodes, `eval`, hardcoded creds)
 - **Slash commands** — `.claude/commands/**/*.md` (the prompt files an agent runs on demand)
 - **Subagents** — `.claude/agents/**/*.md` (the body becomes a delegated agent's system prompt)
-- **Hook configs** — `.claude/settings.json` / `settings.local.json` `hooks` blocks (shell commands the agent auto-runs on lifecycle events)
+- **Settings** — `.claude/settings.json` / `settings.local.json`: `hooks` blocks (shell commands the agent auto-runs on lifecycle events) and the `permissions` block (a blanket grant that turns off the per-call confirmation prompt)
 
 Detections: prompt injection / instruction override, hidden conditional triggers, **secret-exfiltration
 instructions**, tool poisoning / remote-script execution, **rug-pull (unpinned) MCP servers**,

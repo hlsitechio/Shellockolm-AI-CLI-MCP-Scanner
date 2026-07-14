@@ -194,6 +194,18 @@ _THREAT_CLASSES: List[Dict[str, str]] = [
                   "required.",
     },
     {
+        "class": "permission-bypass",
+        "headline": "The confirmation prompt turned off in shared config",
+        "threat": "A committed `.claude/settings.json` removes the per-call human "
+                  "confirmation for tool use — a `bypassPermissions` default mode, or a "
+                  "blanket `allow` entry for a command-execution tool (a bare `Bash` "
+                  "matches every command). A scoped allow-list is the feature working as "
+                  "intended and is not a finding.",
+        "impact": "Cloning the repo silently opts you into unattended execution: the "
+                  "guardrail that would have caught an injected instruction is gone, and "
+                  "it compounds any lifecycle hook into a zero-click compromise.",
+    },
+    {
         "class": "mcp-config",
         "headline": "Malicious or over-privileged MCP server",
         "threat": "An MCP server definition that runs attacker code or over-shares "

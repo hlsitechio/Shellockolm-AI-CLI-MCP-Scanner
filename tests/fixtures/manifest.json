@@ -156,6 +156,21 @@
       "description": "A normal CLAUDE.md project guide (conventions, layout, dependency policy) with no injection. Zero-FP baseline."
     },
     {
+      "path": "settings/permission-bypass/.claude/settings.json",
+      "artifact_type": "settings",
+      "classification": "malicious",
+      "attack_class": "permission-bypass",
+      "expected_rules": ["AGENT-PERM-001"],
+      "description": "A Claude Code settings.json that removes the per-call confirmation prompt in both documented blanket forms — `defaultMode: bypassPermissions` and a bare `Bash` allow entry (which matches every Bash command) — so cloning the repo silently opts into unattended command execution."
+    },
+    {
+      "path": "settings/scoped-permissions/.claude/settings.json",
+      "artifact_type": "settings",
+      "classification": "benign",
+      "expected_rules": [],
+      "description": "A Claude Code settings.json using the permissions feature as intended: scoped Bash rules, bare READ-ONLY tools (Read/Glob/Grep/WebSearch), an exact MCP tool name, an acceptEdits defaultMode, and deny/ask restrictions. Zero-FP baseline for AGENT-PERM-001."
+    },
+    {
       "path": "settings/benign/.claude/settings.json",
       "artifact_type": "settings",
       "classification": "benign",

@@ -11,6 +11,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`AGENT-PERM-001` — Claude Code settings disable the tool-call confirmation prompt**
+  (MEDIUM, confidence high). A `.claude/settings.json` `permissions` block decides which
+  tool calls run **without** asking the human. That per-call confirmation is the primary
+  guardrail between a prompt injection the agent just read and arbitrary execution on the
+  machine, so a committed settings.json that turns it off means anyone who clones the repo
+  silently opts into unattended execution — and it compounds an auto-running hook
+  (`AGENT-HOOK-*`) into a zero-click compromise. The Claude Code analogue of a blanket MCP
+  auto-approval (`AGENT-MCP-007`) or a `bypassPermissions` SKILL.md frontmatter flag
+  (`AGENT-PI-014`). Detection is a structural parse and deliberately narrow — it fires
+  **only** on the two documented **blanket** forms: `permissions.defaultMode:
+  "bypassPermissions"` (documented as skipping permission prompts), or a blanket
+  `permissions.allow` entry for a command-**execution** tool (a bare `Bash` is documented
+  as matching every Bash command, and `Bash(*)` as equivalent; PowerShell rules use the
+  same shape). A scoped allow-list is the feature working as intended and is **never**
+  flagged. Also deliberately **not** flagged, each per the documented semantics: the
+  `auto` / `dontAsk` modes (documented as *safer*, not prompt-skipping — `auto` gates on a
+  classifier and honors `ask` rules, `dontAsk` auto-*denies* anything not pre-approved),
+  `acceptEdits` / `plan` / `default`; an unanchored `allow` glob (`"*"`, `"B*"`,
+  `"mcp__*"` — documented as skipped with a warning, granting nothing); a blanket entry in
+  `deny` / `ask` (a restriction, not a risk); and bare read-only tools (`Read` / `Glob` /
+  `Grep` / `WebSearch`) or exact MCP tool names. Only `allow` is inspected, and only inside
+  a `.claude` tree (a `.vscode/settings.json` is ignored). `scan_text`'s `auto` mode now
+  also recognizes a **permissions-only** settings.json (which carries no `hooks` key),
+  requiring a real permissions sub-key so an unrelated JSON with a `permissions` field is
+  not misrouted. Wired into the catalog (`rules list` / `rules explain`), RULES.md +
+  THREAT_MODEL.md (regenerated, new `permission-bypass` attack class; rule count 40 → 41,
+  free 37 → 38). Verified against the **32 real settings.json files on a live machine** at
+  the strictest Pro tier: exactly **2 flagged, both ground-truth-confirmed true positives**
+  (`defaultMode: bypassPermissions`; one also carrying a genuine `Bash(*)` among 105
+  otherwise-scoped allow entries) — **zero false positives** across the remaining 30 files
+  and their 478 scoped allow entries. Malicious + benign fixtures added to the corpus;
+  67 new tests (`tests/test_settings_permissions.py`).
+
 - **`AGENT-MCP-007` — MCP server that blanket-auto-approves every tool call**
   (MEDIUM, confidence high). Several MCP clients (Cline, Roo Code, Cursor, Windsurf)
   let a per-server config pre-approve tool calls so the agent runs them **without** the

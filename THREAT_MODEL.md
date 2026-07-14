@@ -4,7 +4,7 @@
 
 AI coding agents now **auto-load and trust** a chain of artifacts they did not author: skills, MCP servers, instruction files, lifecycle hooks, slash commands, and workflow exports — pulled from marketplaces, repositories, and teammates. Each is read by the model (or executed on your machine) with the agent's full privileges. A single poisoned artifact turns that trust into prompt-injection, secret exfiltration, tool poisoning, or remote code execution. **This is the agentic supply chain, and it is the attack surface Shellockolm defends.**
 
-Shellockolm ships **40 agent supply-chain rules** (**37 free**, always-on MIT/OSS, and **3 Pro**) across **9 attack classes**. This page maps each class to the rules that cover it; [`RULES.md`](RULES.md) has every rule's full description, example attack, and remediation.
+Shellockolm ships **41 agent supply-chain rules** (**38 free**, always-on MIT/OSS, and **3 Pro**) across **10 attack classes**. This page maps each class to the rules that cover it; [`RULES.md`](RULES.md) has every rule's full description, example attack, and remediation.
 
 ## The trust boundary
 
@@ -42,6 +42,7 @@ Which rules cover which attack class, generated from the live catalog:
 | [hardcoded-secret](#hardcoded-secret) | 2 | 2 | 0 | HIGH |
 | [destructive-command](#destructive-command) | 1 | 1 | 0 | HIGH |
 | [settings-hook](#settings-hook) | 3 | 3 | 0 | CRITICAL, HIGH |
+| [permission-bypass](#permission-bypass) | 1 | 1 | 0 | MEDIUM |
 | [mcp-config](#mcp-config) | 7 | 7 | 0 | CRITICAL, HIGH, MEDIUM |
 | [n8n-workflow](#n8n-workflow) | 2 | 2 | 0 | HIGH |
 
@@ -154,6 +155,18 @@ _Impact._ Cloning a repo is enough to get code execution — no skill invocation
 | [`AGENT-HOOK-001`](RULES.md#agent-hook-001) | CRITICAL | free | high | Claude Code hook downloads and executes remote code |
 | [`AGENT-HOOK-002`](RULES.md#agent-hook-002) | HIGH | free | high | Claude Code hook runs an obfuscated / encoded payload |
 | [`AGENT-HOOK-003`](RULES.md#agent-hook-003) | HIGH | free | high | Claude Code hook exfiltrates to an out-of-band sink |
+
+### permission-bypass
+
+**The confirmation prompt turned off in shared config.**
+
+_Threat._ A committed `.claude/settings.json` removes the per-call human confirmation for tool use — a `bypassPermissions` default mode, or a blanket `allow` entry for a command-execution tool (a bare `Bash` matches every command). A scoped allow-list is the feature working as intended and is not a finding.
+
+_Impact._ Cloning the repo silently opts you into unattended execution: the guardrail that would have caught an injected instruction is gone, and it compounds any lifecycle hook into a zero-click compromise.
+
+| Rule | Severity | Tier | Confidence | What it catches |
+|------|----------|------|------------|-----------------|
+| [`AGENT-PERM-001`](RULES.md#agent-perm-001) | MEDIUM | free | high | Claude Code settings disable the tool-call confirmation prompt |
 
 ### mcp-config
 

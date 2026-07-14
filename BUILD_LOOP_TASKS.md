@@ -298,6 +298,49 @@ contract as the backlog (fixtures + a zero-false-positive benign baseline).
   guards) + the catalog-count bump; full suite **1182 green** (was 1124); ruff +
   strict-mypy clean. _(commit ef746ed)_
 
+- C10. [x] **AGENT-PERM-001: settings.json disables the tool-call confirmation prompt** —
+  detection expansion closing an artifact-coverage gap: `_scan_settings` read a
+  `.claude/settings.json`'s **`hooks`** block but never its **`permissions`** block, so
+  the file that decides *which tool calls run without asking the human* was scanned only
+  for the commands it auto-runs, never for the guardrail it turns off. That per-call
+  confirmation is the primary control between a prompt injection the agent just read and
+  arbitrary execution, so a committed settings.json that disables it means cloning the
+  repo silently opts you into unattended execution — and it compounds an auto-running
+  hook (`AGENT-HOOK-*`) into a zero-click compromise. The Claude Code analogue of a
+  blanket MCP auto-approval (C9 / `AGENT-MCP-007`) or a `bypassPermissions` frontmatter
+  flag (`AGENT-PI-014`). New MEDIUM / confidence-high rule, structural parse, new `PERM`
+  family → new `permission-bypass` attack class. Fires **only** on the two documented
+  BLANKET forms: `permissions.defaultMode: "bypassPermissions"`, or a blanket
+  `permissions.allow` entry for a command-**execution** tool (bare `Bash`, documented as
+  matching every Bash command, and its documented equivalent `Bash(*)`; PowerShell rules
+  share the Bash shape). **The calibration was documentation-driven, and it killed three
+  rules I would otherwise have written wrong:** (1) `auto` / `dontAsk` *sound* permissive
+  but are documented as **safer**, not prompt-skipping (`auto` gates actions behind a
+  classifier and still honors `ask` rules; `dontAsk` auto-**denies** anything not
+  pre-approved) — flagging them would have been a pure FP; (2) an unanchored `allow` glob
+  (`"*"`, `"B*"`, `"mcp__*"`) is documented as *"skipped with a warning"* and grants
+  **nothing** — flagging it would have been an FP on a no-op; (3) `Bash(*)` **is**
+  documented as equivalent to bare `Bash` (not a literal match on `*`), so it must fire.
+  Also never flagged: scoped rules (`Bash(npm run test:*)`), the sanctioned per-server MCP
+  form (`mcp__puppeteer__*`), exact MCP tool names, bare read-only tools (Read/Glob/Grep/
+  WebSearch), and any blanket entry in `deny`/`ask` (a **restriction** — flagging it would
+  be backwards, so only `allow` is inspected). `.claude`-scoped, so a `.vscode/settings.json`
+  is ignored. `scan_text`'s `auto` mode now also recognizes a **permissions-only**
+  settings.json (no `hooks` key — previously under-scanned as prose), gated on a real
+  permissions sub-key so an unrelated JSON with a `permissions` field isn't misrouted.
+  Wired into the catalog (`rules list`/`rules explain`), RULES.md + THREAT_MODEL.md
+  (regenerated with a new threat narrative; drift `--check` gates green; rule count 40→41,
+  free 37→38). **Verified against the 32 real settings.json files on the live machine at
+  the strictest Pro tier: exactly 2 flagged, both ground-truth-confirmed TRUE positives**
+  (`defaultMode: bypassPermissions`; one also carrying a real `Bash(*)` found among its
+  105 otherwise-scoped allow entries) — **zero false positives** across the other 30 files
+  and their 478 scoped allow entries. Malicious + benign fixtures added to the corpus; 67
+  new tests (`tests/test_settings_permissions.py`: helper units, both blanket positives,
+  free+Pro tier coverage, the full documented-semantics zero-FP matrix, `.claude` scoping,
+  malformed-JSON safety, prior-hook-fixture regression, `scan_text` routing, catalog/example
+  drift guards); full suite **1256 green** (was 1182); ruff (`src`) + strict-mypy clean;
+  self-scan gate still 0 HIGH+ (MEDIUM, below the gate). _(commit c25b41a)_
+
 ---
 
 Completed prior to this backlog (context): AGENT-PI-001…010, MCP structured scan,
