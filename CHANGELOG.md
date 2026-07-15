@@ -11,6 +11,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`AGENT-MCP-008` — MCP server launch command runs an obfuscated / encoded payload**
+  (HIGH, confidence high). An agent auto-executes a command from two config sites with no
+  per-invocation prompt: a `settings.json` command key (`hooks`, `statusLine`,
+  `apiKeyHelper`, …) and an **MCP server's launch command**, spawned the moment the session
+  starts. `AGENT-HOOK-002` caught an encoded payload at the first site, but the MCP launcher
+  had no obfuscation rule at all — so writing the identical payload one config file over
+  made it vanish. Against the previous release, `powershell.exe -NoProfile -EncodedCommand
+  <blob>`, `pwsh -enc <blob>`, `base64 -d | bash` and a `FromBase64String(…)|iex` cradle each
+  scored HIGH under a settings hook and produced **zero findings** in an MCP launcher; all
+  are now HIGH at both. The raw-text pass did not cover it for two structural reasons:
+  `AGENT-MCP-003`'s `-encodedcommand` alternative carries a leading `\b`, which can never
+  match a real flag (a `-` preceded by a space or a JSON quote is not a word boundary), and
+  the generic `AGENT-OBF-001` runs over the raw JSON, where per-arg quoting
+  (`"base64", "-d", "|", "bash"`) breaks a pattern expecting a shell command line — joining
+  a server's command+args is what makes the payload visible. Both sites now consume one
+  shared `_OBFUSCATED_EXEC` pattern, so neither can keep a narrower copy or drift (a test
+  asserts the two rules hold the same compiled object). The shared pattern also gained the
+  `eval(atob('…'))` nesting order, which previously fired at **neither** site. Like
+  `AGENT-MCP-001`, the rule inspects the **launch path only** (command + args): an env value
+  is data handed to the process, not a command line, so a base64 config blob in an env var
+  is not an encoded launcher (secrets/exfil rules still see `env`). Verified zero false
+  positives non-vacuously on 49 real MCP configs (64 servers, 48 real launch commands) and
+  28 real `.claude` settings files, with the complete finding set byte-identical before and
+  after — a strict no-op on real configs while closing the evasion.
+
 - **`AGENT-PERM-001` — Claude Code settings disable the tool-call confirmation prompt**
   (MEDIUM, confidence high). A `.claude/settings.json` `permissions` block decides which
   tool calls run **without** asking the human. That per-call confirmation is the primary

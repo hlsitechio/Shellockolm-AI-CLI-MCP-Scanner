@@ -4,7 +4,7 @@
 
 These are the **agent supply-chain** detection rules Shellockolm applies to AI-agent coding artifacts — Claude/agent **skills** (`SKILL.md`), **MCP configs** (`mcp.json`, `.mcp.json`, `claude_desktop_config.json`), **n8n** workflow exports, AI **instruction files** (`CLAUDE.md` / `AGENTS.md` / `.cursorrules` / Copilot instructions), `.claude/` **settings hooks**, and `.claude/commands/` **slash commands**. They detect prompt injection, secret exfiltration, tool poisoning, auto-running hook RCE, and other agentic-era supply-chain attacks.
 
-**41 rules** — **38 free** (always on, MIT/OSS) and **3 Pro** (run only with an active Shellockolm Pro license; listed here for reference).
+**42 rules** — **39 free** (always on, MIT/OSS) and **3 Pro** (run only with an active Shellockolm Pro license; listed here for reference).
 
 **Confidence axis** (independent of severity):
 
@@ -30,6 +30,7 @@ These are the **agent supply-chain** detection rules Shellockolm applies to AI-a
 | [`AGENT-MCP-005`](#agent-mcp-005) | HIGH | free | high | mcp-config | MCP server launches code from a raw URL / gist / paste / IP literal |
 | [`AGENT-MCP-006`](#agent-mcp-006) | MEDIUM | free | high | mcp-config | Remote MCP server uses cleartext http:// transport |
 | [`AGENT-MCP-007`](#agent-mcp-007) | MEDIUM | free | high | mcp-config | MCP server blanket-auto-approves every tool call |
+| [`AGENT-MCP-008`](#agent-mcp-008) | HIGH | free | high | mcp-config | MCP server launch command runs an obfuscated / encoded payload |
 | [`AGENT-N8N-001`](#agent-n8n-001) | HIGH | free | high | n8n-workflow | n8n Code/Function node runs shell or eval |
 | [`AGENT-N8N-002`](#agent-n8n-002) | HIGH | free | high | n8n-workflow | n8n workflow pairs a credential read with an external exfil sink |
 | [`AGENT-OBF-001`](#agent-obf-001) | HIGH | free | high | obfuscation | Obfuscated payload (base64 decode then execute) |
@@ -340,6 +341,24 @@ A cloned repo's MCP config blanket-approves every tool of an untrusted server, s
 ```
 
 **Remediation:** Remove the blanket auto-approval. If some tools are genuinely trusted, auto-approve only those by name (`alwaysAllow: ["read_file", "list_dir"]`) and keep write / execute / network tools behind a per-call prompt. Never wildcard-approve a server you did not author.
+
+#### AGENT-MCP-008
+
+**MCP server launch command runs an obfuscated / encoded payload**
+
+- **Severity:** HIGH &nbsp;·&nbsp; **Tier:** free &nbsp;·&nbsp; **Confidence:** high &nbsp;·&nbsp; **CVSS:** 8.6 &nbsp;·&nbsp; **Attack class:** mcp-config
+
+An MCP server's launch command hides what it executes behind an encoding — encoded PowerShell (-enc/-ec/-encodedcommand), a base64 blob decoded and piped to a shell, or atob/FromBase64String/fromCharCode fed into eval/exec. The agent spawns this command automatically when the session starts, with no per-invocation prompt, so an obfuscated launcher is a zero-click execution channel whose real payload never appears in the config a human reviews. This is the same payload AGENT-HOOK-002 catches in a settings.json command key — the MCP launcher is simply the other config site that auto-executes.
+
+**Example attack**
+
+```text
+An mcp.json server is launched through an encoded blob, so the payload the agent auto-runs at session start never appears in the config a human reviews:
+  "command": "powershell.exe", "args": ["-NoProfile", "-w", "hidden", "-EncodedCommand", "aQBlAHgAKAAuAC4ALgApAA=="]
+This is AGENT-HOOK-002's payload at the other auto-executing config site.
+```
+
+**Remediation:** Remove the encoded/obfuscated launch command. An MCP server should be spawned by a readable, auditable command running a pinned, vetted binary; decode the payload and review it before trusting the config.
 
 ### n8n-workflow
 

@@ -410,6 +410,45 @@ contract as the backlog (fixtures + a zero-false-positive benign baseline).
   test coverage at all**. Full suite **1342 green** (was 1307); ruff (`src`) +
   strict-mypy clean; self-scan gate still 0 HIGH+ (48 items). _(commit a694a1e)_
 
+- C13. [x] **AGENT-MCP-008: the obfuscated-exec payload reaches the MCP launcher** — the
+  direct sibling of C12, closing the second half of the same asymmetry. An agent
+  auto-executes a command from two config sites with no per-invocation prompt: a
+  settings.json command key and an **MCP server's launch path**. C12 gave the
+  fetch-and-execute payload parity across both (`_FETCH_EXEC`, shared by HOOK-001/MCP-001);
+  the OBFUSCATED payload kept the identical gap — AGENT-HOOK-002 matched the full
+  calibrated shape at the settings site while the MCP launcher had **no obfuscation rule at
+  all**, so the same payload written one config file over simply vanished. **Verified
+  against the committed HEAD: `powershell.exe -NoProfile -EncodedCommand <blob>`, `pwsh
+  -enc <blob>`, `base64 -d | bash`, and a `FromBase64String(…)|iex` cradle each scored HIGH
+  under a settings hook and produced ZERO findings in an MCP launcher; all are now HIGH at
+  both sites.** Two structural reasons the raw-text pass didn't save it (both found while
+  proving the gap, not assumed): AGENT-MCP-003's `-encodedcommand` alternative carries a
+  leading `\b` and so can **never** match a real flag (a `-` preceded by a space or a JSON
+  quote is not a word boundary — the exact bug `_FETCH_EXEC`'s comment already warns
+  about), and the generic AGENT-OBF-001 runs over the raw JSON text, where per-arg quoting
+  (`"base64", "-d", "|", "bash"`) breaks a pattern expecting a shell command line — joining
+  command+args, the whole reason `_scan_mcp_structured` exists, is what makes it visible.
+  Fix mirrors C12 exactly: the pattern is hoisted to a shared `_OBFUSCATED_EXEC` that BOTH
+  rules consume (a test asserts they hold the same compiled **object**, so neither can keep
+  a narrower copy or drift), and the new rule is scoped to the **launch path only** —
+  re-applying C12's env-is-DATA lesson, since a base64 blob in an env var is a config value,
+  not an encoded command (secrets/exfil/primitive rules still see env; a test locks both
+  directions). The shared pattern also gained the `eval(atob('…'))` **nesting order**, which
+  previously fired at NEITHER site (only decode-then-exec was matched). AGENT-MCP-003 was
+  deliberately left untouched (its dead `-encodedcommand` alternative is now correctly
+  covered at high confidence by MCP-008; removing it is a separate no-op change). Rule count
+  41→42 (39 free); RULES.md + THREAT_MODEL.md regenerated (drift `--check` green).
+  **Zero-FP verified NON-VACUOUSLY on real content:** the machine's **49 real MCP configs
+  (64 servers, 48 real launch commands)** + **28 real `.claude` settings files** yield
+  **ZERO** AGENT-MCP-008 findings, and the complete finding set is **byte-identical before
+  and after** — a strict no-op on real configs while closing the evasion. 39 new tests
+  (`tests/test_mcp_obfuscated_exec.py`: hook-vs-launcher parity across 9 payloads, every
+  shape at the launcher, split-args/bare-command, free-tier coverage, shared-pattern
+  anti-drift, launch-path scoping, 10 real-world benign launchers, the env-blob FP lock, an
+  env-still-scanned guard) — **mutation-verified**: reverting the new branch, un-sharing the
+  pattern, or widening the scope to env each makes the suite fail. Full suite **1381 green**
+  (was 1342); ruff + mypy gate clean; self-scan gate still 0 HIGH+ (48 items). _(commit COMMIT_HASH)_
+
 ---
 
 Completed prior to this backlog (context): AGENT-PI-001…010, MCP structured scan,
