@@ -377,6 +377,38 @@ contract as the backlog (fixtures + a zero-false-positive benign baseline).
   `.claude` scoping, malformed-JSON safety, `scan_text` routing + non-misrouting); full
   suite **1307 green** (was 1256); ruff (`src`) + strict-mypy clean; self-scan gate still
   0 HIGH+ (48 items). _(commit c292ac5)_
+- C12. [x] **AGENT-MCP-001 reaches every fetch-and-execute launcher shape** — the C11
+  evasion, one config file over. An agent auto-executes a command from **two** sites with
+  no per-invocation prompt: a settings.json auto-run command (C11) and an **MCP server's
+  launch command**, which it spawns the moment the session starts. Both are zero-click RCE
+  channels in a cloned repo, so a download-and-execute payload is equally dangerous at
+  either — yet `AGENT-MCP-001` matched only the literal `curl … | bash` pipe while the
+  settings rule matched the full calibrated shape (shell pipe, PowerShell download cradle,
+  LOLBIN downloader). **Verified against the committed HEAD: `IEX (New-Object
+  Net.WebClient).DownloadString(…)` and `certutil -urlcache -f …` scored CRITICAL under a
+  settings hook and produced ZERO findings in an MCP launcher; both are now CRITICAL.** No
+  new rule IDs and no pattern changes (count stays 41/38 free) — the already-calibrated
+  pattern is hoisted to a shared `_FETCH_EXEC` that BOTH sites consume, so neither can
+  keep a narrower copy or drift (a test asserts the two rules hold the same compiled
+  object); MCP-001's description/remediation generalized from "pipes it into a shell",
+  RULES.md regenerated (drift `--check` green, THREAT_MODEL.md unchanged).
+  **A false positive I introduced and caught while stress-testing my own change:** the
+  structured MCP path joins `command + args + env`, but an env VALUE is DATA handed to the
+  process, not a command line — an Elixir MCP server is launched by the **`iex`** binary,
+  so any ordinary `https://` URL in its env block read as a PowerShell iex-download cradle
+  and scored CRITICAL. The rule now inspects the **launch path only** (command + args),
+  mirroring AGENT-MCP-005's existing scoping; secrets/exfil/primitive rules still see env.
+  **Zero-FP verified NON-VACUOUSLY on real content:** the machine's **49 real MCP configs
+  (148 servers, 98 real launch commands** — incl. the official Anthropic plugin
+  marketplace) yield **ZERO** AGENT-MCP-001 findings, and the complete finding set is
+  **byte-identical before and after** — a strict no-op on real configs while closing the
+  evasion. 35 new tests (`tests/test_mcp_fetch_exec.py`: hook-vs-launcher parity across 8
+  payloads, every shape at the launcher, split-args/bare-command, free-tier coverage,
+  shared-pattern anti-drift, rule-metadata preservation, 9 real-world benign launchers,
+  the iex/env-URL FP lock, an env-still-scanned guard, `scan_text` routing) —
+  mutation-verified to fail on the old pattern; AGENT-MCP-001 previously had **no direct
+  test coverage at all**. Full suite **1342 green** (was 1307); ruff (`src`) +
+  strict-mypy clean; self-scan gate still 0 HIGH+ (48 items). _(commit a694a1e)_
 
 ---
 
