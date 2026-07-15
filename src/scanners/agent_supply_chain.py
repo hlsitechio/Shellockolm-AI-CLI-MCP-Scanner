@@ -813,14 +813,46 @@ WEBHOOK_EXFIL_RULE = AgentRule(
 )
 GENERIC_TEXT_RULES: List[AgentRule] = [EXFIL_RULE, URL_EXFIL_RULE, WEBHOOK_EXFIL_RULE, OBF_RULE, SECRET_RULE, SECRET2_RULE, DESTRUCT_RULE]
 
+# --- Shared: the fetch-and-execute command shape -------------------------------
+# A command that downloads code and immediately runs it is remote code execution at
+# launch time, wherever it is written. An agent auto-executes a command from two
+# distinct config sites with no per-invocation prompt — an **MCP server's launch
+# command** (spawned when the session starts) and a **settings.json auto-run command**
+# (`hooks`, `statusLine`, `apiKeyHelper`, … see _SETTINGS_*_COMMAND_KEYS) — so both
+# consume this ONE calibrated pattern instead of each carrying its own copy.
+#
+# Historically the MCP rule matched only the literal `curl … | bash` pipe while the
+# settings-command rule matched the full shape, so the identical payload written as a
+# PowerShell download cradle or a certutil LOLBIN fetch simply moved one config key
+# over and scored ZERO. Precision comes from the shape, not the site: a real MCP
+# launcher / formatter / linter / status-line command never downloads code and feeds it
+# to an interpreter, and fetching DATA (no interpreter on the receiving end) or curling
+# localhost is not matched.
+_FETCH_EXEC = _c(
+    # a downloader piped into an interpreter:  curl … | bash    irm … | iex
+    r"(?:curl|wget|fetch|lwp-request|invoke-webrequest|iwr|invoke-restmethod|irm)\b"
+    r"[^\n]{0,200}\|\s*(?:sudo\s+)?"
+    r"(?:sh|bash|zsh|dash|ksh|python3?|node|deno|bun|ruby|perl|php|iex|invoke-expression)\b"
+    # PowerShell download cradle, either order of download + execute
+    r"|(?:downloadstring|downloadfile|downloaddata|net\.webclient)\b[^\n]{0,200}\b(?:iex|invoke-expression)\b"
+    r"|\b(?:iex|invoke-expression)\b[^\n]{0,200}(?:downloadstring|downloadfile|net\.webclient|https?://)"
+    # LOLBIN downloaders (no \b before a hyphen flag: a space->'-' gap is not a word boundary)
+    r"|certutil(?:\.exe)?\b[^\n]{0,160}-urlcache\b[^\n]{0,160}-f\b"
+    r"|bitsadmin(?:\.exe)?\b[^\n]{0,160}/transfer\b"
+)
+
 # MCP server configs
 MCP_RULES: List[AgentRule] = [
     AgentRule(
         "AGENT-MCP-001", "MCP server fetches and runs a remote script",
         FindingSeverity.CRITICAL, 9.6,
-        _c(r"(curl|wget)[^\n]{0,80}\|\s*(sh|bash|zsh|python|node)"),
-        "An MCP server launch command downloads code and pipes it into a shell — remote code execution at install/run time.",
-        "Never run curl|bash from an MCP server command. Pin and vendor the server, or install from a trusted registry.",
+        _FETCH_EXEC,
+        "An MCP server launch command downloads code and immediately executes it — a shell pipe (curl … | bash), "
+        "a PowerShell download cradle (Net.WebClient/DownloadString + iex), or a LOLBIN downloader (certutil "
+        "-urlcache, bitsadmin /transfer). The agent spawns this command when the session starts, so it is remote "
+        "code execution at install/run time from a source that can change under you at any moment.",
+        "Never download and execute code from an MCP server command, in any form. Pin and vendor the server, or "
+        "install it from a trusted registry.",
     ),
     AgentRule(
         "AGENT-MCP-002", "MCP server runs an unpinned remote package",
@@ -1459,7 +1491,9 @@ PRO_RULES: List[AgentRule] = [
 #   HOOK-001  fetch-and-execute: a downloader piped/chained into an interpreter
 #             (curl … | bash), a PowerShell download cradle (Net.WebClient /
 #             DownloadString + iex), or a LOLBIN downloader (certutil -urlcache -f,
-#             bitsadmin /transfer).
+#             bitsadmin /transfer). Shares the `_FETCH_EXEC` pattern with the MCP
+#             launcher rule (AGENT-MCP-001) — the same payload is equally dangerous
+#             at either auto-exec site, so neither site gets a narrower copy.
 #   HOOK-002  obfuscated execution: encoded PowerShell (-enc/-ec/-encodedcommand),
 #             a base64 blob decoded and piped to a shell, or atob/FromBase64String /
 #             fromCharCode fed into eval/exec.
@@ -1473,18 +1507,6 @@ PRO_RULES: List[AgentRule] = [
 # event-name metadata is never mistaken for a command, and the dangerous patterns above
 # mean a plain `prettier`/`eslint`/`pytest`/`git` hook, a real `statusline.sh`, or a
 # command that curls localhost never trips a rule.
-_HOOK_FETCH_EXEC = _c(
-    # a downloader piped into an interpreter:  curl … | bash    irm … | iex
-    r"(?:curl|wget|fetch|lwp-request|invoke-webrequest|iwr|invoke-restmethod|irm)\b"
-    r"[^\n]{0,200}\|\s*(?:sudo\s+)?"
-    r"(?:sh|bash|zsh|dash|ksh|python3?|node|deno|bun|ruby|perl|php|iex|invoke-expression)\b"
-    # PowerShell download cradle, either order of download + execute
-    r"|(?:downloadstring|downloadfile|downloaddata|net\.webclient)\b[^\n]{0,200}\b(?:iex|invoke-expression)\b"
-    r"|\b(?:iex|invoke-expression)\b[^\n]{0,200}(?:downloadstring|downloadfile|net\.webclient|https?://)"
-    # LOLBIN downloaders (no \b before a hyphen flag: a space->'-' gap is not a word boundary)
-    r"|certutil(?:\.exe)?\b[^\n]{0,160}-urlcache\b[^\n]{0,160}-f\b"
-    r"|bitsadmin(?:\.exe)?\b[^\n]{0,160}/transfer\b"
-)
 _HOOK_OBFUSCATED = _c(
     # encoded PowerShell: -enc / -ec / -encodedcommand (requires the encoded form, so
     # -ExecutionPolicy / -Command / -File never match)
@@ -1529,7 +1551,7 @@ _SETTINGS_OBJECT_COMMAND_KEYS: Tuple[str, ...] = ("statusLine", "fileSuggestion"
 
 HOOK_FETCH_EXEC_RULE = AgentRule(
     "AGENT-HOOK-001", "Claude Code auto-run settings command downloads and executes remote code",
-    FindingSeverity.CRITICAL, 9.4, _HOOK_FETCH_EXEC,
+    FindingSeverity.CRITICAL, 9.4, _FETCH_EXEC,
     "A Claude Code settings.json command that the agent runs automatically — a `hooks` "
     "entry, or one of the other auto-executed command keys (`statusLine`, "
     "`apiKeyHelper`, `fileSuggestion`, `awsAuthRefresh`, `awsCredentialExport`, "
@@ -2831,10 +2853,14 @@ class AgentSupplyChainScanner(BaseScanner):
         for name, cfg in servers.items():
             if not isinstance(cfg, dict):
                 continue
-            parts = [str(cfg.get("command", ""))]
+            launch_parts = [str(cfg.get("command", ""))]
             args = cfg.get("args", [])
             if isinstance(args, list):
-                parts += [str(a) for a in args]
+                launch_parts += [str(a) for a in args]
+            # The launch path — the code the agent actually executes when it spawns the
+            # server — kept separate from the env block below.
+            launch = " ".join(p for p in launch_parts if p)
+            parts = list(launch_parts)
             env = cfg.get("env", {})
             if isinstance(env, dict):
                 parts += [f"{k}={v}" for k, v in env.items()]
@@ -2842,7 +2868,14 @@ class AgentSupplyChainScanner(BaseScanner):
             loc = f"{fp} » server:{name}"
             for rule in MCP_RULES + [SECRET_RULE, SECRET2_RULE, EXFIL_RULE]:
                 if rule.pattern:
-                    m = rule.pattern.search(joined)
+                    # The fetch-and-execute rule inspects the LAUNCH PATH ONLY, mirroring
+                    # AGENT-MCP-005's scoping. An env value is DATA handed to the server
+                    # process, not a command line: an ordinary https:// URL sitting in an
+                    # env var beside an `iex`-launched (Elixir) server is not a download
+                    # cradle, and matching it there is a false positive. Every other rule
+                    # — secrets, exfil sinks, dangerous primitives — must still see env.
+                    subject = launch if rule.id == "AGENT-MCP-001" else joined
+                    m = rule.pattern.search(subject)
                     if m:
                         evidence = self._mask_secret(m.group(0)) if rule.secret else self._redact(m.group(0))
                         out.append(self._mk(rule, loc, "mcp-config", evidence))
