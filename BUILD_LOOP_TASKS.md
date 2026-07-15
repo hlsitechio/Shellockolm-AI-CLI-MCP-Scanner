@@ -447,7 +447,7 @@ contract as the backlog (fixtures + a zero-false-positive benign baseline).
   anti-drift, launch-path scoping, 10 real-world benign launchers, the env-blob FP lock, an
   env-still-scanned guard) — **mutation-verified**: reverting the new branch, un-sharing the
   pattern, or widening the scope to env each makes the suite fail. Full suite **1381 green**
-  (was 1342); ruff + mypy gate clean; self-scan gate still 0 HIGH+ (48 items). _(commit COMMIT_HASH)_
+  (was 1342); ruff + mypy gate clean; self-scan gate still 0 HIGH+ (48 items). _(commit 28fd369)_
 
 ---
 
