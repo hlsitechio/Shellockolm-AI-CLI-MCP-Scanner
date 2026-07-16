@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Hardcoded-credential detection now reaches every artifact class.** A real credential
+  can be pasted into any artifact an agent loads, but the credential rules did not run
+  everywhere: measured against the previous release, a 9-shape × 6-site matrix was blind in
+  **10 of 54 cells**. `.claude/settings.json` was a whole-class hole — all 9 shapes scored
+  **zero** — and it is the worst one to have, because its documented `env` block is exactly
+  where Claude Code is told to put API keys and the file is routinely committed to a repo.
+  The identical three credentials scored 3× HIGH in a `SKILL.md` and **nothing** in a
+  `settings.json` next to it. `_scan_settings` deliberately excludes the broad
+  natural-language rules (a config file is not model-facing prose), and the credential rules
+  had been swept out along with them; separately, the Supabase **service_role** JWT decode
+  never ran on n8n exports, so the RLS-bypassing server secret was invisible there. Every
+  site now derives from one canonical `CREDENTIAL_RULES` set, paired with the JWT decode by
+  `_check_credentials`, and the n8n direct-embed pairing (`AGENT-N8N-002`) consumes the same
+  dataset via `_credential_match` instead of its own SECRET-001-only copy — so a node
+  shipping a hardcoded Stripe live key to an external host is now recognised as a credential
+  read at all. Matrix is **10/54 blind → 0/54**. Widening `settings.json` is safe because
+  these are signature matches on distinctive key prefixes, not NL heuristics: a `${VAR}`
+  interpolation, an `apiKeyHelper` that shells out, and a secret-manager reference carry no
+  literal and cannot match; the anon-key anti-false-positive (shape-identical to the
+  service_role secret, safe to ship) holds at the new site too, and the NL-rule exclusion is
+  now locked by test in both directions. No rule added (count stays 42); severity and
+  redaction are unchanged, so no finding re-emits a live credential. Verified zero
+  false positives non-vacuously: **5,284 real agent artifacts** produce a finding set
+  byte-identical before and after (283 findings), all **18** real `settings.json` files on
+  the test machine stay clean, and those same 18 files each with one planted credential are
+  caught **18/18**.
+
 ### Added
 
 - **`AGENT-MCP-008` — MCP server launch command runs an obfuscated / encoded payload**

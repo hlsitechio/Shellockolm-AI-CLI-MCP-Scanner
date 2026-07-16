@@ -868,7 +868,42 @@ WEBHOOK_EXFIL_RULE = AgentRule(
     "References a paste bin, chat webhook, or out-of-band collaborator endpoint — common exfiltration sinks for stolen data.",
     "Remove the endpoint. Agent artifacts should not post to paste/webhook/OOB services.",
 )
-GENERIC_TEXT_RULES: List[AgentRule] = [EXFIL_RULE, URL_EXFIL_RULE, WEBHOOK_EXFIL_RULE, OBF_RULE, SECRET_RULE, SECRET2_RULE, DESTRUCT_RULE]
+# --- Shared: the hardcoded-credential dataset ----------------------------------
+# A real credential can be pasted into ANY artifact the agent reads, so this rule
+# family must reach every site rather than being re-listed per scan path. It is the
+# canonical set every credential-bearing site derives from (see `_check_credentials`,
+# which pairs it with the `_check_jwt_secrets` decode — together they are the
+# complete credential sweep). The rules are signature matches on structurally
+# distinctive key prefixes, so unlike the natural-language heuristics they are safe
+# to run against raw config text.
+#
+# This list previously had no single home: `.claude/settings.json` — the one artifact
+# whose documented `env` block is *designed* to hold API keys — was scanned by no
+# credential rule at all, and the service_role JWT decode never ran on n8n exports.
+# A measured 9-shape x 6-site matrix was blind in 10 of 54 cells.
+CREDENTIAL_RULES: List[AgentRule] = [SECRET_RULE, SECRET2_RULE]
+
+
+def _credential_match(text: str) -> Optional["re.Match[str]"]:
+    """First hardcoded-credential literal in `text`, or None.
+
+    For structural sites that need the match object itself (the n8n direct-embed
+    pairing) rather than a finding. Derives from CREDENTIAL_RULES so it cannot
+    drift from the rules the prose sites run.
+    """
+    for rule in CREDENTIAL_RULES:
+        if rule.pattern is None:
+            continue
+        m = rule.pattern.search(text)
+        if m:
+            return m
+    return None
+
+GENERIC_TEXT_RULES: List[AgentRule] = [
+    EXFIL_RULE, URL_EXFIL_RULE, WEBHOOK_EXFIL_RULE, OBF_RULE,
+    *CREDENTIAL_RULES,
+    DESTRUCT_RULE,
+]
 
 # --- Shared: the fetch-and-execute command shape -------------------------------
 # A command that downloads code and immediately runs it is remote code execution at
@@ -3142,6 +3177,9 @@ class AgentSupplyChainScanner(BaseScanner):
     def _scan_n8n(self, fp: Path, text: str) -> List[ScanFinding]:
         findings = self._apply_rules(text, N8N_RULES + GENERIC_TEXT_RULES + self._extra(), fp, "n8n-workflow")
         findings += self._check_n8n_cred_exfil(fp, text)
+        # CREDENTIAL_RULES already reach here inside GENERIC_TEXT_RULES, but the
+        # service_role JWT needs the decode — which never ran on n8n exports.
+        findings += self._check_jwt_secrets(text, fp, "n8n-workflow")
         findings += self._check_tag_smuggling(text, fp, "n8n-workflow")
         findings += self._check_bidi(text, fp, "n8n-workflow")
         return self._dedupe(findings)
@@ -3184,7 +3222,10 @@ class AgentSupplyChainScanner(BaseScanner):
             if not reads_cred and (_N8N_CRED_EXPR.search(params_blob) or _N8N_ENV_SECRET.search(params_blob)):
                 reads_cred = True
             # A hardcoded key literal counts as a credential read AND drives condition B.
-            secret_m = SECRET_RULE.pattern.search(params_blob) if SECRET_RULE.pattern else None
+            # Derived from the canonical CREDENTIAL_RULES, not a private copy: this
+            # site knew only SECRET-001's shapes, so a node shipping a Stripe live
+            # key / bot token was not even recognised as reading a credential.
+            secret_m = _credential_match(params_blob)
             if secret_m:
                 reads_cred = True
             if reads_cred and cred_node is None:
@@ -3232,9 +3273,17 @@ class AgentSupplyChainScanner(BaseScanner):
         payloads, out-of-band exfil, destructive commands) — ordinary
         formatter/linter/test hooks never match. The universal stealth-character
         checks (invisible / Unicode-Tags / bidi) also run.
+
+        The credential sweep runs too: settings.json's documented `env` block is
+        where Claude Code is *told* to put API keys, and the file is routinely
+        committed — so it is the likeliest real leak channel of any agent artifact,
+        yet it was the only class no credential rule reached. The broad
+        natural-language rules stay excluded by design (see the module note); the
+        credential rules are signature matches, so they are safe on config text.
         """
         findings = self._check_auto_exec_commands(fp, text)
         findings += self._check_settings_permissions(fp, text)
+        findings += self._check_credentials(text, fp, "claude-settings")
         findings += self._check_invisible(text, fp, "claude-settings")
         findings += self._check_tag_smuggling(text, fp, "claude-settings")
         findings += self._check_bidi(text, fp, "claude-settings")
@@ -3739,6 +3788,25 @@ class AgentSupplyChainScanner(BaseScanner):
                 line_no = text.count("\n", 0, m.start()) + 1
                 out.append(self._finding(SECRET2_RULE, fp, artifact, snippet, line_no))
         return out
+
+    def _check_credentials(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
+        """The complete hardcoded-credential sweep for one artifact.
+
+        Pairs the canonical `CREDENTIAL_RULES` signature set with the
+        `_check_jwt_secrets` decode (the service_role JWT needs a decode to tell it
+        apart from the publishable anon key, so a pattern list alone misses it).
+        A site that does not already receive `CREDENTIAL_RULES` via
+        `GENERIC_TEXT_RULES` calls THIS rather than re-listing the rules, so a
+        future SECRET-00N reaches every artifact class at once. What actually holds
+        the line is the reach property itself — every credential shape must be
+        flagged at every artifact site — asserted directly by
+        tests/test_credential_reach_parity.py rather than by any one call site.
+
+        Safe on raw config text: every rule here is a signature match on a
+        structurally distinctive key prefix, not a natural-language heuristic.
+        """
+        return (self._apply_rules(text, CREDENTIAL_RULES, fp, artifact)
+                + self._check_jwt_secrets(text, fp, artifact))
 
     @staticmethod
     def _redact(s: str) -> str:
