@@ -488,7 +488,7 @@ contract as the backlog (fixtures + a zero-false-positive benign baseline).
   benign baselines incl. three real ngrok vendor domains) — **mutation-verified**: reverting
   EXFIL-003 to its private pre-C14 pattern fails 24 tests, and a drifted private n8n copy
   (missing `.ngrok-free.dev`) fails 4. Full suite **1571 green** (was 1381); ruff +
-  strict-mypy clean; self-scan gate still 0 HIGH+ (48 items). _(commit PENDING)_
+  strict-mypy clean; self-scan gate still 0 HIGH+ (48 items). _(commit 96ec5ac)_
 
 ---
 
