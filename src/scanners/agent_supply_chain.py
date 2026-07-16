@@ -2878,19 +2878,17 @@ class AgentSupplyChainScanner(BaseScanner):
 
         Skills, AI instruction files, and slash-command files are all model-facing
         prose that an agent reads as instructions, so they share one detection path —
-        a pattern rule set plus every stealth-channel check (invisible chars,
-        Unicode-Tags smuggling, bidi, confusables, link mismatch, hidden comments,
-        frontmatter bypass, memory poisoning, staged payloads). `rules` overrides the
+        a pattern rule set plus the canonical stealth-character suite
+        (`_check_stealth_channels`) and the prose-shaped structural checks (link
+        mismatch, hidden comments, frontmatter bypass, memory poisoning, staged
+        payloads). `rules` overrides the
         default pattern set (commands pass a calibrated high-precision subset); the
         structural checks below are high-precision and run for every prose artifact.
         """
         if rules is None:
             rules = PROMPT_INJECTION_RULES + GENERIC_TEXT_RULES + self._extra()
         findings = self._apply_rules(text, rules, fp, artifact)
-        findings += self._check_invisible(text, fp, artifact)
-        findings += self._check_tag_smuggling(text, fp, artifact)
-        findings += self._check_bidi(text, fp, artifact)
-        findings += self._check_confusables(text, fp, artifact)
+        findings += self._check_stealth_channels(text, fp, artifact)
         findings += self._check_link_mismatch(text, fp, artifact)
         findings += self._check_hidden_comment(text, fp, artifact)
         findings += self._check_frontmatter(text, fp, artifact)
@@ -2956,9 +2954,7 @@ class AgentSupplyChainScanner(BaseScanner):
         return self._scan_text_artifact(fp, text, quick_mode, artifact, rules)
 
     def _scan_mcp(self, fp: Path, text: str) -> List[ScanFinding]:
-        findings = self._check_invisible(text, fp, "mcp-config")
-        findings += self._check_tag_smuggling(text, fp, "mcp-config")
-        findings += self._check_bidi(text, fp, "mcp-config")
+        findings = self._check_stealth_channels(text, fp, "mcp-config")
         structured = self._scan_mcp_structured(fp, text)
         if structured is None:
             # not valid JSON — fall back to raw-text rules
@@ -3180,8 +3176,7 @@ class AgentSupplyChainScanner(BaseScanner):
         # CREDENTIAL_RULES already reach here inside GENERIC_TEXT_RULES, but the
         # service_role JWT needs the decode — which never ran on n8n exports.
         findings += self._check_jwt_secrets(text, fp, "n8n-workflow")
-        findings += self._check_tag_smuggling(text, fp, "n8n-workflow")
-        findings += self._check_bidi(text, fp, "n8n-workflow")
+        findings += self._check_stealth_channels(text, fp, "n8n-workflow")
         return self._dedupe(findings)
 
     def _check_n8n_cred_exfil(self, fp: Path, text: str) -> List[ScanFinding]:
@@ -3271,8 +3266,8 @@ class AgentSupplyChainScanner(BaseScanner):
         structurally extract every hook `command` string and flag only the
         unambiguously dangerous shapes (fetch-and-execute, obfuscated/encoded
         payloads, out-of-band exfil, destructive commands) — ordinary
-        formatter/linter/test hooks never match. The universal stealth-character
-        checks (invisible / Unicode-Tags / bidi) also run.
+        formatter/linter/test hooks never match. The canonical stealth-character
+        suite (`_check_stealth_channels`) also runs.
 
         The credential sweep runs too: settings.json's documented `env` block is
         where Claude Code is *told* to put API keys, and the file is routinely
@@ -3284,9 +3279,7 @@ class AgentSupplyChainScanner(BaseScanner):
         findings = self._check_auto_exec_commands(fp, text)
         findings += self._check_settings_permissions(fp, text)
         findings += self._check_credentials(text, fp, "claude-settings")
-        findings += self._check_invisible(text, fp, "claude-settings")
-        findings += self._check_tag_smuggling(text, fp, "claude-settings")
-        findings += self._check_bidi(text, fp, "claude-settings")
+        findings += self._check_stealth_channels(text, fp, "claude-settings")
         return self._dedupe(findings)
 
     def _check_auto_exec_commands(self, fp: Path, text: str) -> List[ScanFinding]:
@@ -3449,6 +3442,32 @@ class AgentSupplyChainScanner(BaseScanner):
             line_no = text.count("\n", 0, m.start()) + 1
             evidence = self._mask_secret(m.group(0)) if rule.secret else self._redact(m.group(0))
             findings.append(self._finding(rule, fp, artifact, evidence, line_no))
+        return findings
+
+    def _check_stealth_channels(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
+        """Run the canonical stealth-character suite over any artifact's raw text.
+
+        These four checks share one property that makes them safe on EVERY artifact
+        class an agent loads — prose and config alike: each is a signature match on
+        distinctive non-ASCII code points, not a natural-language heuristic. A JSON
+        config has no legitimate reason to carry a zero-width space, a Unicode Tags
+        character, a bidi override, or a Latin word with a Cyrillic letter spliced
+        into it, so the invariant that keeps them false-positive-free in a SKILL.md
+        holds verbatim in an mcp.json, an n8n export, or a settings.json.
+
+        Every artifact class routes through this one helper so the suite cannot
+        reach some classes and miss others — the drift this replaced, where the
+        three sites that hand-listed these checks had fallen out of sync: an n8n
+        export never ran the invisible-character check, and the homoglyph check
+        reached only prose even though its own rule text is about impersonating a
+        trusted tool name — exactly the mcp.json case. A test asserts the full
+        check x artifact-class matrix, so a new class (or a fifth stealth check)
+        cannot ship half-wired.
+        """
+        findings = self._check_invisible(text, fp, artifact)
+        findings += self._check_tag_smuggling(text, fp, artifact)
+        findings += self._check_bidi(text, fp, artifact)
+        findings += self._check_confusables(text, fp, artifact)
         return findings
 
     def _check_invisible(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:

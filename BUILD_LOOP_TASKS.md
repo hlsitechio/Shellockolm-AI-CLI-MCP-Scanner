@@ -536,6 +536,77 @@ contract as the backlog (fixtures + a zero-false-positive benign baseline).
   sites) — **mutation-verified**: removing the settings sweep, the n8n decode, or reverting
   condition B to its private copy each fails the suite. Full suite **1684 green** (was
   1571); ruff + strict-mypy clean; self-scan gate still 0 HIGH+ (48 items). _(commit 2368c9f)_
+- C16. [x] **The stealth-character suite now reaches every artifact class — closing an
+  n8n blind spot and a homoglyph hole at the exact site the rule advertises** — C12/C13
+  shared the *payload pattern* across two auto-exec sites, C14 the *sink host list*
+  across three rules, C15 the *credential family* across every artifact class; this
+  applies the identical lesson to the **stealth-character** suite, which **four** sites
+  hand-listed independently and which had drifted apart. A smuggled code point is
+  invisible in ANY artifact an agent loads, so a measured **4-check × 7-site matrix**
+  (invisible `PI-005` / Unicode-Tags `PI-007` / bidi `PI-010` / confusable `PI-011` ×
+  skill/instructions/command/subagent/mcp-config/n8n/settings) was **blind in 4 of 28
+  cells against the committed HEAD**. Two independent drifts, one cause: **(A)**
+  `_scan_n8n` ran tags + bidi but **never the invisible-character check**, so a
+  zero-width-smuggled instruction in an n8n AI-agent node's `systemMessage` scored
+  **ZERO** while the identical payload in a `settings.json` beside it scored MEDIUM —
+  three separate docstrings call these "the universal stealth-character checks" and name
+  them as a trio, yet n8n only ever ran two thirds of it. **(B)** the homoglyph check
+  **reached prose only** — even though `CONFUSABLE_RULE`'s own description says it
+  catches an attacker who "impersonate[s] a trusted tool/skill name past a filter",
+  which is *precisely* the mcp.json case: a server named `gіthub` (Cyrillic і) reads as
+  the real GitHub server to a human reviewing the config and to the model, but is a
+  different string an allowlist never matches. **The one artifact class where the rule's
+  own stated attack lives was the class it never ran on.** Fix mirrors C12–C15: one
+  canonical `_check_stealth_channels` that all seven classes route through (a spy test
+  asserts every class calls it, so no class can hand-list the checks again). Matrix
+  **4/28 → 0/28**. Widening to the config classes is safe for the same reason C15's
+  credential sweep was — each check is a **signature match on distinctive non-ASCII code
+  points**, not an NL heuristic, so a JSON config has no legitimate reason to carry one;
+  that property is now enforced (a medium/low-confidence rule joining the suite fails
+  the suite), the mixed-script invariant (genuine foreign text is never flagged — only
+  Latin-plus-confusable *mixing* within one word) is asserted at every newly-reached
+  site, and the NL-rule exclusion from config classes stays policy. Strict superset: the
+  pre-existing settings-hook and MCP raw-URL detections still fire and now coexist with
+  stealth findings. **Zero-FP verified NON-VACUOUSLY on real content:** **5,284 real
+  agent artifacts** (the machine's `~/.claude` tree + `G:/skills` — 2,766 skills, 1,278
+  subagents, 1,121 commands, 64 instruction files, 38 mcp configs, 17 settings.json)
+  produce a finding set **byte-identical before and after** (297 findings), and the
+  stealth family *does* fire on that corpus (3 pre-existing true positives: 1× PI-005,
+  2× PI-011) so the zero is real rather than a suite that never runs; sharper still for
+  the newly-reached sites, all **37** real `mcp.json` and all **17** real
+  `settings.json` on the machine are clean while those **same 54 files each with ONE
+  planted confusable are caught 54/54** — the sweep is live on real config content, not
+  just fixtures. **Honest limitation:** no real n8n corpus exists on this machine (a
+  full `G:` sweep found zero workflow exports), so the n8n cells are **fixture-verified
+  only** — the mixed-script invariant is content-independent, but that cell has not been
+  measured against real-world exports. **Found en route (deliberately NOT fixed here —
+  scope is reach, not the map's contents):** the curated `CONFUSABLES` map has **no `u`
+  look-alike at all** and lacks Greek upsilon (U+03C5), so a literal `githυb` is not
+  caught by any site; that is a rule-coverage follow-up (F1 below), and the flagship
+  impersonation test uses a mapped confusable rather than papering over it. No rule
+  added (count stays 42); RULES.md + THREAT_MODEL.md drift `--check` green. 73 new tests
+  (`tests/test_stealth_reach_parity.py`: the 28-cell reach property asserted directly +
+  a per-site scanned-non-vacuity guard, the 4 measured regressions incl. the
+  trusted-server impersonation, canonical-suite membership + the per-class routing spy,
+  the signature-only invariant, 21 benign baselines across all 7 sites — ASCII, benign
+  non-ASCII (emoji/curly quotes/em dash), and genuine foreign text — and the two
+  strict-superset guards) — **mutation-verified**: dropping a check from the suite fails
+  13 tests, and reverting the n8n / mcp / settings site to its hand-listed copy fails
+  5 / 4 / 5. Full suite **1757 green** (was 1684); ruff + strict-mypy clean; self-scan
+  gate still 0 HIGH+ (48 items). _(commit __HASH__)_
+
+---
+
+## Open follow-ups (surfaced by a run, not yet worked)
+
+- F1. [ ] **`CONFUSABLES` map has no `u` look-alike** — surfaced by C16. The curated
+  homoglyph map covers Cyrillic/Greek look-alikes for most Latin letters but has **no
+  entry mapping to `u`**, and omits Greek upsilon (U+03C5), so `githυb` — a natural
+  homoglyph spoof of one of the most-impersonated names in the ecosystem — is caught at
+  **no** site. C16 fixed which artifact classes the check *reaches*; this is about what
+  the map *contains*. Candidate additions need the usual zero-FP calibration against the
+  real corpus (Greek/Cyrillic text is legitimate; only mixed-script words fire), since
+  widening the map widens every site at once.
 
 ---
 
