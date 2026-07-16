@@ -593,7 +593,7 @@ contract as the backlog (fixtures + a zero-false-positive benign baseline).
   strict-superset guards) — **mutation-verified**: dropping a check from the suite fails
   13 tests, and reverting the n8n / mcp / settings site to its hand-listed copy fails
   5 / 4 / 5. Full suite **1757 green** (was 1684); ruff + strict-mypy clean; self-scan
-  gate still 0 HIGH+ (48 items). _(commit __HASH__)_
+  gate still 0 HIGH+ (48 items). _(commit 3cfb976)_
 
 ---
 
