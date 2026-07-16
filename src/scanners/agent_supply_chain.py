@@ -804,10 +804,67 @@ DESTRUCT_RULE = AgentRule(
     # command-file scanning), so the literal match is not always a true positive.
     confidence="medium",
 )
+# --- Shared: the out-of-band capture / paste sink host set ---------------------
+# A request-capture, paste, or tunnel host is an attacker's egress endpoint wherever it
+# appears, so — exactly like `_FETCH_EXEC` / `_OBFUSCATED_EXEC` below — every site that
+# asks "is this an exfil sink?" consumes this ONE dataset instead of keeping a private
+# copy: the generic prose rule (AGENT-EXFIL-003, which runs on every skill / instruction
+# / command file and the raw MCP config text), the settings auto-run command rule
+# (AGENT-HOOK-003), and the n8n credential-pairing rule (AGENT-N8N-002).
+#
+# Three hand-maintained copies had already drifted, and the WIDEST-REACHING one was the
+# most stale: AGENT-EXFIL-003 knew only the legacy `*.ngrok.io/.app/.dev` domains, so a
+# skill exfiltrating to `*.ngrok-free.app` — the domain every FREE ngrok tunnel is
+# assigned today, i.e. the one an opportunistic attacker actually lands on — scored ZERO
+# on the product's core surface while the identical URL in a settings hook scored HIGH.
+# `paste.ee` and `*.ngrok-free.dev` had drifted the same way. Sharing the dataset means
+# a sink added for one site can never again be invisible at another; tests assert all
+# three matchers agree on every host here.
+#
+# Exact hosts — matched as the host itself or any subdomain of it:
+_OOB_CAPTURE_HOSTS: Tuple[str, ...] = (
+    "webhook.site", "requestbin.com", "requestbin.net",
+    "interact.sh", "burpcollaborator.net", "dnslog.cn",
+    "pastebin.com", "hastebin.com", "paste.ee",
+)
+# Host SUFFIX families — the sink is a per-run attacker-controlled subdomain, so only
+# the parent domain is knowable. The leading dot is load-bearing: it requires a
+# subdomain, so the vendor's own marketing site (`ngrok.com`) is not a sink.
+_OOB_CAPTURE_SUFFIXES: Tuple[str, ...] = (
+    ".ngrok.io", ".ngrok.app", ".ngrok.dev",
+    ".ngrok-free.app", ".ngrok-free.dev",
+    ".oast.live", ".oast.fun", ".oast.site", ".oast.online", ".oast.pro", ".oast.me",
+    ".requestcatcher.com",
+)
+
+
+def _oob_sink_alternation() -> str:
+    """Regex alternation matching any canonical OOB capture/paste sink host.
+
+    Built FROM the tuples above so a regex-based site cannot drift from the
+    host-comparison site (`_n8n_is_oob_sink`) that consumes the same data.
+    """
+    return "|".join(
+        re.escape(h) for h in (*_OOB_CAPTURE_HOSTS, *_OOB_CAPTURE_SUFFIXES)
+    )
+
+
+# Sinks matched ONLY by the generic prose rule below — never by the hook or n8n rules.
+# Slack/Discord incoming webhooks and pipedream are LEGITIMATE notification destinations
+# (a build hook or a workflow posting a status message to Slack is ordinary plumbing),
+# so those two rules deliberately exclude them to stay zero-FP. In model-facing PROSE,
+# an instruction to POST collected data to a chat webhook is a documented exfil pattern,
+# so the generic rule keeps flagging them. The bare `requestbin` token (any TLD) is
+# retained from this rule's original pattern so unifying the list cannot NARROW it.
+_PROSE_ONLY_SINKS = (
+    r"discord(?:app)?\.com/api/webhooks|hooks\.slack\.com/services|pipedream\.net"
+    r"|requestbin"
+)
+
 WEBHOOK_EXFIL_RULE = AgentRule(
     "AGENT-EXFIL-003", "Exfiltration to a paste / webhook / out-of-band service",
     FindingSeverity.HIGH, 8.0,
-    _c(r"(discord(app)?\.com/api/webhooks|hooks\.slack\.com/services|pastebin\.com/(raw/)?|hastebin\.com|requestbin|pipedream\.net|webhook\.site|\.ngrok\.(io|app|dev)|\.oast\.(live|fun|site|online|pro|me)|interact\.sh|burpcollaborator\.net|dnslog\.cn|\.requestcatcher\.com)"),
+    _c(rf"(?:{_oob_sink_alternation()}|{_PROSE_ONLY_SINKS})"),
     "References a paste bin, chat webhook, or out-of-band collaborator endpoint — common exfiltration sinks for stolen data.",
     "Remove the endpoint. Agent artifacts should not post to paste/webhook/OOB services.",
 )
@@ -1347,18 +1404,13 @@ N8N_RULES: List[AgentRule] = [
 # or pastes a real key into an outbound call, is exfiltration, not an integration.
 
 # Out-of-band / request-capture / paste sinks that never belong in a production n8n
-# workflow. Slack / Discord incoming webhooks and pipedream are intentionally absent
-# (legitimate notification patterns) so they are never mistaken for exfil here.
-_N8N_OOB_SINK_HOSTS = (
-    "webhook.site", "requestbin.com", "requestbin.net",
-    "interact.sh", "burpcollaborator.net", "dnslog.cn",
-    "pastebin.com", "hastebin.com", "paste.ee",
-)
-_N8N_OOB_SINK_SUFFIXES = (
-    ".ngrok.io", ".ngrok.app", ".ngrok.dev", ".ngrok-free.app",
-    ".oast.live", ".oast.fun", ".oast.site", ".oast.online", ".oast.pro", ".oast.me",
-    ".requestcatcher.com",
-)
+# workflow. These are the SHARED canonical sets (see `_OOB_CAPTURE_HOSTS` above) rather
+# than a private copy — this list previously drifted, missing `*.ngrok-free.dev`, which
+# the settings-hook rule already caught. Slack / Discord incoming webhooks and pipedream
+# are intentionally absent from the canonical set (legitimate notification patterns), so
+# they are never mistaken for exfil here; the generic prose rule adds them separately.
+_N8N_OOB_SINK_HOSTS = _OOB_CAPTURE_HOSTS
+_N8N_OOB_SINK_SUFFIXES = _OOB_CAPTURE_SUFFIXES
 # Expressions / calls that pull RAW credential or secret values into the data stream
 # (as opposed to n8n's normal auth injection, which never exposes the value).
 _N8N_CRED_EXPR = re.compile(
@@ -1563,15 +1615,13 @@ PRO_RULES: List[AgentRule] = [
 # auto-exec sites (the MCP launcher rule and the hook rule below) consume it and
 # MCP_RULES is built first. This name is the hook site's historical alias for it.
 _HOOK_OBFUSCATED = _OBFUSCATED_EXEC
-_HOOK_OOB_EXFIL = _c(
-    r"\bhttps?://[^\s\"'`]*(?:"
-    r"webhook\.site|requestbin\.(?:com|net)|interact\.sh|burpcollaborator\.net|dnslog\.cn"
-    r"|[a-z0-9-]+\.requestcatcher\.com"
-    r"|[a-z0-9-]+\.ngrok(?:-free)?\.(?:io|app|dev)"
-    r"|[a-z0-9-]+\.oast\.(?:live|fun|site|online|pro|me)"
-    r"|pastebin\.com|hastebin\.com|paste\.ee"
-    r")"
-)
+# The sink host set is the SHARED canonical one (see `_OOB_CAPTURE_HOSTS`) rather than a
+# private copy, for the same reason `_FETCH_EXEC` / `_OBFUSCATED_EXEC` are shared: a sink
+# is a sink at whichever site the payload is written. This rule keeps its own `https?://`
+# anchor — unlike the prose rule, it inspects a COMMAND, where a sink is only reachable
+# as a real URL, so requiring the scheme costs no detection and avoids matching a bare
+# hostname mentioned in a command's arguments.
+_HOOK_OOB_EXFIL = _c(rf"\bhttps?://[^\s\"'`]*(?:{_oob_sink_alternation()})")
 
 # Documented settings.json keys — besides `hooks` — whose value is a shell command the
 # agent executes AUTOMATICALLY, with no per-invocation permission prompt. Each is a

@@ -449,6 +449,47 @@ contract as the backlog (fixtures + a zero-false-positive benign baseline).
   pattern, or widening the scope to env each makes the suite fail. Full suite **1381 green**
   (was 1342); ruff + mypy gate clean; self-scan gate still 0 HIGH+ (48 items). _(commit 28fd369)_
 
+- C14. [x] **The out-of-band sink host list is now shared — closing an `ngrok-free` blind
+  spot on the product's core surface** — C12/C13 shared the *payload pattern* between the
+  two auto-exec sites; this applies the identical lesson to the other axis, the *sink host
+  list*, which had drifted across **three** independent hand-maintained copies: the generic
+  prose rule **AGENT-EXFIL-003** (every skill / instruction / command file + the raw MCP
+  config text — by far the widest reach), the settings auto-run rule **AGENT-HOOK-003**, and
+  the n8n pairing **AGENT-N8N-002**. The widest-reaching copy was the most stale.
+  **Verified against the committed HEAD**, EXFIL-003 knew only the legacy
+  `*.ngrok.io/.app/.dev` domains, so a skill exfiltrating to **`*.ngrok-free.app` — the
+  domain every FREE ngrok tunnel is assigned today**, i.e. the one an opportunistic attacker
+  actually lands on — scored **ZERO** on skills/instructions/commands while the identical URL
+  in a settings hook scored HIGH. `*.ngrok-free.dev` (also missed by n8n), `paste.ee`, and a
+  bare `pastebin.com` (the pattern required a trailing `/`) had drifted the same way: a
+  measured 18-sink × 3-site matrix showed **4/18 sinks blind at ≥1 site → 0/18 after**.
+  Fix mirrors C12/C13: one canonical dataset (`_OOB_CAPTURE_HOSTS` exact hosts +
+  `_OOB_CAPTURE_SUFFIXES` per-run subdomain families) that all three sites derive from — the
+  two regex sites via `_oob_sink_alternation()` (escaped, so a dot can't silently widen every
+  site at once), the n8n host-comparison site by consuming the tuples directly (an identity
+  test, not equality, so a copy can't drift). The leading dot on each suffix is load-bearing:
+  it requires a subdomain, so the vendor's own `ngrok.com` / bare `ngrok-free.app` is not a
+  sink. Unification is a **strict superset, never a narrowing** — a guard replays the literal
+  pre-C14 pattern and asserts every legacy match still fires (incl. bare `requestbin` on any
+  TLD), and the prose rule keeps its own `_PROSE_ONLY_SINKS`: Slack/Discord incoming webhooks
+  and pipedream stay **deliberately absent from the canonical set** (a build hook or workflow
+  posting a status message to Slack is ordinary plumbing → FP), while remaining flagged in
+  model-facing prose where "POST the collected data to a chat webhook" is a documented exfil
+  pattern — that asymmetry is now **policy, locked in both directions**, rather than accidental
+  divergence. **Zero-FP verified NON-VACUOUSLY on real content:** **5,284 real agent artifacts**
+  (the machine's `~/.claude` tree + `G:/skills`) produce a finding set **byte-identical before
+  and after** (283 findings), and EXFIL-003 *does* fire on that corpus (one pre-existing
+  Slack-webhook true positive in a marketplace command file), so the zero is real rather than a
+  rule that never runs. No rule added (count stays 42); RULES.md + THREAT_MODEL.md drift
+  `--check` green. 190 new tests (`tests/test_oob_sink_parity.py`: per-site coverage of all 21
+  canonical sinks, the three-site parity property asserted directly, the 4 drift regressions,
+  shared-dataset identity + per-entry presence in every regex site, metacharacter escaping,
+  the strict-superset guard, the notification-webhook policy in both directions, and 12
+  benign baselines incl. three real ngrok vendor domains) — **mutation-verified**: reverting
+  EXFIL-003 to its private pre-C14 pattern fails 24 tests, and a drifted private n8n copy
+  (missing `.ngrok-free.dev`) fails 4. Full suite **1571 green** (was 1381); ruff +
+  strict-mypy clean; self-scan gate still 0 HIGH+ (48 items). _(commit PENDING)_
+
 ---
 
 Completed prior to this backlog (context): AGENT-PI-001…010, MCP structured scan,

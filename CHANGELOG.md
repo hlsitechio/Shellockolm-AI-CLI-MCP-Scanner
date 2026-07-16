@@ -128,6 +128,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`AGENT-EXFIL-003` missed `*.ngrok-free.app` — the domain every free ngrok tunnel
+  gets** — the out-of-band sink host list existed as three independent hand-maintained
+  copies (the generic prose rule `AGENT-EXFIL-003`, which runs on every skill /
+  instruction / command file and the raw MCP config text; the settings auto-run rule
+  `AGENT-HOOK-003`; and the n8n pairing `AGENT-N8N-002`), and they had drifted — with the
+  widest-reaching copy the most stale. Against the previous release, `AGENT-EXFIL-003`
+  knew only the legacy `*.ngrok.io/.app/.dev` domains, so a skill exfiltrating to
+  `*.ngrok-free.app` scored **zero** on the product's core surface while the identical URL
+  inside a settings hook scored HIGH. `*.ngrok-free.dev` (also missed by the n8n rule),
+  `paste.ee`, and a bare `pastebin.com` (the pattern required a trailing `/`) had drifted
+  the same way. All three sites now derive from one shared dataset, so a sink added for one
+  site can never again be invisible at another. The change is a strict superset — every
+  host the previous pattern matched still matches — and Slack/Discord incoming webhooks and
+  pipedream remain deliberately scoped to prose only, since a build hook or workflow posting
+  a status message to Slack is ordinary plumbing. Verified as a no-op on real content: 5,284
+  real agent artifacts produce a byte-identical finding set.
 - **`AGENT-PI-002` false positives on a skill's own activation docs** — the
   low-confidence hidden-conditional-trigger heuristic no longer fires when its
   "when the user does X" match sits where a skill legitimately *advertises* when
