@@ -489,6 +489,53 @@ contract as the backlog (fixtures + a zero-false-positive benign baseline).
   EXFIL-003 to its private pre-C14 pattern fails 24 tests, and a drifted private n8n copy
   (missing `.ngrok-free.dev`) fails 4. Full suite **1571 green** (was 1381); ruff +
   strict-mypy clean; self-scan gate still 0 HIGH+ (48 items). _(commit 96ec5ac)_
+- C15. [x] **The credential rule family now reaches every artifact class — closing a
+  whole-class blind spot on `.claude/settings.json`** — C12/C13 shared the *payload
+  pattern* across two auto-exec sites and C14 the *sink host list* across three rules;
+  this applies the identical lesson to the **credential** dataset, which had not drifted
+  between copies so much as failed to reach two of the six artifact classes at all. A real
+  credential can be pasted into ANY artifact an agent loads, so a measured **9-shape ×
+  6-site matrix** (AWS/GitHub/Slack/OpenAI/Google · Stripe/Telegram/Discord · Supabase
+  service_role JWT × skill/instructions/command/mcp-config/n8n/settings) was **blind in 10
+  of 54 cells against the committed HEAD**. **`.claude/settings.json` was a whole-class
+  hole (9/9 shapes ZERO)** — and the worst possible one, since its documented `env` block
+  is precisely where Claude Code is *told* to put API keys and the file is routinely
+  committed to a repo: the identical three credentials scored **3× HIGH in a `SKILL.md`
+  and ZERO in a `settings.json` beside it** (verified live; the file *was* scanned —
+  `claude_settings_scanned: 1` — so it was a rule-**reach** gap, not a discovery gap).
+  Cause: `_scan_settings` deliberately excludes the broad natural-language rules (a config
+  file is not model-facing prose) and the credential rules had been swept out with them.
+  Separately the **service_role JWT decode never ran on n8n exports**, so the
+  RLS-bypassing server secret was invisible there, and `AGENT-N8N-002`'s direct-embed
+  pairing kept a **private `SECRET_RULE.pattern` copy** knowing only SECRET-001's shapes —
+  a node shipping a hardcoded Stripe live key to an external host was not recognised as
+  reading a credential at all. Fix mirrors C12–C14: one canonical `CREDENTIAL_RULES` that
+  `GENERIC_TEXT_RULES` derives from by **identity** (a test asserts the shared object, so
+  a copy can't drift), paired with the decode by `_check_credentials`, and the n8n
+  structural site consuming the same dataset via `_credential_match`. Matrix **10/54 →
+  0/54**. Widening settings is safe *because* these rules are signature matches on
+  distinctive key prefixes rather than NL heuristics — a `${VAR}` interpolation, an
+  `apiKeyHelper` that shells out, and a secret-manager reference carry no literal — and
+  that property is now enforced (a medium/low-confidence rule joining `CREDENTIAL_RULES`
+  fails the suite); the anon-key anti-FP (shape-identical to the service_role secret, safe
+  to ship) holds at the new site, and the **NL-rule exclusion from settings is locked in
+  both directions** as policy rather than accident. Strict superset: the pre-existing
+  settings rules still fire and now coexist with credential findings. **Zero-FP verified
+  NON-VACUOUSLY on real content:** **5,284 real agent artifacts** (the machine's `~/.claude`
+  tree + `G:/skills`) produce a finding set **byte-identical before and after** (283
+  findings), and the family *does* fire on that corpus (31 pre-existing SECRET-001 true
+  positives) so the zero is real; sharper still for the new site, all **18** real
+  `settings.json` files on the machine are clean while those **same 18 files each with ONE
+  planted credential are caught 18/18** — the sweep is live on real settings content, not
+  just fixtures. Redaction re-asserted at both newly-reached sites (no finding re-emits a
+  live secret). No rule added (count stays 42); RULES.md + THREAT_MODEL.md drift `--check`
+  green. 114 new tests (`tests/test_credential_reach_parity.py`: the 54-cell reach property
+  asserted directly + a scanned-non-vacuity guard, the measured regressions, shared-dataset
+  identity, signature-only invariant, 8 benign settings baselines incl. anon-JWT and
+  `${VAR}`, the NL-exclusion policy, strict-superset guards, and redaction across both
+  sites) — **mutation-verified**: removing the settings sweep, the n8n decode, or reverting
+  condition B to its private copy each fails the suite. Full suite **1684 green** (was
+  1571); ruff + strict-mypy clean; self-scan gate still 0 HIGH+ (48 items). _(commit 2368c9f)_
 
 ---
 
