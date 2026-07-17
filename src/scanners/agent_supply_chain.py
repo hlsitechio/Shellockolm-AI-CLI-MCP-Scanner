@@ -117,10 +117,31 @@ CONFUSABLES: Dict[str, str] = {
     "Ο": "O", "Ρ": "P", "Τ": "T", "Χ": "X", "Υ": "Y", "Ι": "I", "Ζ": "Z",
 }
 
-# Word tokens of length >= 3 made of ASCII letters and/or the confusable scripts
-# above (Latin + Cyrillic U+0400–04FF + Greek U+0370–03FF). Length >= 3 avoids
-# noise from short fragments; mixed-script detection happens per token below.
-_CONFUSABLE_WORD = re.compile(r"[A-Za-zЀ-ӿͰ-Ͽ]{3,}")
+def _build_confusable_word() -> "re.Pattern[str]":
+    """Compile the word tokenizer for the mixed-script confusable check.
+
+    A word token is length >= 3 built from ASCII letters and/or the confusable
+    scripts the map draws from (Latin + Cyrillic U+0400–04FF + Greek U+0370–03FF),
+    PLUS every ``CONFUSABLES`` key by construction. Building the class FROM the map
+    guarantees a look-alike whose code point falls OUTSIDE those two blocks
+    (U+0501 Komi De ``ԁ``→d, U+0299 ``ʙ``→b, U+0578 Armenian ``ո``→n) is still
+    tokenized into its surrounding word so it can actually fire — otherwise the
+    tokenizer splits the word at that character, its map entry is dead code, and
+    the advertised b/d/n coverage never triggers. It also means the tokenizer can
+    never again drift out of sync with the map: a future map addition is
+    automatically reachable. Widening only ADDS characters to the class, so the
+    set of detected artifacts is a strict superset (a token can merge/grow but
+    never split), and the per-token ASCII+confusable mixing test below still
+    protects genuine single-script foreign text. Length >= 3 avoids short-fragment
+    noise.
+    """
+    extra = "".join(re.escape(c) for c in sorted(set(CONFUSABLES)))
+    return re.compile("[A-Za-zЀ-ӿͰ-Ͽ" + extra + "]{3,}")
+
+
+# Word tokens for the mixed-script confusable check — built from the map so every
+# look-alike it lists is reachable (see `_build_confusable_word`).
+_CONFUSABLE_WORD = _build_confusable_word()
 
 
 def _build_stealth_char_class() -> "re.Pattern[str]":
@@ -1838,11 +1859,11 @@ CONFUSABLE_RULE = AgentRule(
     "AGENT-PI-011", "Homoglyph / mixed-script confusable spoofing",
     FindingSeverity.HIGH, 7.7, None,
     "A word mixes ASCII letters with confusable look-alike characters from "
-    "another script (Cyrillic/Greek). It reads identically to a human and to "
-    "the model, but defeats keyword/substring review — used to smuggle "
+    "another script (e.g. Cyrillic or Greek). It reads identically to a human "
+    "and to the model, but defeats keyword/substring review — used to smuggle "
     "instructions or impersonate a trusted tool/skill name past a filter.",
     "Normalize the text to ASCII and re-review; legitimate Latin-script "
-    "artifacts never mix Cyrillic/Greek look-alikes into English words.",
+    "artifacts never mix non-ASCII look-alikes into English words.",
 )
 LINK_MISMATCH_RULE = AgentRule(
     "AGENT-PI-012", "Markdown link text / href domain mismatch",

@@ -27,6 +27,7 @@ from scanners.agent_supply_chain import (  # noqa: E402
     N8N_CRED_EXFIL_RULE,
     HOOK_COMMAND_RULES,
     CONFUSABLES,
+    _CONFUSABLE_WORD,
     _confidence_rank,
     _normalize_confidence,
 )
@@ -278,6 +279,49 @@ def test_genuine_greek_upsilon_word_has_no_confusable_finding(scanner, tmp_path)
     result = scanner.scan_directory(_write_skill(tmp_path, body))
     assert not any(f.cve_id == "AGENT-PI-011" for f in result.findings), \
         "genuine single-script Greek text must not trigger confusable detection"
+
+
+def test_every_confusable_key_is_tokenizable():
+    # Reachability guard: EVERY look-alike the map lists must be part of the word
+    # tokenizer's character class, else its entry is dead code — the tokenizer
+    # splits the surrounding word at it and the confusable never fires. The prior
+    # bug: `ԁ` (U+0501 Komi De), `ʙ` (U+0299), and `ո` (U+0578 Armenian) mapped to
+    # d/b/n but fell OUTSIDE the tokenizer's Cyrillic/Greek block ranges, so the
+    # advertised b/d/n coverage silently could not trigger. Building the class from
+    # the map (see `_build_confusable_word`) makes drift impossible; this asserts it.
+    unreachable = [c for c in CONFUSABLES if not _CONFUSABLE_WORD.match("aa" + c + "aa")]
+    assert unreachable == [], (
+        "these confusable map keys are not tokenizable, so their detection is dead "
+        "code: " + ", ".join(f"U+{ord(c):04X}->{CONFUSABLES[c]}" for c in unreachable)
+    )
+
+
+@pytest.mark.parametrize("cp,spoof,real", [
+    (0x0501, "abԁuct", "abduct"),   # Komi De -> d
+    (0x0299, "goodʙye", "goodbye"),  # Latin small capital B -> b
+    (0x0578, "phoոe", "phone"),      # Armenian vo -> n
+])
+def test_out_of_block_confusable_now_detected(scanner, tmp_path, cp, spoof, real):
+    # Each of these words' ONLY confusable is an out-of-block look-alike that used
+    # to be unreachable (the tokenizer split the word at it). It must now fire, and
+    # the de-confused ASCII form + the exact code point must surface for review.
+    assert chr(cp) in spoof
+    body = f"# Helper\n\nRun the {spoof} step from the docs.\n"
+    result = scanner.scan_directory(_write_skill(tmp_path, body))
+    finding = next((f for f in result.findings if f.cve_id == "AGENT-PI-011"), None)
+    assert finding is not None, f"out-of-block confusable U+{cp:04X} must be detected"
+    assert real in finding.description
+    assert f"U+{cp:04X}" in finding.description
+
+
+def test_out_of_block_confusable_benign_foreign_word_not_flagged(scanner, tmp_path):
+    # The reachability fix must not flag genuine single-script foreign text: a whole
+    # Armenian word (no ASCII mixed in) is real content, not a homoglyph spoof, so
+    # the mixed-script gate must still suppress it even though `ո` is now tokenizable.
+    body = "# Skill\n\nformats code.\n\nայո ունի\n"  # Armenian
+    result = scanner.scan_directory(_write_skill(tmp_path, body))
+    assert not any(f.cve_id == "AGENT-PI-011" for f in result.findings), \
+        "genuine single-script Armenian text must not trigger confusable detection"
 
 
 # --- AGENT-PI-012: markdown link text / href domain mismatch ---

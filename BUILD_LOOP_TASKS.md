@@ -625,6 +625,38 @@ contract as the backlog (fixtures + a zero-false-positive benign baseline).
   skipped** (+4 new tests); ruff + strict-mypy clean; self-scan gate still 0 HIGH+ (48
   items). _(commit fe6b173)_
 
+- F2. [x] **`CONFUSABLES` map had 3 unreachable entries (dead b/d/n coverage)** —
+  surfaced while auditing the confusable check after F1. The map advertised
+  `ԁ`→d (U+0501 Cyrillic-Supplement Komi De), `ʙ`→b (U+0299 Latin small-capital B),
+  and `ո`→n (U+0578 Armenian vo), but the word tokenizer `_CONFUSABLE_WORD` was
+  hardcoded to `[A-Za-zЀ-ӿͰ-Ͽ]` — the ASCII + Cyrillic (U+0400–04FF) + Greek
+  (U+0370–03FF) blocks — which **excludes all three** code points. So the tokenizer
+  split any word at those chars: a token whose ONLY confusable was one of them
+  (`abԁuct`, `goodʙye`, `phoոe`) formed no ≥3 ASCII+confusable word and fired **no**
+  finding (empirically confirmed: 0/3), while the intended b/d/n homoglyph coverage
+  was silently dead code. Fix rebuilds the class **from the map** (`_build_confusable_word()`,
+  mirroring the `_build_stealth_char_class` anti-drift pattern): `A-Za-z` + the two
+  blocks + `re.escape` of every `CONFUSABLES` key, so every listed look-alike is
+  reachable by construction and the tokenizer can **never again drift** from the map
+  (a reachability test asserts 0 unreachable keys). Widening only ADDS characters to
+  the class, so tokens can merge/grow but never split — the detected-artifact set is a
+  **strict superset** (no detection can be lost), and the per-token ASCII+confusable
+  mixing gate still suppresses genuine single-script foreign text. **Zero-FP verified
+  NON-VACUOUSLY on real content:** the OLD vs NEW tokenizer were diffed over the whole
+  real corpus (`~/.claude` + `G:/skills`, **5,323 scanned agent artifacts**) — both
+  report the **same 2 PI-011 findings** (the pre-existing `демoing` true positives
+  persist, so the check genuinely runs), with **0 removed (no regression) and 0 added
+  (no new false positive)**; the out-of-block coverage is proven live by fixtures, not
+  the benign corpus, because real artifacts contain no such spoof yet. Also updated the
+  rule text from the now-inaccurate exhaustive "(Cyrillic/Greek)" to "(e.g. Cyrillic or
+  Greek)" / "non-ASCII look-alikes" (Armenian/IPA are now reachable) and regenerated
+  RULES.md (drift `--check` green; THREAT_MODEL.md unaffected). 5 new tests
+  (`tests/test_agent_supply_chain.py`: the every-key-is-tokenizable reachability guard,
+  3 parametrized out-of-block positive detections asserting the de-confused word +
+  exact code point surface, and a genuine single-script Armenian benign baseline). Full
+  suite **1765 passed / 1 skipped** (+5 tests); ruff + strict-mypy clean; self-scan gate
+  still 0 HIGH+ (48 items). _(commit __PENDING__)_
+
 ---
 
 Completed prior to this backlog (context): AGENT-PI-001…010, MCP structured scan,

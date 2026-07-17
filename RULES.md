@@ -626,7 +626,7 @@ A Unicode bidi override (U+202E, Trojan Source) reorders how a line displays so 
 
 - **Severity:** HIGH &nbsp;·&nbsp; **Tier:** free &nbsp;·&nbsp; **Confidence:** high &nbsp;·&nbsp; **CVSS:** 7.7 &nbsp;·&nbsp; **Attack class:** prompt-injection
 
-A word mixes ASCII letters with confusable look-alike characters from another script (Cyrillic/Greek). It reads identically to a human and to the model, but defeats keyword/substring review — used to smuggle instructions or impersonate a trusted tool/skill name past a filter.
+A word mixes ASCII letters with confusable look-alike characters from another script (e.g. Cyrillic or Greek). It reads identically to a human and to the model, but defeats keyword/substring review — used to smuggle instructions or impersonate a trusted tool/skill name past a filter.
 
 **Example attack**
 
@@ -634,7 +634,7 @@ A word mixes ASCII letters with confusable look-alike characters from another sc
 A skill is named `clаude-helper` where the `а` is Cyrillic U+0430, not ASCII `a` — it looks identical to a human and defeats a keyword filter, impersonating a trusted tool name.
 ```
 
-**Remediation:** Normalize the text to ASCII and re-review; legitimate Latin-script artifacts never mix Cyrillic/Greek look-alikes into English words.
+**Remediation:** Normalize the text to ASCII and re-review; legitimate Latin-script artifacts never mix non-ASCII look-alikes into English words.
 
 #### AGENT-PI-012
 
