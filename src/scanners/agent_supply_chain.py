@@ -111,6 +111,8 @@ CONFUSABLES: Dict[str, str] = {
     "Р": "P", "С": "C", "Т": "T", "Х": "X", "У": "Y", "І": "I", "Ј": "J",
     # Greek
     "ο": "o", "ν": "v", "α": "a", "ρ": "p", "ε": "e", "ι": "i", "κ": "k",
+    "υ": "u",  # U+03C5 small upsilon — the `u` look-alike ("githυb"); the only
+    #            homoglyph for `u` in the Cyrillic/Greek scripts this rule covers.
     "Α": "A", "Β": "B", "Ε": "E", "Η": "H", "Κ": "K", "Μ": "M", "Ν": "N",
     "Ο": "O", "Ρ": "P", "Τ": "T", "Χ": "X", "Υ": "Y", "Ι": "I", "Ζ": "Z",
 }

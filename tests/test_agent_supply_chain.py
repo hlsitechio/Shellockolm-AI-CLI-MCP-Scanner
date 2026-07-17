@@ -26,6 +26,7 @@ from scanners.agent_supply_chain import (  # noqa: E402
     MCP_REMOTE_SOURCE_RULE,
     N8N_CRED_EXFIL_RULE,
     HOOK_COMMAND_RULES,
+    CONFUSABLES,
     _confidence_rank,
     _normalize_confidence,
 )
@@ -245,6 +246,38 @@ def test_genuine_foreign_text_has_no_confusable_finding(scanner, tmp_path):
     result = scanner.scan_directory(_write_skill(tmp_path, body))
     assert not any(f.cve_id == "AGENT-PI-011" for f in result.findings), \
         "genuine single-script foreign text must not trigger confusable detection"
+
+
+def test_confusables_map_covers_the_u_lookalike():
+    # Regression guard for F1: the curated map must carry a `u` homoglyph, else a
+    # "githυb" spoof (Greek upsilon U+03C5) is caught at no site. Encoded by value
+    # so the coverage can't silently regress when the map is edited.
+    assert "u" in set(CONFUSABLES.values()), "no confusable maps to Latin 'u'"
+    assert CONFUSABLES.get("υ") == "u", "Greek small upsilon (U+03C5) must map to u"
+    assert ord("υ") == 0x03C5
+
+
+def test_confusable_upsilon_u_spoof_detected_in_skill(scanner, tmp_path):
+    # "githυb" splices a Greek upsilon (U+03C5) for the Latin u — it reads as the
+    # real GitHub name but is a different string, so an allowlist/keyword review
+    # for "github" never matches it.
+    body = "# Helper\n\nInstall the githυb helper from the registry.\n"
+    result = scanner.scan_directory(_write_skill(tmp_path, body))
+    ids = {f.cve_id for f in result.findings}
+    assert "AGENT-PI-011" in ids, f"expected upsilon confusable finding, got {ids}"
+    finding = next(f for f in result.findings if f.cve_id == "AGENT-PI-011")
+    # The de-confused ASCII form surfaces so a reviewer sees the real word.
+    assert "github" in finding.description
+    assert "U+03C5" in finding.description
+
+
+def test_genuine_greek_upsilon_word_has_no_confusable_finding(scanner, tmp_path):
+    # A whole word in one script (genuine Greek, containing υ) is real foreign
+    # text, not a mixed-script spoof, so adding the upsilon mapping must not flag it.
+    body = "# Skill\n\nformats code.\n\nυπολογιστής και δίκτυο\n"
+    result = scanner.scan_directory(_write_skill(tmp_path, body))
+    assert not any(f.cve_id == "AGENT-PI-011" for f in result.findings), \
+        "genuine single-script Greek text must not trigger confusable detection"
 
 
 # --- AGENT-PI-012: markdown link text / href domain mismatch ---

@@ -599,14 +599,31 @@ contract as the backlog (fixtures + a zero-false-positive benign baseline).
 
 ## Open follow-ups (surfaced by a run, not yet worked)
 
-- F1. [ ] **`CONFUSABLES` map has no `u` look-alike** — surfaced by C16. The curated
-  homoglyph map covers Cyrillic/Greek look-alikes for most Latin letters but has **no
-  entry mapping to `u`**, and omits Greek upsilon (U+03C5), so `githυb` — a natural
-  homoglyph spoof of one of the most-impersonated names in the ecosystem — is caught at
-  **no** site. C16 fixed which artifact classes the check *reaches*; this is about what
-  the map *contains*. Candidate additions need the usual zero-FP calibration against the
-  real corpus (Greek/Cyrillic text is legitimate; only mixed-script words fire), since
-  widening the map widens every site at once.
+- F1. [x] **`CONFUSABLES` map has no `u` look-alike** — surfaced by C16. The curated
+  homoglyph map covered Cyrillic/Greek look-alikes for most Latin letters but had **no
+  entry mapping to `u`**, so `githυb` (Greek small upsilon U+03C5) — a natural homoglyph
+  spoof of one of the most-impersonated names in the ecosystem — was caught at **no**
+  site. Fix adds the single entry `"υ": "u"` (U+03C5): it is the *only* `u` look-alike
+  within the Cyrillic/Greek scripts the rule's word regex already covers (U+0370–03FF), so
+  it needs no widening of `_CONFUSABLE_WORD`, and the capital `Υ`→`Y` mapping is untouched
+  (capital upsilon reads as Latin Y, not U). Because the map is a signature (not an NL
+  heuristic) and the check fires only on a word that **mixes** ASCII Latin with a
+  confusable, the addition changes behaviour for exactly one thing: an ASCII-plus-upsilon
+  token. **Zero-FP verified NON-VACUOUSLY on real content:** a targeted sweep of the whole
+  real corpus (`~/.claude` + `G:/skills`, **12,723 scanned files**) found **8** files that
+  contain U+03C5 at all but **0** tokens that mix ASCII Latin with it — i.e. every real
+  upsilon is genuine single-script Greek that the mixed-script gate already excludes — so
+  the widening yields **0 new findings** on the benign corpus by construction. Armenian
+  `ս`/other look-alikes were deliberately NOT added: they fall outside the rule's
+  Cyrillic/Greek word range, so a map entry alone would be inert (word-boundary split) and
+  reaching them means broadening the regex — a separate, larger-scope change. 4 new tests
+  (`tests/test_agent_supply_chain.py`: the map-contains-a-`u`-homoglyph value guard so the
+  coverage can't silently regress, positive `githυb` detection through the live scanner
+  with the de-confused `github` + `U+03C5` surfaced in the finding, and a genuine all-Greek
+  `υπολογιστής` benign baseline that must not fire). Live CLI end-to-end confirmed
+  (`scan -s agent` flags the upsilon skill AGENT-PI-011); full suite **1760 passed / 1
+  skipped** (+4 new tests); ruff + strict-mypy clean; self-scan gate still 0 HIGH+ (48
+  items). _(commit 827306a)_
 
 ---
 
