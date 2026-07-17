@@ -623,7 +623,7 @@ contract as the backlog (fixtures + a zero-false-positive benign baseline).
   `υπολογιστής` benign baseline that must not fire). Live CLI end-to-end confirmed
   (`scan -s agent` flags the upsilon skill AGENT-PI-011); full suite **1760 passed / 1
   skipped** (+4 new tests); ruff + strict-mypy clean; self-scan gate still 0 HIGH+ (48
-  items). _(commit 827306a)_
+  items). _(commit fe6b173)_
 
 ---
 
