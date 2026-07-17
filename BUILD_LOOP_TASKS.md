@@ -655,7 +655,7 @@ contract as the backlog (fixtures + a zero-false-positive benign baseline).
   3 parametrized out-of-block positive detections asserting the de-confused word +
   exact code point surface, and a genuine single-script Armenian benign baseline). Full
   suite **1765 passed / 1 skipped** (+5 tests); ruff + strict-mypy clean; self-scan gate
-  still 0 HIGH+ (48 items). _(commit __PENDING__)_
+  still 0 HIGH+ (48 items). _(commit ad29e31)_
 
 ---
 
