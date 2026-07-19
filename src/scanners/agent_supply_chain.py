@@ -175,6 +175,75 @@ _HOST_IN_TEXT = re.compile(r"\b((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,})
 # Host portion of an http(s) URL.
 _URL_HOST = re.compile(r"https?://(?:[^@/\s]*@)?([^:/?#\s]+)", re.IGNORECASE)
 
+# --- Reference-style links and HTML anchors -------------------------------------
+# The inline form above is only ONE of the ways Markdown expresses a link. The same
+# lure written reference-style ("[github.com/anthropic][dl]" plus a "[dl]: https://
+# evil.tld" definition elsewhere in the file) or as a raw HTML anchor renders
+# identically and is read the same way by a model, so a rule that only understands
+# the inline form is trivially side-stepped. These patterns let the check resolve
+# the other three CommonMark forms (full/collapsed/shortcut) and <a href> too.
+
+# Link reference definition: up to 3 leading spaces, [label]: destination, optional
+# title. The destination may be angle-bracket wrapped (<https://…>). The trailing
+# class admits \r so a CRLF file (Windows-authored artifacts, git autocrlf
+# checkouts) still matches — `$` sits before the \n, leaving the \r in the line.
+_MD_LINK_REF_DEF = re.compile(
+    r"^[ ]{0,3}\[([^\[\]\n]{1,200})\]:[ \t]*<?(https?://[^>\s]{1,400})>?[ \t]*"
+    r"(?:\"[^\"\n]*\"|'[^'\n]*'|\([^)\n]*\))?[ \t\r]*$",
+    re.MULTILINE,
+)
+# Full ("[text][label]") and collapsed ("[text][]") reference links. The visible
+# text may not itself contain brackets, which keeps nested image refs
+# ("[![alt][badge]][target]") out of the text group.
+_MD_REF_LINK = re.compile(r"\[([^\[\]\n]{1,200})\]\[([^\[\]\n]{0,200})\]")
+# Shortcut reference link ("[text]" whose text doubles as the label). Excluded when
+# followed by '(', '[' or ':' so inline links, full references, and the definition
+# lines themselves are not re-matched here.
+_MD_SHORTCUT_LINK = re.compile(r"\[([^\[\]\n]{1,200})\](?![\(\[:])")
+# Raw HTML anchor, e.g. <a href="https://evil.tld">github.com</a>.
+_HTML_ANCHOR = re.compile(
+    r"<a\b[^>]*?\bhref\s*=\s*[\"'](https?://[^\"'\s]{1,400})[\"'][^>]*>(.*?)</a\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+# Constructs that occupy a link's source text but render as something other than
+# readable text: markdown images (inline and reference) and any HTML tag. A badge
+# link — "[![Build](https://img.shields.io/…)](https://github.com/…)", or the same
+# thing as <a href="https://github.com/…"><img src="https://raw.githubusercontent.
+# com/…"></a> — carries a hostname in its *image source*, which the reader never
+# sees as text. Comparing that host against the href would flag every shields.io
+# badge in every README as a lure, so it is stripped before the comparison.
+_MD_IMAGE = re.compile(r"!\[[^\]\n]{0,200}\](?:\([^)\s]{0,400}[^)]{0,100}\)|\[[^\]\n]{0,200}\])")
+_HTML_TAG = re.compile(r"<[^>]{1,400}>")
+
+
+def _visible_link_text(link_text: str) -> str:
+    """Strip a link's non-visible markup, leaving only what a reader actually sees.
+
+    The rule's premise is that the *visible* text advertises a domain the href
+    contradicts. Image sources and HTML attributes are not visible text, so they
+    must not be read as an advertised domain (see `_MD_IMAGE` / `_HTML_TAG`).
+    """
+    return _HTML_TAG.sub(" ", _MD_IMAGE.sub(" ", link_text))
+
+
+def _normalize_link_label(label: str) -> str:
+    """CommonMark link-label matching: case-insensitive, whitespace-collapsed."""
+    return " ".join(label.split()).lower()
+
+
+def _link_ref_definitions(text: str) -> Dict[str, str]:
+    """Map every link reference definition label in `text` to its destination URL.
+
+    First definition wins, matching CommonMark's rule that a duplicate label is
+    ignored — so an attacker cannot shadow an earlier benign definition.
+    """
+    defs: Dict[str, str] = {}
+    for m in _MD_LINK_REF_DEF.finditer(text):
+        defs.setdefault(_normalize_link_label(m.group(1)), m.group(2))
+    return defs
+
 
 def _registrable(host: str) -> str:
     """Last two labels of a hostname (e.g. a.b.github.com -> github.com).
@@ -3563,6 +3632,35 @@ class AgentSupplyChainScanner(BaseScanner):
             return [self._finding(CONFUSABLE_RULE, fp, artifact, snippet, line_no)]
         return []
 
+    def _iter_links(self, text: str) -> Generator[Tuple[int, str, str], None, None]:
+        """Yield every (position, visible text, href) link in `text`, any syntax.
+
+        Covers all four CommonMark link forms plus raw HTML anchors, because they
+        render identically and a lure written in any of them reads the same to a
+        model — a check that understood only the inline form could be side-stepped
+        by moving the destination into a reference definition. Reference links
+        resolve through the file's own definitions, so an unresolvable label (a
+        bare `[TODO]`, a citation marker, a glob in prose) yields nothing.
+        """
+        for m in _MD_LINK.finditer(text):
+            yield m.start(), m.group(1), m.group(2)
+        for m in _HTML_ANCHOR.finditer(text):
+            yield m.start(), m.group(2), m.group(1)
+
+        defs = _link_ref_definitions(text)
+        if not defs:
+            return
+        for m in _MD_REF_LINK.finditer(text):
+            # Collapsed form "[text][]" uses the visible text as its own label.
+            label = _normalize_link_label(m.group(2) or m.group(1))
+            href = defs.get(label)
+            if href:
+                yield m.start(), m.group(1), href
+        for m in _MD_SHORTCUT_LINK.finditer(text):
+            href = defs.get(_normalize_link_label(m.group(1)))
+            if href:
+                yield m.start(), m.group(1), href
+
     def _check_link_mismatch(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
         """Detect a markdown link whose visible text names a different domain than its href.
 
@@ -3570,22 +3668,31 @@ class AgentSupplyChainScanner(BaseScanner):
         elsewhere — a classic lure to get an agent to auto-fetch attacker content. We
         only flag when the visible text actually advertises a hostname AND that host's
         registrable domain differs from the href's, so plain descriptive link text
-        ("see the docs") and same-party subdomains never trip the rule.
+        ("see the docs") and same-party subdomains never trip the rule. The same
+        comparison is applied to every link syntax (see `_iter_links`), so writing the
+        lure reference-style or as an HTML anchor does not evade it.
         """
-        for m in _MD_LINK.finditer(text):
-            link_text, href = m.group(1), m.group(2)
+        best: Optional[Tuple[int, str, str]] = None
+        for pos, link_text, href in self._iter_links(text):
             href_host = _URL_HOST.search(href)
             if not href_host:
                 continue
             href_dom = _registrable(href_host.group(1))
-            for tm in _HOST_IN_TEXT.finditer(link_text):
+            for tm in _HOST_IN_TEXT.finditer(_visible_link_text(link_text)):
                 text_dom = _registrable(tm.group(1))
                 if text_dom == href_dom:
                     continue
-                line_no = text.count("\n", 0, m.start()) + 1
-                snippet = f"text says {tm.group(1)!r} but href is {href_host.group(1)!r}"
-                return [self._finding(LINK_MISMATCH_RULE, fp, artifact, snippet, line_no)]
-        return []
+                # Links are gathered per-syntax, not in document order; report the
+                # earliest one so the finding's line number is deterministic.
+                if best is None or pos < best[0]:
+                    best = (pos, tm.group(1), href_host.group(1))
+                break
+        if best is None:
+            return []
+        pos, text_host, href_host_name = best
+        line_no = text.count("\n", 0, pos) + 1
+        snippet = f"text says {text_host!r} but href is {href_host_name!r}"
+        return [self._finding(LINK_MISMATCH_RULE, fp, artifact, snippet, line_no)]
 
     def _check_hidden_comment(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
         """Detect imperative instructions concealed inside an HTML comment.

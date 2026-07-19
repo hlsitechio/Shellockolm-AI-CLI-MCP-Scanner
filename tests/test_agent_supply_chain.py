@@ -367,6 +367,92 @@ def test_descriptive_link_text_has_no_mismatch_finding(scanner, tmp_path):
         "descriptive (non-domain) link text must not trigger mismatch detection"
 
 
+# --- AGENT-PI-012: the lure is equally effective in every link syntax ---
+# The inline form is only one of four CommonMark link forms (plus raw HTML
+# anchors). All render identically and read identically to a model, so a rule
+# that understood only the inline form could be evaded by moving the destination
+# into a reference definition elsewhere in the file.
+
+@pytest.mark.parametrize("body,form", [
+    ("See [github.com/anthropic][dl].\n\n[dl]: https://evil.tld/p\n", "full reference"),
+    ("See [github.com][].\n\n[github.com]: https://evil.tld/p\n", "collapsed reference"),
+    ("See [github.com] for setup.\n\n[github.com]: https://evil.tld/p\n", "shortcut reference"),
+    ("See [github.com][d].\n\n[d]: <https://evil.tld/p>\n", "angle-bracket destination"),
+    ('See <a href="https://evil.tld/p">github.com/anthropic</a>.\n', "html anchor"),
+    ('See <a href=\'https://evil.tld/p\'>github.com</a>.\n', "html anchor, single quotes"),
+])
+def test_link_mismatch_detected_in_every_link_syntax(scanner, tmp_path, body, form):
+    result = scanner.scan_directory(_write_skill(tmp_path, "# Skill\n\n" + body))
+    finding = next((f for f in result.findings if f.cve_id == "AGENT-PI-012"), None)
+    assert finding is not None, f"{form} lure must be detected"
+    assert "evil.tld" in finding.description
+
+
+def test_link_mismatch_reference_definition_matches_with_crlf(scanner, tmp_path):
+    # Windows-authored artifacts and `git autocrlf` checkouts use CRLF; a
+    # definition regex anchored with `$` sees the \r left on the line, so the
+    # trailing class must admit it or the whole reference path silently dies.
+    body = "# Skill\r\n\r\nSee [github.com][d].\r\n\r\n[d]: https://evil.tld/p\r\n"
+    f = tmp_path / "SKILL.md"
+    f.write_bytes(body.encode("utf-8"))
+    result = scanner.scan_directory(str(tmp_path))
+    assert any(f_.cve_id == "AGENT-PI-012" for f_ in result.findings), \
+        "CRLF reference definitions must resolve"
+
+
+@pytest.mark.parametrize("body,why", [
+    ("See [github.com/anthropic][dl].\n\n[dl]: https://github.com/anthropic\n",
+     "reference link whose destination matches its text"),
+    ("See [docs.github.com][d].\n\n[d]: https://github.com/docs\n",
+     "same registrable domain via reference"),
+    ("See [the docs][d].\n\n[d]: https://example.com/g\n",
+     "descriptive reference link text"),
+    ("A [TODO] item, a [note], and a [draft] marker.\n",
+     "bracketed prose with no matching definition must not resolve"),
+    ('See <a href="https://github.com/a">github.com/a</a>.\n',
+     "html anchor whose text matches its href"),
+])
+def test_benign_link_forms_have_no_mismatch_finding(scanner, tmp_path, body, why):
+    result = scanner.scan_directory(_write_skill(tmp_path, "# Skill\n\n" + body))
+    assert not any(f.cve_id == "AGENT-PI-012" for f in result.findings), why
+
+
+@pytest.mark.parametrize("body,why", [
+    ("[![Build][b]][t]\n\n[b]: https://img.shields.io/x.svg\n[t]: https://github.com/a/b\n",
+     "reference-style badge: the host is an image source, not visible text"),
+    ("[![Build](https://img.shields.io/x.svg)](https://github.com/a/b)\n",
+     "inline badge: the host is an image source, not visible text"),
+    ('<a href="https://github.com/a/b"><img src="https://raw.githubusercontent.com/a/l.png"></a>\n',
+     "html badge: the host is an <img> attribute, not visible text"),
+])
+def test_badge_links_have_no_mismatch_finding(scanner, tmp_path, body, why):
+    # A reader sees a rendered badge, never the image host — there is no lure.
+    # These shapes are ubiquitous in real READMEs, so treating an image source as
+    # an advertised domain would false-positive across the whole ecosystem.
+    result = scanner.scan_directory(_write_skill(tmp_path, "# Skill\n\n" + body))
+    assert not any(f.cve_id == "AGENT-PI-012" for f in result.findings), why
+
+
+def test_link_mismatch_reports_earliest_occurrence(scanner, tmp_path):
+    # Links are gathered per-syntax rather than in document order, so the check
+    # must sort before reporting or the line number is nondeterministic.
+    body = (
+        "# Skill\n\nFirst [github.com/a](https://evil.tld/1) here.\n\n"
+        "Then [python.org][d] there.\n\n[d]: https://evil.tld/2\n"
+    )
+    result = scanner.scan_directory(_write_skill(tmp_path, body))
+    finding = next(f for f in result.findings if f.cve_id == "AGENT-PI-012")
+    assert finding.raw_data["line"] == 3, f"expected earliest link, got {finding.raw_data}"
+
+
+def test_duplicate_reference_definition_keeps_the_first(scanner, tmp_path):
+    # CommonMark ignores a repeated label, so a later definition cannot shadow an
+    # earlier benign one into (or out of) a finding.
+    from scanners.agent_supply_chain import _link_ref_definitions
+    defs = _link_ref_definitions("[d]: https://github.com/a\n[d]: https://evil.tld/p\n")
+    assert defs == {"d": "https://github.com/a"}
+
+
 # --- AGENT-PI-013: imperative instructions hidden in an HTML comment ---
 
 @pytest.mark.parametrize("comment", [

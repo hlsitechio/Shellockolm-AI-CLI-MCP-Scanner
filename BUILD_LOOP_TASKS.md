@@ -657,6 +657,52 @@ contract as the backlog (fixtures + a zero-false-positive benign baseline).
   suite **1765 passed / 1 skipped** (+5 tests); ruff + strict-mypy clean; self-scan gate
   still 0 HIGH+ (48 items). _(commit ad29e31)_
 
+- F3. [x] **AGENT-PI-012 only understood ONE of the four markdown link forms** —
+  surfaced by a bug-hunt pass over the link-mismatch check. The rule's premise is that a
+  link whose visible text advertises a trusted domain while its href points elsewhere is
+  a lure, but it was implemented against `_MD_LINK` alone — the **inline** `[text](href)`
+  form. Markdown has three more (CommonMark **full** `[text][label]`, **collapsed**
+  `[text][]`, and **shortcut** `[text]` reference links, resolved through a
+  `[label]: dest` definition elsewhere in the file), plus raw **HTML anchors**. All five
+  render identically and read identically to a model, so an attacker evaded the rule
+  outright by moving the destination into a reference definition: empirically confirmed
+  **0/5** detection for the non-inline forms against the live scanner while the inline
+  form fired. Fix adds `_iter_links()`, which yields `(pos, visible text, href)` for every
+  syntax — inline, HTML anchor, and the reference forms resolved via
+  `_link_ref_definitions()` (CommonMark label normalization: case-insensitive +
+  whitespace-collapsed; **first definition wins**, so a later duplicate label cannot
+  shadow an earlier benign one) — and feeds them all through the *unchanged* host
+  comparison. An unresolvable label (`[TODO]`, a citation marker) yields nothing, so bare
+  brackets in prose stay inert. Findings are sorted to the earliest document position
+  because links are now gathered per-syntax rather than in document order (a test pins
+  the line number). Two real bugs were caught **during** verification, not after: (1) the
+  definition regex anchored `[ \t]*$`, which a **CRLF** file breaks (`$` sits before the
+  `\n`, leaving the `\r` on the line) — every Windows-authored artifact and `git autocrlf`
+  checkout would have silently kept the bypass; class widened to `[ \t\r]*`. (2) The
+  corpus sweep surfaced a **36-file false-positive class**: badge links
+  (`[![Build](https://img.shields.io/…)](https://github.com/…)` and the `<a><img
+  src="https://raw.githubusercontent.com/…"></a>` equivalent) carry a hostname in an
+  **image source**, which a reader never sees as text — the old inline-only regex dodged
+  these by accident because its text class could not span a nested `![…]`. Added
+  `_visible_link_text()` to strip markdown images and HTML tags before the comparison, so
+  only genuinely visible text can advertise a domain; this also makes the pre-existing
+  inline path more correct. **Zero-FP verified NON-VACUOUSLY on real content:** OLD vs NEW
+  diffed over the whole real corpus (`~/.claude` + `G:/skills`, **9,615 scanned files**, 8
+  containing reference definitions so the new path is genuinely exercised) — **0 removed
+  (no regression)** and, after the image fix, **0 new false positives** (36 → 0). The one
+  net-new finding is a **true positive** the rule previously could not see:
+  `~/.claude/skills/html-injection-testing/SKILL.md:149` carries
+  `<a href="http://attacker.com/login">portal.company.com</a>` — a genuine anchor-form
+  phishing lure, in exactly the syntax that was invisible before. Rule text/catalog
+  unchanged (RULES.md + THREAT_MODEL.md drift `--check` both green). 17 new tests
+  (`tests/test_agent_supply_chain.py`: 6 parametrized positives covering every link
+  syntax incl. angle-bracket destinations and both HTML quote styles, a dedicated CRLF
+  reference-definition regression test, 5 benign baselines incl. unresolvable bracketed
+  prose, 3 badge-link zero-FP guards for the class the sweep found, an earliest-occurrence
+  determinism pin, and a duplicate-label precedence unit test). Full suite **1782 passed /
+  1 skipped** (+17 tests); ruff (`src/`) + strict-mypy clean; self-scan gate still 0 HIGH+
+  (48 items). _(commit PENDING)_
+
 ---
 
 Completed prior to this backlog (context): AGENT-PI-001…010, MCP structured scan,
