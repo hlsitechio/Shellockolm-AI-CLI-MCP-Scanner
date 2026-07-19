@@ -701,7 +701,7 @@ contract as the backlog (fixtures + a zero-false-positive benign baseline).
   prose, 3 badge-link zero-FP guards for the class the sweep found, an earliest-occurrence
   determinism pin, and a duplicate-label precedence unit test). Full suite **1782 passed /
   1 skipped** (+17 tests); ruff (`src/`) + strict-mypy clean; self-scan gate still 0 HIGH+
-  (48 items). _(commit PENDING)_
+  (48 items). _(commit 7a87357)_
 
 ---
 
