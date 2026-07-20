@@ -838,7 +838,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   anti-drift assertions, both-direction MCP-005 coverage, 10 substring-lookalike zero-FP
   baselines at prose and hook, and narrowing guards pinning the subdomain / uppercase /
   port / userinfo / end-of-sentence forms plus every canonical entry). Full suite
-  **1969 green** (was 1857). _(commit PENDING)_
+  **1969 green** (was 1857). _(commit c0bb139)_
 
 - F7. [ ] **Real MCP config filenames never routed to `_scan_mcp`** — `MCP_NAMES` is
   `{mcp.json, .mcp.json, claude_desktop_config.json}` + `*.mcp.json`. An identical
