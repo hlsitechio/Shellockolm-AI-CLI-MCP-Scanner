@@ -703,6 +703,152 @@ contract as the backlog (fixtures + a zero-false-positive benign baseline).
   1 skipped** (+17 tests); ruff (`src/`) + strict-mypy clean; self-scan gate still 0 HIGH+
   (48 items). _(commit 7a87357)_
 
+- F4. [x] **AGENT-PI-005 covered 6 of its category's 64 invisible characters — a
+  one-character full bypass** — surfaced by a bug-hunt pass over the stealth suite.
+  PI-005 is the SAFETY NET behind the natural-language rules: an attacker who splices an
+  invisible code point into a keyword (`Ign<invisible>ore all previous instructions`)
+  defeats AGENT-PI-001, and PI-005 is the only thing left standing. Its set was a
+  hand-picked list of six (ZWSP/ZWNJ/ZWJ/word-joiner/BOM/soft-hyphen) while the same
+  Unicode format category (`Cf`) holds 64 — so `U+2062 INVISIBLE TIMES`, the immediate
+  neighbour of the word joiner that *was* covered, took the artifact from 1 finding to
+  **0**. Empirically confirmed 0 findings for U+2062, U+2064, U+034F, U+180E, U+200E,
+  U+061C, U+3164, U+E0100 before the fix. Fix replaces the list with the **`Cf` category
+  itself**, expressed as 23 hardcoded ranges, **minus** the code points owned by the more
+  specific sibling rules (bidi controls → AGENT-PI-010, Tags block → AGENT-PI-007, so the
+  precise rule keeps ownership rather than being shadowed by the broad net) and **plus**
+  a documented set of non-`Cf` invisibles (combining grapheme joiner, Hangul fillers, and
+  the variation-selector supplement U+E0100–E01EF — a payload-carrying smuggling channel
+  directly analogous to the Tags block). 6 → 309 code points. **The emoji presentation
+  selectors U+FE00–FE0F were deliberately NOT added**, and this is the load-bearing
+  calibration decision, not a guess: U+FE0F occurs in **603 files** of the real corpus, so
+  including the block would have traded one bypass for 603 false positives. `Cf` excludes
+  variation selectors (they are `Mn`), so the emoji case is safe *by construction* and
+  only the explicit supplement range opts back in. Also fixed a **pre-existing false
+  positive in the same rule**: U+200D ZWJ was in the original six, and the single PI-005
+  hit across the whole 9,133-artifact real corpus was an emoji ZWJ sequence
+  (`🧑‍💻` = ADULT + ZWJ + PERSONAL COMPUTER) — i.e. the rule's real-world precision was
+  0%. `_is_emoji_zwj()` suppresses a ZWJ only when a pictograph sits on **both** sides
+  (skipping presentation selectors, so `❤️‍🔥` resolves); a ZWJ between two letters, or
+  between a letter and an emoji, still fires. A **perf regression was caught during
+  verification, not after**: naively folding 309 members into the character classes as
+  individual escaped literals pushed `re` onto a slower astral-plane path and cost
+  **+47%** on the benchmark (1.593s → 2.341s), blowing its 2.0s budget. Emitting the set
+  as **ranges** in both `_INVISIBLE_RE` and `_STEALTH_CHARS_RE`, plus an O(1)
+  `text.isascii()` pre-gate in `_check_invisible` (every invisible char is >U+007F, and
+  CPython tracks ASCII-ness as a flag on the string object), returned it to
+  **1.624s — parity with the 1.593s baseline**, same 81 benchmark findings.
+  `_check_invisible` also now reports the **earliest occurrence in the text**: the old
+  per-character `text.find` loop returned whichever member came first in the *list*, so
+  the reported line could point past an earlier one; the finding now names the code point
+  (`U+2062 INVISIBLE TIMES`) instead of a bare `repr`. **Zero-FP verified NON-VACUOUSLY on
+  real content:** OLD vs NEW diffed over the whole real corpus (`~/.claude` + `G:/skills`,
+  **9,133 artifacts**) — **0 added** (none of the 303 new code points occurs in any real
+  artifact, so the widening yields no new findings by construction) and **1 removed**,
+  which is exactly the targeted emoji-ZWJ false positive; the diff is non-vacuous because
+  PI-005 genuinely fires on the corpus. Rule text unchanged, so RULES.md + THREAT_MODEL.md
+  drift `--check` both green. 26 new tests (14 parametrized per-code-point evasion
+  positives asserting the code point surfaces in the finding, a `unicodedata`-recomputed
+  anti-drift guard so the hardcoded table can never diverge from the live UCD, an explicit
+  U+FE00–FE0F exclusion pin, an every-member-reachable guard, an earliest-occurrence pin,
+  5 parametrized legitimate-emoji zero-FP baselines, and the two ZWJ-still-fires attack
+  guards). Full suite **1808 passed / 1 skipped** (+26); ruff + strict-mypy clean;
+  self-scan gate still 0 HIGH+ (48 items). _(commit PENDING)_
+
+---
+
+## Open follow-ups (surfaced by the F4 bug-hunt audit, not yet worked)
+
+Confirmed empirically during the F4 audit pass but deliberately left for their own runs —
+each is a separate rule family with its own calibration burden. Ranked by severity.
+
+- F5. [ ] **JSON `\uXXXX` escapes defeat the entire stealth suite on config artifacts** —
+  `_check_stealth_channels` is handed the RAW file text at `_scan_mcp`, `_scan_n8n` and
+  `_scan_settings`, but the suite is a signature match on literal code points. JSON
+  expresses the identical string as pure ASCII escapes, so `​` (or the surrogate
+  pair `󠁁` = a Tags char) makes the file pure-ASCII, the `_STEALTH_CHARS_RE`
+  fast path short-circuits, and all four checks are skipped — while `json.loads` hands
+  the client the byte-identical malicious string. Confirmed on disk: literal → 1 finding,
+  escaped equivalent → **0**. Worse than a crafted-input bug because **`json.dumps()`
+  defaults to `ensure_ascii=True`**, so any config emitted by a Python tool escapes
+  automatically. The fix is precedented in this same file — `_check_n8n_cred_exfil`
+  already re-serializes with `ensure_ascii=False` before matching, which is exactly why
+  the *structured* paths are escape-immune. ~5 lines per scanner; `_dedupe` handles the
+  overlap.
+
+- F6. [ ] **Paste/OOB sink list asymmetry — 11 hosts known to MCP-005 are invisible to
+  every sibling rule** — `_MCP_RAW_SOURCE_HOSTS` lists 13 paste hosts; the shared
+  canonical `_OOB_CAPTURE_HOSTS` lists only 3 (`pastebin.com`, `hastebin.com`,
+  `paste.ee`). `rentry.co`, `dpaste.com/.org`, `0bin.net`, `ghostbin.com`, `controlc.com`,
+  `bpa.st`, `ix.io`, `sprunge.us`, `paste.rs`, `termbin.com` are exfil sinks by exactly
+  the same logic but exist in no sibling rule: confirmed **0 findings** for AGENT-N8N-002,
+  AGENT-HOOK-003 and AGENT-EXFIL-003 on those hosts while `webhook.site` fires, and the
+  skill case additionally loses its composite-severity escalation. This is precisely the
+  drift the module comment claims was eliminated. Fix: move the 11 into
+  `_OOB_CAPTURE_HOSTS`; every consumer already derives from it.
+
+- F7. [ ] **Real MCP config filenames never routed to `_scan_mcp`** — `MCP_NAMES` is
+  `{mcp.json, .mcp.json, claude_desktop_config.json}` + `*.mcp.json`. An identical
+  malicious server (gist launcher + AWS env + `alwaysAllow:["*"]`) fires in those, but
+  scores **0 findings** in `.claude.json` (both user-scope and the
+  `projects.<path>.mcpServers` shape `claude mcp add` writes), `mcp_config.json`
+  (Windsurf), `cline_mcp_settings.json`, `mcp_settings.json` (Roo), and
+  `.gemini/settings.json`. Internally inconsistent: `src/mcp_config_locations.py`
+  already enumerates `~/.claude.json` and Windsurf's `mcp_config.json` as canonical MCP
+  config locations — the walker just doesn't match their names. Needs a nested-shape
+  walk for the `projects.*` form, so it is more than a name-list edit.
+
+- F8. [ ] **`_is_public_ip_literal` misjudges obfuscated IPv4 literals (AGENT-MCP-005)** —
+  `ipaddress.ip_address(h)` raises for any non-dotted-quad form and the `except` returns
+  `False`. `https://8.8.8.8/x.ts` fires; the integer (`134744072`), hex (`0x08080808`),
+  octal (`0010.0010.0010.0010`) and 2-part (`8.526344`) forms all score **0** — and all
+  four normalize to `8.8.8.8` under the WHATWG URL parser the named launchers actually
+  use (verified via `node -e "new URL(...)"` and `deno eval`). Fix: normalize the host
+  through a WHATWG-style IPv4 parser before `ipaddress.ip_address`.
+
+- F9. [ ] **Trailing-dot FQDN evades `_check_mcp_remote_source`** — the host suffix match
+  has no `rstrip(".")`, so `https://raw.githubusercontent.com./…` and `https://pastebin.com./raw/…`
+  score **0** while the dotless forms fire. Reachability confirmed against the live host
+  (a served 404, not a DNS failure). Uppercase, `:443` and `userinfo@` forms are all
+  handled correctly — only the trailing dot slips. One-line fix, and the sibling
+  `_n8n_is_oob_sink` already performs exactly this normalization.
+
+- F10. [ ] **AGENT-MCP-004's service association is satisfied by attacker-controlled
+  text** — `_check_mcp_env_exfil` builds `ident` from the server `name` + `command` +
+  `args` and suppresses the finding when a service token appears there. All three fields
+  are chosen by whoever wrote the config or published the package, so the allowlist is
+  self-service: the same AWS+GitHub env block fires on a server named `notes`, but scores
+  **0** when the server is named `aws.github` or the package is `evil-mcp-aws-github`.
+  Fix (narrow): drop the user-chosen `name` from `ident` and require the token in
+  `command`/`args` — legitimate integrations carry it in the package name anyway.
+  Needs a corpus calibration pass, since it tightens an existing suppression.
+
+- F11. [ ] **Structural checks fail open SILENTLY on unparseable JSON** — a single `//`
+  comment or trailing comma anywhere in an `mcp.json` drops it from AGENT-MCP-004/005/
+  006/007 to **0 findings**, with `result.warnings == []` and `result.errors == []`. The
+  four structural MCP rules have no regex twin, so the raw-text fallback recovers
+  nothing. **Honest caveat:** whether the comment trick is *weaponizable* depends on the
+  client accepting a JSON superset, which the audit could NOT confirm (Claude Code's
+  settings.json fails closed on a parse error). But the reporting defect stands on its
+  own regardless of exploitability: an **unscanned** artifact currently renders as
+  **clean**. Fix: emit a warning when a routed artifact fails to parse.
+
+- F12. [ ] **AGENT-OBF-002 misses every line-wrapped base64 blob** — `_B64` requires 160
+  *contiguous* base64 chars, but every standard emitter wraps: `base64(1)` at 76 cols,
+  `openssl` at 64. Same bytes, one line → fires; wrapped → **0** (boundary pinned
+  exactly at wrap=159 vs 160). So the rule can never fire on canonical `base64` output.
+  Alphabet also omits base64url `-`/`_`. **Severity honestly bounded:** LOW/4.0 rule, and
+  the companion AGENT-OBF-001 still fires on a wrapped blob when a `base64 -d | sh` cue
+  is present — the gap is the blob-alone case (a payload staged for later decoding),
+  which is exactly OBF-002's reason to exist. Fix needs care: allowing intervening
+  whitespace risks matching prose, so it requires a real-corpus FP pass.
+
+- F13. [ ] **Two documented Gemini CLI fields missing from the field sets** —
+  `{"trust": true}` scores **0** where the equivalent `alwaysAllow`/`autoApprove` fire
+  AGENT-MCP-007 (Gemini CLI documents `trust` as bypassing all tool-call confirmations),
+  and `{"httpUrl": "http://…"}` scores **0** where `url` fires AGENT-MCP-006 (`httpUrl`
+  is Gemini's streamable-HTTP transport field). Fix: add `"trust"` to
+  `_MCP_AUTOAPPROVE_FIELDS` and `"httpurl"` to `_MCP_URL_FIELDS`.
+
 ---
 
 Completed prior to this backlog (context): AGENT-PI-001…010, MCP structured scan,

@@ -42,6 +42,7 @@ import os
 import re
 import stat as _stat
 import time
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Generator, Set, Tuple
@@ -50,8 +51,123 @@ from urllib.parse import urlsplit
 from .base import BaseScanner, ScanResult, ScanFinding, FindingSeverity
 
 
-# Zero-width / invisible characters used to hide instructions from human reviewers
-INVISIBLE_CHARS = ["​", "‌", "‍", "⁠", "﻿", "­"]
+# Zero-width / invisible characters used to hide instructions from human reviewers.
+#
+# This rule is the SAFETY NET behind the natural-language pattern rules: an attacker
+# who splices any invisible code point into a keyword ("Ign<invisible>ore all previous
+# instructions") defeats AGENT-PI-001 et al., and PI-005 is what still catches the
+# artifact. A gap in this set is therefore not merely missed coverage — it is a full
+# end-to-end bypass, reachable with a one-character edit.
+#
+# The set is Unicode's format-character category (`Cf`) — code points that carry no
+# glyph and are meant to be ignored in rendering — rather than a hand-picked list. The
+# prior list named six chars (ZWSP/ZWNJ/ZWJ/word-joiner/BOM/soft-hyphen) and left the
+# other 58 members of the very same category open, so `Ign⁢ore` (INVISIBLE TIMES,
+# the immediate neighbour of the word joiner that *was* covered) scored zero findings.
+#
+# Two deliberate adjustments to the raw category:
+#  - EXCLUDED: the bidi controls (U+202A–202E, U+2066–2069) and the Unicode Tags block
+#    (U+E0000–E007F). Both are Cf, but each has its own more specific rule that decodes
+#    the payload it carries (AGENT-PI-010 Trojan Source / AGENT-PI-007 ASCII smuggling).
+#    Leaving them out keeps ownership with the precise rule instead of having the broad
+#    net shadow it with a less informative finding.
+#  - ADDED: a few code points that are not Cf but are invisible by definition — the
+#    combining grapheme joiner, the Hangul fillers, and the variation-selector
+#    supplement (U+E0100–E01EF, a payload-carrying smuggling channel directly analogous
+#    to the Tags block).
+#
+# NOT added: the emoji/text presentation selectors U+FE00–U+FE0F. They are variation
+# selectors like the supplement above, but U+FE0F is simply how an emoji with a
+# presentation form is written — it occurs in 603 files of the real 9,133-artifact
+# calibration corpus, so folding in that block would trade one bypass for 603 false
+# positives. The category boundary is what keeps this rule zero-FP, not luck: `Cf`
+# excludes variation selectors (they are `Mn`), so the emoji case is safe by
+# construction and only the explicit supplement range opts back in.
+#
+# Ranges are hardcoded rather than derived at import (a full `unicodedata` sweep of the
+# code space costs ~0.2s of CLI startup); `test_invisible_ranges_match_unicode_cf`
+# recomputes the category and asserts equality, so the table cannot drift from the UCD.
+_INVISIBLE_RANGES: Tuple[Tuple[int, int], ...] = (
+    (0x00AD, 0x00AD),    # SOFT HYPHEN
+    (0x034F, 0x034F),    # COMBINING GRAPHEME JOINER (not Cf; invisible by definition)
+    (0x0600, 0x0605),    # ARABIC NUMBER SIGN … ARABIC NUMBER MARK ABOVE
+    (0x061C, 0x061C),    # ARABIC LETTER MARK
+    (0x06DD, 0x06DD),    # ARABIC END OF AYAH
+    (0x070F, 0x070F),    # SYRIAC ABBREVIATION MARK
+    (0x0890, 0x0891),    # ARABIC POUND MARK ABOVE … ARABIC PIASTRE MARK ABOVE
+    (0x08E2, 0x08E2),    # ARABIC DISPUTED END OF AYAH
+    (0x115F, 0x1160),    # HANGUL CHOSEONG/JUNGSEONG FILLER (not Cf; invisible)
+    (0x180E, 0x180E),    # MONGOLIAN VOWEL SEPARATOR
+    (0x200B, 0x200F),    # ZERO WIDTH SPACE … RIGHT-TO-LEFT MARK
+    (0x2060, 0x2064),    # WORD JOINER … INVISIBLE PLUS
+    (0x206A, 0x206F),    # INHIBIT SYMMETRIC SWAPPING … NOMINAL DIGIT SHAPES
+    (0x3164, 0x3164),    # HANGUL FILLER (not Cf; invisible)
+    (0xFEFF, 0xFEFF),    # ZERO WIDTH NO-BREAK SPACE (BOM)
+    (0xFFA0, 0xFFA0),    # HALFWIDTH HANGUL FILLER (not Cf; invisible)
+    (0xFFF9, 0xFFFB),    # INTERLINEAR ANNOTATION ANCHOR … TERMINATOR
+    (0x110BD, 0x110BD),  # KAITHI NUMBER SIGN
+    (0x110CD, 0x110CD),  # KAITHI NUMBER SIGN ABOVE
+    (0x13430, 0x1343F),  # EGYPTIAN HIEROGLYPH VERTICAL JOINER … END WALLED ENCLOSURE
+    (0x1BCA0, 0x1BCA3),  # SHORTHAND FORMAT LETTER OVERLAP … UP STEP
+    (0x1D173, 0x1D17A),  # MUSICAL SYMBOL BEGIN BEAM … END PHRASE
+    (0xE0100, 0xE01EF),  # VARIATION SELECTOR-17 … 256 (smuggling channel)
+)
+
+# Code points the sibling stealth rules own; excluded from `Cf` above so the specific
+# rule reports them. Named here so the anti-drift test can reconstruct the set.
+_BIDI_CF_CODEPOINTS = frozenset({0x202A, 0x202B, 0x202C, 0x202D, 0x202E,
+                                 0x2066, 0x2067, 0x2068, 0x2069})
+
+# Flattened for membership tests and for `_build_stealth_char_class`.
+INVISIBLE_CHARS = [chr(cp) for lo, hi in _INVISIBLE_RANGES for cp in range(lo, hi + 1)]
+
+# Single C-level scan replaces a per-character Python loop over 300+ code points.
+# Emitted as RANGES, not 309 escaped literals: a character class holding astral-plane
+# singles pushes `re` onto a markedly slower path (measured +47% on the 1,500-artifact
+# benchmark, blowing its 2.0s budget), while the 23-range form costs nothing.
+_INVISIBLE_CLASS_BODY = "".join(
+    re.escape(chr(lo)) if lo == hi else f"{re.escape(chr(lo))}-{re.escape(chr(hi))}"
+    for lo, hi in _INVISIBLE_RANGES
+)
+_INVISIBLE_RE = re.compile("[" + _INVISIBLE_CLASS_BODY + "]")
+
+# Pictographic ranges, used ONLY to recognise a legitimate emoji ZWJ sequence.
+_EMOJI_RANGES: Tuple[Tuple[int, int], ...] = (
+    (0x00A9, 0x00A9), (0x00AE, 0x00AE),  # (c) / (R), emoji-presentable
+    (0x203C, 0x3299),                    # dingbats, misc symbols, enclosed CJK
+    (0x1F000, 0x1FAFF),                  # mahjong … symbols & pictographs ext-A
+    (0xFE00, 0xFE0F),                    # presentation selectors
+    (0x20E3, 0x20E3),                    # combining enclosing keycap
+)
+
+
+def _is_pictographic(ch: str) -> bool:
+    cp = ord(ch)
+    return any(lo <= cp <= hi for lo, hi in _EMOJI_RANGES)
+
+
+def _is_emoji_zwj(text: str, idx: int) -> bool:
+    """True when the ZERO WIDTH JOINER at `idx` is joining two pictographs.
+
+    U+200D is the one member of the invisible set with a ubiquitous legitimate
+    use: it is how a multi-part emoji is composed (🧑‍💻 = ADULT + ZWJ +
+    PERSONAL COMPUTER, 👨‍👩‍👧, ❤️‍🔥). Flagging those made PI-005's only hit
+    across the 9,133-artifact real corpus a false positive. The evasion this rule
+    exists to catch splices an invisible char between *word* characters
+    ("Ign<ZWJ>ore"), so requiring a pictograph on BOTH sides suppresses the emoji
+    case without weakening detection: a ZWJ between two letters still fires.
+    Presentation selectors are skipped when looking outward, since a sequence may
+    be written ❤ U+FE0F ZWJ 🔥.
+    """
+    left = idx - 1
+    while left >= 0 and 0xFE00 <= ord(text[left]) <= 0xFE0F:
+        left -= 1
+    right = idx + 1
+    while right < len(text) and 0xFE00 <= ord(text[right]) <= 0xFE0F:
+        right += 1
+    if left < 0 or right >= len(text):
+        return False
+    return _is_pictographic(text[left]) and _is_pictographic(text[right])
 
 # Unicode Tags block (U+E0000–U+E007F). These code points render as nothing in
 # every normal viewer, but each U+E00xx maps 1:1 to a printable ASCII char — so an
@@ -157,8 +273,11 @@ def _build_stealth_char_class() -> "re.Pattern[str]":
     the fast path can never drift out of sync with the slow path (a test asserts
     every member matches and the constituent sets stay non-ASCII).
     """
-    singles = set(INVISIBLE_CHARS) | set(BIDI_CONTROL_CHARS) | set(CONFUSABLES)
+    singles = set(BIDI_CONTROL_CHARS) | set(CONFUSABLES)
     body = "".join(re.escape(c) for c in sorted(singles))
+    # The invisible set contributes as ranges (see `_INVISIBLE_CLASS_BODY`) — folding
+    # its 300+ members in as individual escaped literals is what made this class slow.
+    body += _INVISIBLE_CLASS_BODY
     body += re.escape(chr(TAG_BLOCK_START)) + "-" + re.escape(chr(TAG_BLOCK_END))
     return re.compile("[" + body + "]")
 
@@ -3563,11 +3682,27 @@ class AgentSupplyChainScanner(BaseScanner):
         return findings
 
     def _check_invisible(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
-        for ch in INVISIBLE_CHARS:
-            idx = text.find(ch)
-            if idx != -1:
-                line_no = text.count("\n", 0, idx) + 1
-                return [self._finding(INVISIBLE_CHARS_RULE, fp, artifact, repr(ch), line_no)]
+        """Detect invisible / zero-width code points hiding content from human review.
+
+        Reports the FIRST occurrence in document order. The prior implementation
+        looped `text.find(ch)` per character, which returned whichever listed char
+        happened to come first in the *list* rather than in the *text*; with a
+        300-member set that is both wrong and slow, so a single character-class
+        scan now finds the true earliest occurrence in one C-level pass.
+        """
+        # Every invisible code point is above U+007F, so a pure-ASCII artifact cannot
+        # contain one. CPython tracks ASCII-ness as a flag on the string object, making
+        # this O(1) — and the overwhelming majority of real artifacts are pure ASCII.
+        if text.isascii():
+            return []
+        for m in _INVISIBLE_RE.finditer(text):
+            ch = m.group()
+            if ch == "‍" and _is_emoji_zwj(text, m.start()):
+                continue  # legitimate multi-part emoji, not a smuggled separator
+            line_no = text.count("\n", 0, m.start()) + 1
+            name = unicodedata.name(ch, "unnamed")
+            snippet = f"U+{ord(ch):04X} {name}"
+            return [self._finding(INVISIBLE_CHARS_RULE, fp, artifact, snippet, line_no)]
         return []
 
     def _check_tag_smuggling(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:

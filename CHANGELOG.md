@@ -11,6 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **AGENT-PI-005 now covers the whole invisible-character category (was 6 of 64).** This
+  rule is the safety net behind the natural-language rules: an attacker who splices an
+  invisible code point into a keyword (`Ign<invisible>ore all previous instructions`)
+  defeats AGENT-PI-001, and PI-005 is the only thing left standing. Its set was a
+  hand-picked list of six while the same Unicode format category (`Cf`) holds 64 — so
+  `U+2062 INVISIBLE TIMES`, the immediate neighbour of the word joiner that *was*
+  covered, took a malicious skill from 1 finding to **zero**. The set is now the `Cf`
+  category itself (23 hardcoded ranges, guarded by a `unicodedata`-recomputed anti-drift
+  test), minus the code points owned by the more specific sibling rules (bidi controls →
+  AGENT-PI-010, Tags block → AGENT-PI-007) and plus a documented set of non-`Cf`
+  invisibles including the variation-selector supplement. The emoji presentation
+  selectors U+FE00–FE0F are deliberately excluded — U+FE0F appears in 603 files of the
+  real calibration corpus, so including them would trade one bypass for hundreds of false
+  positives. Findings now name the code point (`U+2062 INVISIBLE TIMES`) and point at the
+  earliest occurrence in the text rather than the first member of the constant.
+  Verified as a strict no-op on 9,133 real artifacts: **0 new findings**.
+
+- **AGENT-PI-005 no longer false-positives on emoji.** U+200D ZWJ is how a multi-part
+  emoji is composed (`🧑‍💻`, `👨‍👩‍👧`, `❤️‍🔥`), and it was flagged as a smuggled
+  separator — the rule's *only* hit across the 9,133-artifact real corpus was one of
+  these, i.e. its real-world precision was 0%. A ZWJ is now suppressed only when a
+  pictograph sits on both sides; a ZWJ between two letters, or between a letter and an
+  emoji, still fires.
+
 - **Hardcoded-credential detection now reaches every artifact class.** A real credential
   can be pasted into any artifact an agent loads, but the credential rules did not run
   everywhere: measured against the previous release, a 9-shape × 6-site matrix was blind in
