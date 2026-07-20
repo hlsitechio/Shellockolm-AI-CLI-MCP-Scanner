@@ -801,7 +801,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   finding parity; benign baselines at every JSON site incl. an escaped emoji ZWJ sequence;
   and the measured regressions). Payloads are imported from `test_stealth_reach_parity`
   so the two suites cannot drift onto different attack strings. Full suite **1857 green**
-  (was 1808).
+  (was 1808). _(commit 7343d91)_
 
 - F6. [ ] **Paste/OOB sink list asymmetry — 11 hosts known to MCP-005 are invisible to
   every sibling rule** — `_MCP_RAW_SOURCE_HOSTS` lists 13 paste hosts; the shared
