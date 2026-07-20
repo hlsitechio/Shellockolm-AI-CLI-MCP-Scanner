@@ -868,7 +868,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   scrub units incl. a leaves-ordinary-evidence-alone baseline); 8 of them fail at HEAD.
   Full suite **1987 green** (was 1969). _(commit PENDING)_
 
-- F7. [ ] **Real MCP config filenames never routed to `_scan_mcp`** — `MCP_NAMES` is
+- F7. [x] **Real MCP config filenames never routed to `_scan_mcp`** — `MCP_NAMES` is
   `{mcp.json, .mcp.json, claude_desktop_config.json}` + `*.mcp.json`. An identical
   malicious server (gist launcher + AWS env + `alwaysAllow:["*"]`) fires in those, but
   scores **0 findings** in `.claude.json` (both user-scope and the
@@ -878,6 +878,54 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   already enumerates `~/.claude.json` and Windsurf's `mcp_config.json` as canonical MCP
   config locations — the walker just doesn't match their names. Needs a nested-shape
   walk for the `projects.*` form, so it is more than a name-list edit.
+
+  **Done.** Confirmed exactly as described: one identical malicious server (gist
+  launcher + AWS/GitHub env + `alwaysAllow:["*"]`) scored 4 findings in `mcp.json` and
+  **0** in all six other forms. Fixed with TWO routes, kept deliberately as two. By
+  NAME: `.claude.json`, `mcp_config.json` (Windsurf), `cline_mcp_settings.json`,
+  `mcp_settings.json` (Roo) join `MCP_NAMES` — the name route is what still routes a
+  config that does not PARSE, the only path to `_scan_mcp`'s raw-text fallback, which a
+  content route cannot cover. By CONTENT: any other `.json` that actually declares
+  servers, which catches `.gemini/settings.json` and whatever ships next, so the name
+  list stops having to be exhaustive. The content route is narrow on purpose — it needs
+  a dict entry carrying a recognized server field, so an OpenAPI spec (`servers` is a
+  LIST) and a plugin manifest whose `mcpServers` is a PATH STRING to another file are
+  both correctly rejected; the latter matters because the file it points at is itself
+  name-routed.
+
+  The nested `projects.<path>.mcpServers` walk needed more than the audit's estimate:
+  the obvious implementation (merge every block into one dict, as the top-level code
+  already did across `mcpServers`/`servers`/`mcp`) silently DROPS a server when two
+  projects use the same name — the common case, since one server is usually added to
+  several repos under one name. So `_iter_mcp_servers` yields a `scope` that qualifies
+  the finding location instead (0 → 2 distinct findings, measured). The scope is
+  deliberately NOT folded into the server name: `_check_mcp_env_exfil` derives its
+  "this server IS that service's own integration" suppression from the name, so a repo
+  at `C:/work/github-tools` would have suppressed a real GITHUB_TOKEN leak — that
+  regression is pinned as a test written before the code. A `.claude/settings.json` that
+  declares servers now gets BOTH scans rather than letting the earlier if/elif branch
+  win, so the new route cannot cost a file its hook coverage (HEAD: HOOK-003 only →
+  now HOOK-003 + the full MCP set, settings scan retained). `scan_text`'s classifier
+  got the same treatment so the in-memory path does not keep the gap.
+
+  Also locked the internal inconsistency the audit named: a test asserts the walker
+  recognizes every filename `src/mcp_config_locations.py` calls a canonical MCP config,
+  so the product can no longer name a file as one it should scan and then decline to.
+
+  Verified: all 10 client forms now score identically to `mcp.json`; on 5,344 real agent
+  artifacts NO finding is lost (308 before, all 308 present after) and the 63 files the
+  content route newly claims are every one a real server registry — marketplace
+  component templates, a `mcp-servers.json` catalog, `plugin.json` files with an
+  `mcpServers` block, a `settings.template.json`, a `claude_desktop_config_EXAMPLE.json`
+  — with zero misroutes, while the 40 files that merely mention a server key were all
+  correctly rejected. They add 34 findings: 33 AGENT-MCP-002 (`npx …@latest`/`-y`,
+  MEDIUM, the rule's own documented pattern) and one AGENT-PI-005 (four real U+200B
+  ZERO WIDTH SPACEs inside a published `jfrog.json` URL) — every one a verdict the same
+  bytes already earned under a covered filename. 54 new tests
+  (`tests/test_mcp_config_routing.py`), including an honest bound: routing an
+  unparseable config is not the same as detecting in it (F11's territory), so the
+  suite pins what the raw-text fallback really recovers rather than implying the name
+  route restores full coverage. Full suite **2041 green** (was 1987).
 
 - F8. [ ] **`_is_public_ip_literal` misjudges obfuscated IPv4 literals (AGENT-MCP-005)** —
   `ipaddress.ip_address(h)` raises for any non-dotted-quad form and the `except` returns

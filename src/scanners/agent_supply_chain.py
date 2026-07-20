@@ -45,7 +45,7 @@ import time
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Dict, Any, Generator, Set, Tuple
+from typing import List, Optional, Dict, Any, Generator, Iterator, Set, Tuple
 from urllib.parse import urlsplit
 
 from .base import BaseScanner, ScanResult, ScanFinding, FindingSeverity
@@ -1496,6 +1496,25 @@ MCP_REMOTE_SOURCE_RULE = AgentRule(
 # LOCAL server and deliberately ignores the url transport field) — here the url IS
 # the finding. Local development is not flagged: cleartext to localhost / 127.0.0.1 /
 # a private/link-local IP / an mDNS .local or .internal host is ordinary and safe.
+# --- MCP server registry shapes ------------------------------------------------
+# The keys under which a client stores its server map. Every consumer derives from
+# this one tuple so a new shape is added in exactly one place.
+_MCP_SERVER_KEYS = ("mcpServers", "servers", "mcp")
+# Claude Code's `~/.claude.json` keeps the per-repo servers `claude mcp add` writes
+# under `projects.<absolute path>.mcpServers` rather than at the top level, so the
+# server map is one level deeper than every other client's. Enumerated by
+# _iter_mcp_servers so those servers are scanned with the same rules as top-level ones.
+_MCP_PROJECTS_KEY = "projects"
+# Fields that mark a dict as an actual server DECLARATION rather than an arbitrary
+# nested object. Used only by the content route (_json_declares_mcp_servers) to decide
+# whether an unrecognized .json filename is an MCP config: an OpenAPI spec's top-level
+# `servers` is a LIST and never reaches here, and a dict that happens to be called
+# `servers` but whose entries carry none of these fields is not treated as a registry.
+_MCP_SERVER_CFG_FIELDS = frozenset({
+    "command", "args", "env", "url", "serverurl", "endpoint", "httpurl",
+    "type", "transport", "headers",
+})
+
 _MCP_URL_FIELDS = ("url", "serverurl", "endpoint")
 _MCP_CLEARTEXT_SCHEMES = ("http", "ws")
 # Host suffixes that scope a cleartext transport to the local machine / private net,
@@ -2592,7 +2611,18 @@ class AgentSupplyChainScanner(BaseScanner):
     SUPPORTED_PACKAGES = ["agent-skill", "mcp-config", "n8n-workflow", "agent-command", "agent-subagent", "claude-settings"]
 
     SKILL_NAMES = {"skill.md"}
-    MCP_NAMES = {"mcp.json", ".mcp.json", "claude_desktop_config.json"}
+    # Filenames real clients actually write their MCP server registry to. Name matching
+    # is kept alongside the content route below (not replaced by it) because it is the
+    # only thing that still routes a config whose JSON does not parse — the raw-text
+    # MCP_RULES fallback in _scan_mcp — which is exactly the case a name list must cover.
+    MCP_NAMES = {
+        "mcp.json", ".mcp.json",
+        "claude_desktop_config.json",   # Claude Desktop
+        ".claude.json",                 # Claude Code CLI (user scope + nested projects.*)
+        "mcp_config.json",              # Windsurf / Codeium
+        "cline_mcp_settings.json",      # Cline
+        "mcp_settings.json",            # Roo Code
+    }
     # Claude Code settings files whose `hooks` block registers shell commands the
     # agent auto-runs on lifecycle events — scanned for dangerous hook commands when
     # they live inside a `.claude` tree (project or user-level).
@@ -2729,12 +2759,27 @@ class AgentSupplyChainScanner(BaseScanner):
                 continue
             text = self._decode_bytes(raw)
 
+            # Content route: a .json no name rule claimed, but which actually declares
+            # MCP servers, is an MCP config whatever the client chose to call it
+            # (`.gemini/settings.json` today). Runs only on the JSON left over after the
+            # name routes, so a skill/instruction/command file is never re-classified.
+            if is_json and not (is_mcp or is_skill or is_instr or is_command or is_subagent):
+                is_mcp = self._json_declares_mcp_servers(text)
+
             if is_skill:
                 skills += 1
                 result.findings.extend(self._scan_skill(fp, text, quick_mode))
             elif is_mcp:
                 mcps += 1
-                result.findings.extend(self._scan_mcp(fp, text))
+                mcp_findings = self._scan_mcp(fp, text)
+                if is_settings:
+                    # A `.claude/settings.json` that ALSO declares servers is both
+                    # artifacts at once. Run both scans rather than letting the earlier
+                    # branch win, so adding the MCP route cannot cost this file its
+                    # hook/auto-exec coverage.
+                    settings += 1
+                    mcp_findings = self._dedupe(mcp_findings + self._scan_settings(fp, text))
+                result.findings.extend(mcp_findings)
             elif is_instr:
                 instrs += 1
                 result.findings.extend(self._scan_instructions(fp, text, quick_mode))
@@ -3016,7 +3061,10 @@ class AgentSupplyChainScanner(BaseScanner):
                 # subset), so classify it as "command" for the in-memory scan.
                 return "command"
             if name in self.SETTINGS_NAMES:
-                return "settings"
+                # A settings.json that declares MCP servers is a server registry first
+                # (Gemini CLI's `.gemini/settings.json` is exactly this), matching the
+                # directory walk's precedence. Hooks-only settings still classify here.
+                return "mcp" if self._json_declares_mcp_servers(text) else "settings"
             if name.endswith(".md"):
                 # A generic markdown hint with no .claude/commands ancestry is prose.
                 return "skill"
@@ -3290,6 +3338,65 @@ class AgentSupplyChainScanner(BaseScanner):
             findings += self._apply_rules(text, GENERIC_TEXT_RULES + self._extra(), fp, "mcp-config")
         return self._dedupe(findings)
 
+    @staticmethod
+    def _iter_mcp_servers(data: Any) -> Iterator[Tuple[str, str, Dict[str, Any]]]:
+        """Yield ``(scope, name, cfg)`` for every server this config declares.
+
+        ``scope`` is ``""`` for a top-level registry and ``"projects[<path>] "`` for one
+        nested under Claude Code's ``projects.<repo>.mcpServers``. It exists so two
+        servers that share a name in different project blocks stay distinct findings
+        (``_dedupe`` keys on the location) — a plain dict merge silently dropped one.
+
+        Deliberately NOT folded into the server name: ``_check_mcp_env_exfil`` derives
+        its service-association allowlist from the name, and a repo path like
+        ``C:/work/github-tools`` would then suppress a real GITHUB_TOKEN leak.
+        """
+        if not isinstance(data, dict):
+            return
+        blocks: List[Tuple[str, Any]] = [("", data)]
+        projects = data.get(_MCP_PROJECTS_KEY)
+        if isinstance(projects, dict):
+            for proj_path, proj_cfg in projects.items():
+                if isinstance(proj_cfg, dict):
+                    blocks.append((f"{_MCP_PROJECTS_KEY}[{proj_path}] ", proj_cfg))
+        for scope, block in blocks:
+            for key in _MCP_SERVER_KEYS:
+                value = block.get(key)
+                if not isinstance(value, dict):
+                    continue
+                for name, cfg in value.items():
+                    if isinstance(cfg, dict):
+                        yield scope, str(name), cfg
+
+    @classmethod
+    def _json_declares_mcp_servers(cls, text: str) -> bool:
+        """True when `text` parses as a config that actually DECLARES MCP servers.
+
+        The content route that catches client filenames no name list knows about
+        (`.gemini/settings.json`, and whatever ships next). Requires a real server
+        declaration — a dict entry carrying at least one recognized server field — so
+        an unrelated JSON with a `servers` key is not dragged onto the MCP rule path.
+        """
+        if not any(f'"{k}"' in text for k in _MCP_SERVER_KEYS):
+            return False  # cheap reject before paying for a parse
+        try:
+            data = json.loads(text)
+        except (ValueError, TypeError):
+            return False
+        return any(
+            any(str(f).strip().lower() in _MCP_SERVER_CFG_FIELDS for f in cfg)
+            for _scope, _name, cfg in cls._iter_mcp_servers(data)
+        )
+
+    @staticmethod
+    def _mcp_server_loc(fp: Path, name: str, scope: str = "") -> str:
+        """The `<path> » server:<name>` location string for a structured MCP finding.
+
+        One builder for all five rule sites so a scope-qualified location can never be
+        emitted by some of them and not the others.
+        """
+        return f"{fp} » {scope}server:{name}"
+
     def _scan_mcp_structured(self, fp: Path, text: str) -> Optional[List[ScanFinding]]:
         """Parse mcp.json and check each server's command/args/env as one string.
 
@@ -3303,16 +3410,7 @@ class AgentSupplyChainScanner(BaseScanner):
             return None
 
         out: List[ScanFinding] = []
-        servers: Dict[str, Any] = {}
-        if isinstance(data, dict):
-            for key in ("mcpServers", "servers", "mcp"):
-                value = data.get(key)
-                if isinstance(value, dict):
-                    servers.update(value)
-
-        for name, cfg in servers.items():
-            if not isinstance(cfg, dict):
-                continue
+        for scope, name, cfg in self._iter_mcp_servers(data):
             launch_parts = [str(cfg.get("command", ""))]
             args = cfg.get("args", [])
             if isinstance(args, list):
@@ -3325,7 +3423,7 @@ class AgentSupplyChainScanner(BaseScanner):
             if isinstance(env, dict):
                 parts += [f"{k}={v}" for k, v in env.items()]
             joined = " ".join(p for p in parts if p)
-            loc = f"{fp} » server:{name}"
+            loc = self._mcp_server_loc(fp, name, scope)
             for rule in MCP_RULES + [SECRET_RULE, SECRET2_RULE, EXFIL_RULE]:
                 if rule.pattern:
                     # The auto-EXECUTION rules inspect the LAUNCH PATH ONLY, mirroring
@@ -3345,13 +3443,13 @@ class AgentSupplyChainScanner(BaseScanner):
                         )
                         out.append(self._mk(rule, loc, "mcp-config", evidence))
             out += self._check_jwt_secrets(joined, fp, "mcp-config", loc_override=loc)
-            out += self._check_mcp_env_exfil(name, cfg, fp)
-            out += self._check_mcp_remote_source(name, cfg, fp)
-            out += self._check_mcp_cleartext_transport(name, cfg, fp)
-            out += self._check_mcp_autoapprove(name, cfg, fp)
+            out += self._check_mcp_env_exfil(name, cfg, fp, scope)
+            out += self._check_mcp_remote_source(name, cfg, fp, scope)
+            out += self._check_mcp_cleartext_transport(name, cfg, fp, scope)
+            out += self._check_mcp_autoapprove(name, cfg, fp, scope)
         return out
 
-    def _check_mcp_env_exfil(self, name: str, cfg: Dict[str, Any], fp: Path) -> List[ScanFinding]:
+    def _check_mcp_env_exfil(self, name: str, cfg: Dict[str, Any], fp: Path, scope: str = "") -> List[ScanFinding]:
         """AGENT-MCP-004: broad ambient host credential forwarded to an unrelated server.
 
         The `env` block sets variables for the server process. Forwarding a broad
@@ -3400,9 +3498,9 @@ class AgentSupplyChainScanner(BaseScanner):
                 seen.add(x)
                 uniq.append(x)
         snippet = "env forwards " + ", ".join(uniq[:6]) + " to unrelated server"
-        return [self._mk(MCP_ENV_EXFIL_RULE, f"{fp} » server:{name}", "mcp-config", snippet)]
+        return [self._mk(MCP_ENV_EXFIL_RULE, self._mcp_server_loc(fp, name, scope), "mcp-config", snippet)]
 
-    def _check_mcp_remote_source(self, name: str, cfg: Dict[str, Any], fp: Path) -> List[ScanFinding]:
+    def _check_mcp_remote_source(self, name: str, cfg: Dict[str, Any], fp: Path, scope: str = "") -> List[ScanFinding]:
         """AGENT-MCP-005: server launches code from a raw URL / gist / paste / IP literal.
 
         Inspects the server's command + args (the launch path) — not the env block
@@ -3429,12 +3527,12 @@ class AgentSupplyChainScanner(BaseScanner):
             elif _is_public_ip_literal(raw_host):
                 reason = f"bare public IP literal {raw_host}"
             if reason:
-                loc = f"{fp} » server:{name}"
+                loc = self._mcp_server_loc(fp, name, scope)
                 snippet = f"{reason}: {self._redact(m.group(0))}"
                 return [self._mk(MCP_REMOTE_SOURCE_RULE, loc, "mcp-config", snippet)]
         return []
 
-    def _check_mcp_cleartext_transport(self, name: str, cfg: Dict[str, Any], fp: Path) -> List[ScanFinding]:
+    def _check_mcp_cleartext_transport(self, name: str, cfg: Dict[str, Any], fp: Path, scope: str = "") -> List[ScanFinding]:
         """AGENT-MCP-006: remote MCP transport over cleartext http:// / ws:// to a public host.
 
         Inspects the server's transport URL field (`url` / `serverUrl` / `endpoint`
@@ -3474,12 +3572,12 @@ class AgentSupplyChainScanner(BaseScanner):
             if parts.port:
                 netloc = f"{netloc}:{parts.port}"
             display = f"{parts.scheme.lower()}://{netloc}{parts.path}"
-            loc = f"{fp} » server:{name}"
+            loc = self._mcp_server_loc(fp, name, scope)
             snippet = f"cleartext {parts.scheme.lower()}:// transport to remote host {host}: {self._redact(display)}"
             out.append(self._mk(MCP_CLEARTEXT_RULE, loc, "mcp-config", snippet))
         return out
 
-    def _check_mcp_autoapprove(self, name: str, cfg: Dict[str, Any], fp: Path) -> List[ScanFinding]:
+    def _check_mcp_autoapprove(self, name: str, cfg: Dict[str, Any], fp: Path, scope: str = "") -> List[ScanFinding]:
         """AGENT-MCP-007: server blanket-auto-approves every tool call.
 
         Structurally inspects the server's auto-approve setting (`alwaysAllow` /
@@ -3492,7 +3590,7 @@ class AgentSupplyChainScanner(BaseScanner):
         if hit is None:
             return []
         key, evidence = hit
-        loc = f"{fp} » server:{name}"
+        loc = self._mcp_server_loc(fp, name, scope)
         snippet = (
             f"blanket tool auto-approval ({key}: {self._redact(evidence)}) — "
             "every tool call runs without a per-call confirmation prompt"
