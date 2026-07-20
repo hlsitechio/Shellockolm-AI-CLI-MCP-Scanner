@@ -866,7 +866,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   trailing-`Y` token shapes × no-leak / no-fabricated-finding / secret-still-detected,
   the three real unpinned forms still firing, coexistence with an env secret, and
   scrub units incl. a leaves-ordinary-evidence-alone baseline); 8 of them fail at HEAD.
-  Full suite **1987 green** (was 1969). _(commit PENDING)_
+  Full suite **1987 green** (was 1969). _(commit 121ade0)_
 
 - F7. [x] **Real MCP config filenames never routed to `_scan_mcp`** — `MCP_NAMES` is
   `{mcp.json, .mcp.json, claude_desktop_config.json}` + `*.mcp.json`. An identical
@@ -925,7 +925,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   (`tests/test_mcp_config_routing.py`), including an honest bound: routing an
   unparseable config is not the same as detecting in it (F11's territory), so the
   suite pins what the raw-text fallback really recovers rather than implying the name
-  route restores full coverage. Full suite **2041 green** (was 1987).
+  route restores full coverage. Full suite **2041 green** (was 1987). _(commit 9f4c97c)_
 
 - F8. [ ] **`_is_public_ip_literal` misjudges obfuscated IPv4 literals (AGENT-MCP-005)** —
   `ipaddress.ip_address(h)` raises for any non-dotted-quad form and the `except` returns
