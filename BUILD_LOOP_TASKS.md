@@ -752,7 +752,7 @@ contract as the backlog (fixtures + a zero-false-positive benign baseline).
   U+FE00–FE0F exclusion pin, an every-member-reachable guard, an earliest-occurrence pin,
   5 parametrized legitimate-emoji zero-FP baselines, and the two ZWJ-still-fires attack
   guards). Full suite **1808 passed / 1 skipped** (+26); ruff + strict-mypy clean;
-  self-scan gate still 0 HIGH+ (48 items). _(commit PENDING)_
+  self-scan gate still 0 HIGH+ (48 items). _(commit fb0203a)_
 
 ---
 
