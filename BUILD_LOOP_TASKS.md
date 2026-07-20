@@ -927,13 +927,32 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   suite pins what the raw-text fallback really recovers rather than implying the name
   route restores full coverage. Full suite **2041 green** (was 1987). _(commit 9f4c97c)_
 
-- F8. [ ] **`_is_public_ip_literal` misjudges obfuscated IPv4 literals (AGENT-MCP-005)** —
-  `ipaddress.ip_address(h)` raises for any non-dotted-quad form and the `except` returns
-  `False`. `https://8.8.8.8/x.ts` fires; the integer (`134744072`), hex (`0x08080808`),
-  octal (`0010.0010.0010.0010`) and 2-part (`8.526344`) forms all score **0** — and all
-  four normalize to `8.8.8.8` under the WHATWG URL parser the named launchers actually
-  use (verified via `node -e "new URL(...)"` and `deno eval`). Fix: normalize the host
-  through a WHATWG-style IPv4 parser before `ipaddress.ip_address`.
+- F8. [x] **`_is_public_ip_literal` misjudges obfuscated IPv4 literals (AGENT-MCP-005)** —
+  `ipaddress.ip_address(h)` raises for any non-dotted-quad form and the `except` returned
+  `False`, so `https://8.8.8.8/x.ts` fired while the integer (`134744072`), hex
+  (`0x08080808`), octal (`0010.0010.0010.0010`) and short 2-/3-part (`8.526344`) forms
+  all scored **0** — even though all normalize to the SAME `8.8.8.8` under the WHATWG URL
+  parser deno/npx/bunx actually use. Fix: a new WHATWG-style IPv4 normalizer
+  (`_parse_ipv4_number` per-part radix decode + `_normalize_ipv4_host` composition, wired
+  through a shared `_classify_ip_host`) decodes a numeric host to the address a launcher
+  resolves BEFORE the `is_global` classification, so every form is judged on its decoded
+  address, not its spelling. **Zero-FP by construction:** the normalizer requires EVERY
+  dot-part to be a valid number in its radix, so any host with a non-numeric label
+  (`api.vendor.com`, `8.8.8.8.example.com`) fails fast and is left to hostname handling;
+  `>4` parts and out-of-range octets are rejected; and digits are validated explicitly
+  against the radix alphabet so Python `int()`'s leniency (`1_0`, `+5`, whitespace) can
+  never smuggle a non-IPv4 host into a numeric classification. The finding now surfaces
+  the decoded dotted quad (`0x08080808 (→ 8.8.8.8)`) instead of just the evasion. The
+  **mirror** `_is_local_or_private_host` (AGENT-MCP-006 cleartext transport) got the same
+  normalizer, so an obfuscated loopback/private literal (`http://0x7f000001/`) is now
+  correctly recognized as local dev and NOT mis-flagged as a public cleartext endpoint —
+  closing the inverse FP the shared primitive would otherwise leave open. Verified live
+  (integer + hex public forms fire AGENT-MCP-005 with the decoded IP shown; obfuscated
+  loopback/private forms stay SECURE). 30 new tests (parser radix + rejection units,
+  every-form→8.8.8.8 + private-form decode, strict-subset non-IPv4 rejection incl. the
+  `int()`-leniency guards, e2e MCP-005 positive/negative over integer/hex/octal/2-part +
+  numeric-looking-hostname baseline, and the MCP-006 mirror units); full suite **2089
+  green** (was 2041); `ruff check src` + `mypy` clean. _(commit PENDING)_
 
 - F9. [ ] **Trailing-dot FQDN evades `_check_mcp_remote_source`** — the host suffix match
   has no `rstrip(".")`, so `https://raw.githubusercontent.com./…` and `https://pastebin.com./raw/…`

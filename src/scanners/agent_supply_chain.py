@@ -1451,18 +1451,105 @@ _MCP_RAW_SOURCE_HOSTS = (
 _MCP_URL = re.compile(r"\bhttps?://(?:[^@/\s]*@)?(\[[0-9A-Fa-f:.]+\]|[^:/?#\s]+)", re.IGNORECASE)
 
 
+# --- Obfuscated-IPv4 normalization (WHATWG URL host parser) --------------------
+# `ipaddress.ip_address` only accepts the canonical dotted quad, but the URL parsers
+# the named launchers actually use (deno / npx / bunx — WHATWG-compliant) also
+# resolve the integer (`134744072`), hex (`0x08080808`), octal (`0010.0010.0010.0010`)
+# and short 2-/3-part (`8.526344`) forms — all of which decode to the SAME address.
+# An attacker uses one of those forms so `https://8.8.8.8/x.ts` (flagged) becomes
+# `https://134744072/x.ts` (scored 0) while resolving identically at launch. We
+# normalize a numeric host through a WHATWG-style IPv4 parser before classifying it,
+# so every form a launcher honors is judged on its decoded address, not its spelling.
+_IPV4_DIGITS = {10: set("0123456789"), 8: set("01234567"), 16: set("0123456789abcdefABCDEF")}
+
+
+def _parse_ipv4_number(part: str) -> Optional[int]:
+    """WHATWG "parse an IPv4 number": decode one dot-separated part in its radix
+    (`0x…` hex, leading-`0` octal, else decimal). Returns the integer value, or
+    None if the part is not a whole number in that radix.
+
+    Validates digits explicitly against the radix alphabet so Python `int()`'s
+    leniency — underscores (`1_0`), a sign (`+5`), surrounding whitespace — can
+    never smuggle a non-IPv4 host into a numeric classification.
+    """
+    if part == "":
+        return None
+    p = part
+    radix = 10
+    if len(p) >= 2 and p[0] == "0" and p[1] in "xX":
+        radix, p = 16, p[2:]
+    elif len(p) >= 2 and p[0] == "0":
+        radix, p = 8, p[1:]
+    if p == "":
+        return 0  # a bare "0", "0x" or "00" is the number zero
+    allowed = _IPV4_DIGITS[radix]
+    if not all(c in allowed for c in p):
+        return None
+    return int(p, radix)
+
+
+def _normalize_ipv4_host(host: str) -> Optional["ipaddress.IPv4Address"]:
+    """Decode a numeric host in ANY WHATWG IPv4 form (integer / hex / octal /
+    1–4 dotted parts) to the IPv4Address a URL parser resolves it to, or None if
+    `host` is not a numeric IPv4 literal (an ordinary hostname or an IPv6 form —
+    those are handled by `ipaddress.ip_address` directly, never here).
+
+    Requiring EVERY part to be a valid number keeps this a strict subset: a host
+    with any non-numeric label (`api.vendor.com`, `raw.githubusercontent.com`)
+    fails fast and is left to hostname handling, so this never misreads a real
+    hostname as an IP.
+    """
+    h = host.strip().strip("[]")
+    if not h or ":" in h:
+        return None  # empty or an IPv6 literal (colons) — not a numeric IPv4
+    parts = h.split(".")
+    if len(parts) > 1 and parts[-1] == "":
+        parts = parts[:-1]  # a single trailing dot is allowed by the parser
+    if not parts or len(parts) > 4:
+        return None
+    numbers: List[int] = []
+    for part in parts:
+        n = _parse_ipv4_number(part)
+        if n is None:
+            return None  # a non-numeric label — this host is not a numeric IPv4
+        numbers.append(n)
+    # Every part but the last addresses a single octet; the last absorbs the rest.
+    if any(n > 255 for n in numbers[:-1]):
+        return None
+    if numbers[-1] >= 256 ** (5 - len(numbers)):
+        return None
+    value = numbers[-1]
+    for i, n in enumerate(numbers[:-1]):
+        value += n * 256 ** (3 - i)
+    try:
+        return ipaddress.IPv4Address(value)
+    except (ipaddress.AddressValueError, ValueError):
+        return None
+
+
+def _classify_ip_host(host: str) -> Optional["ipaddress.IPv4Address | ipaddress.IPv6Address"]:
+    """Resolve `host` to the IP address a URL parser would — the canonical form via
+    `ipaddress.ip_address`, falling back to the WHATWG numeric-IPv4 normalizer for
+    the integer / hex / octal / short-dotted evasions. None for a real hostname."""
+    h = host.strip().strip("[]")
+    try:
+        return ipaddress.ip_address(h)
+    except ValueError:
+        return _normalize_ipv4_host(host)
+
+
 def _is_public_ip_literal(host: str) -> bool:
     """True if `host` is a routable public IP literal (the remote-fetch smell).
 
     `is_global` is True only for genuinely public addresses — it already excludes
     loopback, private (RFC1918), link-local, CGNAT, documentation, reserved, and
     multicast ranges (all local-dev or non-routable, not a remote-fetch smell). Only
-    a public IP, which carries no hostname / cert provenance, is the signal."""
-    h = host.strip().strip("[]")
-    try:
-        return ipaddress.ip_address(h).is_global
-    except ValueError:
-        return False
+    a public IP, which carries no hostname / cert provenance, is the signal.
+
+    Obfuscated IPv4 forms (integer / hex / octal / short-dotted) are decoded first,
+    so `https://134744072/x.ts` is judged on its resolved 8.8.8.8, not its spelling."""
+    ip = _classify_ip_host(host)
+    return ip is not None and ip.is_global
 
 
 MCP_REMOTE_SOURCE_RULE = AgentRule(
@@ -1537,10 +1624,13 @@ def _is_local_or_private_host(host: str) -> bool:
         return True
     if any(h.endswith(suffix) for suffix in _LOCAL_HOST_SUFFIXES):
         return True
-    try:
-        return not ipaddress.ip_address(h).is_global
-    except ValueError:
-        return False  # a real, public hostname (has a resolvable DNS name)
+    # Classify canonical AND obfuscated IPv4 literals alike, so an obfuscated
+    # loopback / private form (`http://0x7f000001/`, `http://2130706433/`) is
+    # recognized as local dev and NOT mis-flagged as a public cleartext endpoint.
+    ip = _classify_ip_host(h)
+    if ip is not None:
+        return not ip.is_global
+    return False  # a real, public hostname (has a resolvable DNS name)
 
 
 MCP_CLEARTEXT_RULE = AgentRule(
@@ -3525,7 +3615,14 @@ class AgentSupplyChainScanner(BaseScanner):
             if any(host == h or host.endswith("." + h) for h in _MCP_RAW_SOURCE_HOSTS):
                 reason = f"raw/paste source host {host}"
             elif _is_public_ip_literal(raw_host):
-                reason = f"bare public IP literal {raw_host}"
+                # Surface the decoded dotted quad for an obfuscated literal so the
+                # finding names the real address (`134744072 (→ 8.8.8.8)`), not
+                # just the evasion spelling.
+                decoded = _classify_ip_host(raw_host)
+                shown = raw_host
+                if decoded is not None and str(decoded) != raw_host.strip().strip("[]"):
+                    shown = f"{raw_host} (→ {decoded})"
+                reason = f"bare public IP literal {shown}"
             if reason:
                 loc = self._mcp_server_loc(fp, name, scope)
                 snippet = f"{reason}: {self._redact(m.group(0))}"

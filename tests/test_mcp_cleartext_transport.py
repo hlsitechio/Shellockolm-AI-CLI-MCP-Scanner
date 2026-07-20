@@ -179,6 +179,10 @@ def test_does_not_hijack_the_mcp005_launcher_path(tmp_path):
     "localhost", "LocalHost", "app.localhost", "dev.local", "svc.internal",
     "box.lan", "host.docker.internal", "127.0.0.1", "::1", "[::1]",
     "192.168.0.1", "10.1.2.3", "172.31.255.1", "169.254.1.1", "",
+    # Obfuscated loopback / private IPv4 literals decode to a local address and
+    # must be recognized as local (mirror of the AGENT-MCP-005 F8 fix) so a
+    # cleartext http:// to one is NOT mis-flagged as a public-endpoint exposure.
+    "0x7f000001", "2130706433", "3232235777",
 ])
 def test_is_local_or_private_host_true(host):
     assert _is_local_or_private_host(host) is True
@@ -187,6 +191,8 @@ def test_is_local_or_private_host_true(host):
 @pytest.mark.parametrize("host", [
     "mcp.example.com", "api.vendor.io", "8.8.8.8", "93.184.216.34",
     "1.1.1.1", "example.org",
+    # Obfuscated PUBLIC IPv4 literals decode to a routable address — still public.
+    "0x08080808", "134744072",
 ])
 def test_is_local_or_private_host_false(host):
     assert _is_local_or_private_host(host) is False
