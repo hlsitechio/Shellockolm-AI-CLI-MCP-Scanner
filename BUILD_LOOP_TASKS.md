@@ -803,7 +803,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   so the two suites cannot drift onto different attack strings. Full suite **1857 green**
   (was 1808). _(commit 7343d91)_
 
-- F6. [ ] **Paste/OOB sink list asymmetry — 11 hosts known to MCP-005 are invisible to
+- F6. [x] **Paste/OOB sink list asymmetry — 11 hosts known to MCP-005 are invisible to
   every sibling rule** — `_MCP_RAW_SOURCE_HOSTS` lists 13 paste hosts; the shared
   canonical `_OOB_CAPTURE_HOSTS` lists only 3 (`pastebin.com`, `hastebin.com`,
   `paste.ee`). `rentry.co`, `dpaste.com/.org`, `0bin.net`, `ghostbin.com`, `controlc.com`,
@@ -813,6 +813,32 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   skill case additionally loses its composite-severity escalation. This is precisely the
   drift the module comment claims was eliminated. Fix: move the 11 into
   `_OOB_CAPTURE_HOSTS`; every consumer already derives from it.
+
+  **Done.** The audit undercounted by one: `rentry.org` is in `_MCP_RAW_SOURCE_HOSTS`
+  too and was equally invisible, so **12** hosts moved, not 11 — confirmed on disk
+  (`https://rentry.co/x` in a skill → 0 findings; the same URL on `pastebin.com` → HIGH).
+  And the prescribed one-line list move would have shipped **false positives**: the
+  alternation is a bare SUBSTRING match, so `ix.io` fires inside `matrix.io`,
+  `phoenix.io` and `citrix.io`, `bpa.st` inside `bpa.stanford.edu`, and `paste.rs` inside
+  a `paste.rst` filename — all HIGH/8.0 on the product's widest surface. So each branch
+  is now anchored to host-label boundaries (`_HOST_START`/`_HOST_END`), asymmetric by
+  necessity: the suffix families keep only the right-hand guard, since their leading dot
+  already requires the attacker subdomain a lookbehind would reject. That anchoring also
+  retires two FPs the original 3-host set *already* had — `paste.eecs.example.edu` and
+  `mypastebin.com` both scored EXFIL-003 HIGH at HEAD, measured both ways. Rather than
+  copying the hosts into a second list, the shared subset is factored into
+  `_PASTE_SINK_HOSTS` and consumed by BOTH directions (`_OOB_CAPTURE_HOSTS` as a sink to
+  post data TO, `_MCP_RAW_SOURCE_HOSTS` as an unversioned launcher source to fetch code
+  FROM), which makes the drift unrepresentable instead of merely repaired; the
+  raw/gist/githack half stays out of the sink set and is asserted to. Verified: all 15
+  paste hosts now fire at all three sink sites (prose/hook/n8n) AND still fire as
+  AGENT-MCP-005 sources; a strict no-op on 5,289 real agent artifacts (293 findings,
+  byte-identical set, AGENT-EXFIL-003 non-vacuously firing); 112 new tests
+  (`tests/test_oob_sink_parity.py`: the 12-host three-site parity matrix, the shared-set
+  anti-drift assertions, both-direction MCP-005 coverage, 10 substring-lookalike zero-FP
+  baselines at prose and hook, and narrowing guards pinning the subdomain / uppercase /
+  port / userinfo / end-of-sentence forms plus every canonical entry). Full suite
+  **1969 green** (was 1857). _(commit PENDING)_
 
 - F7. [ ] **Real MCP config filenames never routed to `_scan_mcp`** — `MCP_NAMES` is
   `{mcp.json, .mcp.json, claude_desktop_config.json}` + `*.mcp.json`. An identical

@@ -1104,11 +1104,26 @@ DESTRUCT_RULE = AgentRule(
 # a sink added for one site can never again be invisible at another; tests assert all
 # three matchers agree on every host here.
 #
+# The paste / text-dump sinks, factored out because a SECOND consumer needs exactly this
+# subset: the MCP launcher rule (AGENT-MCP-005) treats a paste host as an unversioned
+# *source* to fetch code FROM, while the three rules below treat it as a *sink* to post
+# data TO. Same hosts, opposite direction — so the list is shared rather than copied.
+# It had already drifted the way the comment above warns about: AGENT-MCP-005 knew all 15
+# while the canonical sink set knew only the first 3, leaving 12 paste hosts invisible to
+# AGENT-EXFIL-003 / AGENT-HOOK-003 / AGENT-N8N-002 (`https://rentry.co/x` in a skill:
+# 0 findings; the same URL on `pastebin.com`: HIGH). Deriving both from this one tuple
+# makes that drift structurally impossible in either direction.
+_PASTE_SINK_HOSTS: Tuple[str, ...] = (
+    "pastebin.com", "hastebin.com", "paste.ee",
+    "dpaste.com", "dpaste.org", "rentry.co", "rentry.org", "0bin.net",
+    "ghostbin.com", "controlc.com", "bpa.st", "ix.io", "sprunge.us",
+    "paste.rs", "termbin.com",
+)
 # Exact hosts — matched as the host itself or any subdomain of it:
 _OOB_CAPTURE_HOSTS: Tuple[str, ...] = (
     "webhook.site", "requestbin.com", "requestbin.net",
     "interact.sh", "burpcollaborator.net", "dnslog.cn",
-    "pastebin.com", "hastebin.com", "paste.ee",
+    *_PASTE_SINK_HOSTS,
 )
 # Host SUFFIX families — the sink is a per-run attacker-controlled subdomain, so only
 # the parent domain is knowable. The leading dot is load-bearing: it requires a
@@ -1121,15 +1136,33 @@ _OOB_CAPTURE_SUFFIXES: Tuple[str, ...] = (
 )
 
 
+# A host label ends here: the next character cannot continue it. Without this the
+# alternation is a bare SUBSTRING match, which the short paste hosts turn into real false
+# positives — `ix.io` matches inside `matrix.io`, `phoenix.io` and `citrix.io`, `bpa.st`
+# inside `bpa.stanford.edu`, `paste.rs` inside a `paste.rst` filename. A trailing `.`
+# still passes (`pastebin.com.` and a bare host at the end of a sentence must both fire),
+# and so does end-of-string.
+_HOST_END = r"(?![A-Za-z0-9-])"
+# ...and a host STARTS here: the previous character cannot be part of a preceding label,
+# so `mydpaste.com` and `rentry.company.com` are not `dpaste.com` / `rentry.co`. A `.`
+# passes, which is what keeps the documented "or any subdomain of it" behaviour
+# (`evil.pastebin.com`). Not applied to the suffix families — their leading dot already
+# requires a real subdomain in front, so a lookbehind there would reject every match.
+_HOST_START = r"(?<![A-Za-z0-9-])"
+
+
 def _oob_sink_alternation() -> str:
     """Regex alternation matching any canonical OOB capture/paste sink host.
 
     Built FROM the tuples above so a regex-based site cannot drift from the
-    host-comparison site (`_n8n_is_oob_sink`) that consumes the same data.
+    host-comparison site (`_n8n_is_oob_sink`) that consumes the same data. Each branch
+    is anchored to host-label boundaries so the regex sites match a host the way that
+    comparison site does, instead of matching a substring of an unrelated domain.
     """
-    return "|".join(
-        re.escape(h) for h in (*_OOB_CAPTURE_HOSTS, *_OOB_CAPTURE_SUFFIXES)
-    )
+    return "|".join((
+        *(_HOST_START + re.escape(h) + _HOST_END for h in _OOB_CAPTURE_HOSTS),
+        *(re.escape(s) + _HOST_END for s in _OOB_CAPTURE_SUFFIXES),
+    ))
 
 
 # Sinks matched ONLY by the generic prose rule below — never by the hook or n8n rules.
@@ -1395,12 +1428,13 @@ MCP_ENV_EXFIL_RULE = AgentRule(
 # endpoint (https://api.vendor.com/mcp) is never flagged. Only dedicated raw/paste
 # hosts and ROUTABLE PUBLIC IP literals trip it; loopback / private / link-local
 # IPs (local dev servers) and ordinary hostnames are excluded.
+# The paste half is the SHARED `_PASTE_SINK_HOSTS` set (see above) rather than a private
+# copy: a paste host is an unversioned code source here and an exfil sink there, and one
+# added at either site must be known at both.
 _MCP_RAW_SOURCE_HOSTS = (
     "raw.githubusercontent.com", "gist.githubusercontent.com", "gist.github.com",
     "raw.githack.com", "rawcdn.githack.com",
-    "pastebin.com", "paste.ee", "hastebin.com", "dpaste.com", "dpaste.org",
-    "rentry.co", "rentry.org", "0bin.net", "ghostbin.com", "controlc.com",
-    "bpa.st", "ix.io", "sprunge.us", "paste.rs", "termbin.com",
+    *_PASTE_SINK_HOSTS,
 )
 # A URL inside a command/args token. Captures the host — a bracketed IPv6 literal or
 # an ordinary host[:port] — so we can classify it. `\b` lets it match inside
