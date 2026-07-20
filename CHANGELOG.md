@@ -11,6 +11,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **JSON `\uXXXX` escapes no longer defeat the entire stealth suite on config artifacts.**
+  The four stealth checks (invisible characters PI-005, Unicode Tags PI-007, bidi PI-010,
+  homoglyphs PI-011) are signature matches on literal code points — which is exactly what
+  makes them safe to run on config, and was also their blind spot. JSON expresses any code
+  point as a pure-ASCII escape, so a malicious `mcp.json`, n8n export or `settings.json`
+  could carry a zero-width space or a Tags-smuggled instruction while containing no
+  non-ASCII byte at all: `str.isascii()` and `_STEALTH_CHARS_RE` (the fast paths added for
+  performance) both short-circuited, **all four checks were skipped**, and `json.loads`
+  still handed the client the byte-identical malicious string. Measured on the three JSON
+  artifact classes, every one of the 12 check × class cells was blind in the escaped form
+  (literal → 1 finding, escaped → **0**). This was not a crafted-input bug: `json.dumps`
+  escapes **by default** (`ensure_ascii=True`), so the bypassing form is what any
+  Python-emitted config already looks like — an attacker need only let the standard
+  library serialize the payload. The three raw-text scan paths now decode above-ASCII
+  escapes before re-running the suite, the fix precedented in the same module by
+  `_check_n8n_cred_exfil`'s `ensure_ascii=False` re-serialization (which is why the
+  *structured* paths were escape-immune all along). Decoding is deliberately partial and
+  in place — only escapes above U+007F, so an escaped newline cannot renumber every line
+  below it and a reported line still points at the right line of the real file; surrogate
+  pairs are combined so an astral Tags character is the single character the checks
+  expect; escaped backslashes are honoured by run parity; and it works on a config that
+  does not parse (trailing comma, `//` comment), which is the case that most needs it.
+  Findings are collapsed to one per rule, preferring the literal-text hit. Verified as a
+  strict no-op on 5,289 real agent artifacts (**0 new findings**, byte-identical set), and
+  non-vacuously via a re-serialization sweep: all 55 real mcp.json/settings.json rewritten
+  into the escaped form score identically, with 4 carrying non-ASCII that genuinely drives
+  the decoder. 49 new tests.
+
 - **AGENT-PI-005 now covers the whole invisible-character category (was 6 of 64).** This
   rule is the safety net behind the natural-language rules: an attacker who splices an
   invisible code point into a keyword (`Ign<invisible>ore all previous instructions`)

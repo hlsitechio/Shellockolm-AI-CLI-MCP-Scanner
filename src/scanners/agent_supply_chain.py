@@ -285,6 +285,78 @@ def _build_stealth_char_class() -> "re.Pattern[str]":
 # Precompiled once at import; used as a cheap guard by the per-character checks.
 _STEALTH_CHARS_RE = _build_stealth_char_class()
 
+# A JSON \uXXXX escape, together with the backslash run that precedes it — the run's
+# parity decides whether the final backslash opens an escape or is itself escaped.
+_JSON_UNICODE_ESCAPE_RE = re.compile(r"(\\+)u([0-9a-fA-F]{4})")
+
+
+def _decode_json_unicode_escapes(text: str) -> str:
+    """Resolve JSON ``\\uXXXX`` escapes above U+007F, in place.
+
+    The stealth suite is a signature match on literal code points, but JSON can
+    express any code point as a pure-ASCII escape — and ``json.dumps`` does so BY
+    DEFAULT (``ensure_ascii=True``). So a config carrying a zero-width space or a
+    Unicode Tags character reaches disk as plain ASCII: ``str.isascii()`` and
+    ``_STEALTH_CHARS_RE`` both short-circuit, every stealth check is skipped, and
+    ``json.loads`` still hands the client the byte-identical malicious string. Any
+    config a Python tool emits is escaped this way automatically, so this is the
+    ordinary on-disk shape, not a crafted edge case. Decoding first is precedented
+    in this module — ``_check_n8n_cred_exfil`` re-serializes with
+    ``ensure_ascii=False`` before matching, which is exactly why the *structured*
+    paths were already escape-immune while the raw-text ones were not.
+
+    Decoding is deliberately partial and position-preserving rather than a
+    ``json.loads``/``dumps`` round-trip:
+
+    * **Only escapes above U+007F** are resolved. The stealth checks care about no
+      others, and leaving the ASCII ones alone means a ``\\u000a`` cannot inject a
+      newline that shifts every subsequent line number. Each decoded escape becomes
+      one character on the line it already occupied, so a line number reported
+      against the decoded text still points at the right line of the real file.
+    * **Surrogate pairs are combined**, so an astral code point — how the Tags block
+      is necessarily written in JSON — is the single character the checks expect.
+      An unpaired surrogate is dropped: it is not a real character, and emitting one
+      would raise on any later encode.
+    * **Escaped backslashes are honoured** via the run's parity, so the literal text
+      ``\\\\u200b`` stays literal instead of becoming a zero-width space.
+
+    Unlike a parse-based decode this also works on a config that is not valid JSON
+    (a trailing comma, a ``//`` comment), which is the case that most needs it.
+    """
+    if "\\u" not in text:
+        return text
+
+    # (index of the escape's opening backslash, end of the escape, code point)
+    hits: List[Tuple[int, int, int]] = []
+    for m in _JSON_UNICODE_ESCAPE_RE.finditer(text):
+        if len(m.group(1)) % 2 == 0:
+            continue  # the backslash is itself escaped — this is literal "\uXXXX" text
+        cp = int(m.group(2), 16)
+        if cp <= 0x7F:
+            continue
+        hits.append((m.end(1) - 1, m.end(), cp))
+
+    if not hits:
+        return text
+
+    out: List[str] = []
+    last = 0
+    i = 0
+    while i < len(hits):
+        start, end, cp = hits[i]
+        if (0xD800 <= cp <= 0xDBFF and i + 1 < len(hits)
+                and hits[i + 1][0] == end and 0xDC00 <= hits[i + 1][2] <= 0xDFFF):
+            cp = 0x10000 + ((cp - 0xD800) << 10) + (hits[i + 1][2] - 0xDC00)
+            end = hits[i + 1][1]
+            i += 1
+        out.append(text[last:start])
+        out.append("" if 0xD800 <= cp <= 0xDFFF else chr(cp))
+        last = end
+        i += 1
+    out.append(text[last:])
+    return "".join(out)
+
+
 # Inline markdown link: [visible text](href). Used to detect a link whose visible
 # text advertises one domain while the href points to a different one — a lure that
 # gets an agent (or a skimming human) to auto-fetch an attacker-controlled URL.
@@ -3165,7 +3237,7 @@ class AgentSupplyChainScanner(BaseScanner):
         return self._scan_text_artifact(fp, text, quick_mode, artifact, rules)
 
     def _scan_mcp(self, fp: Path, text: str) -> List[ScanFinding]:
-        findings = self._check_stealth_channels(text, fp, "mcp-config")
+        findings = self._check_stealth_channels_json(text, fp, "mcp-config")
         structured = self._scan_mcp_structured(fp, text)
         if structured is None:
             # not valid JSON — fall back to raw-text rules
@@ -3387,7 +3459,7 @@ class AgentSupplyChainScanner(BaseScanner):
         # CREDENTIAL_RULES already reach here inside GENERIC_TEXT_RULES, but the
         # service_role JWT needs the decode — which never ran on n8n exports.
         findings += self._check_jwt_secrets(text, fp, "n8n-workflow")
-        findings += self._check_stealth_channels(text, fp, "n8n-workflow")
+        findings += self._check_stealth_channels_json(text, fp, "n8n-workflow")
         return self._dedupe(findings)
 
     def _check_n8n_cred_exfil(self, fp: Path, text: str) -> List[ScanFinding]:
@@ -3490,7 +3562,7 @@ class AgentSupplyChainScanner(BaseScanner):
         findings = self._check_auto_exec_commands(fp, text)
         findings += self._check_settings_permissions(fp, text)
         findings += self._check_credentials(text, fp, "claude-settings")
-        findings += self._check_stealth_channels(text, fp, "claude-settings")
+        findings += self._check_stealth_channels_json(text, fp, "claude-settings")
         return self._dedupe(findings)
 
     def _check_auto_exec_commands(self, fp: Path, text: str) -> List[ScanFinding]:
@@ -3680,6 +3752,29 @@ class AgentSupplyChainScanner(BaseScanner):
         findings += self._check_bidi(text, fp, artifact)
         findings += self._check_confusables(text, fp, artifact)
         return findings
+
+    def _check_stealth_channels_json(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
+        """Stealth suite over a JSON artifact — literal text AND its decoded escapes.
+
+        JSON is the one artifact class that can express a stealth code point without
+        the code point ever appearing in the file, because ``\\uXXXX`` escapes are
+        pure ASCII (and are what ``json.dumps`` emits by default). Running the suite
+        over the raw text alone therefore misses the whole channel on exactly the
+        artifacts an agent auto-loads: mcp.json, an n8n export, a settings.json. See
+        `_decode_json_unicode_escapes` for why the decode is partial and in place.
+
+        Both passes run because either can carry the payload alone, and a file may
+        mix the two forms. Results are collapsed to at most one finding per rule —
+        the invariant the raw suite already has — preferring the literal-text hit,
+        whose line number is the one a reader will find by eye in the file.
+        """
+        findings = self._check_stealth_channels(text, fp, artifact)
+        decoded = _decode_json_unicode_escapes(text)
+        if decoded == text:
+            return findings
+        seen = {f.cve_id for f in findings}
+        return findings + [f for f in self._check_stealth_channels(decoded, fp, artifact)
+                           if f.cve_id not in seen]
 
     def _check_invisible(self, text: str, fp: Path, artifact: str) -> List[ScanFinding]:
         """Detect invisible / zero-width code points hiding content from human review.

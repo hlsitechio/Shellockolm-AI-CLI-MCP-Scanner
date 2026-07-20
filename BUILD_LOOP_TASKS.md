@@ -761,7 +761,7 @@ contract as the backlog (fixtures + a zero-false-positive benign baseline).
 Confirmed empirically during the F4 audit pass but deliberately left for their own runs —
 each is a separate rule family with its own calibration burden. Ranked by severity.
 
-- F5. [ ] **JSON `\uXXXX` escapes defeat the entire stealth suite on config artifacts** —
+- F5. [x] **JSON `\uXXXX` escapes defeat the entire stealth suite on config artifacts** —
   `_check_stealth_channels` is handed the RAW file text at `_scan_mcp`, `_scan_n8n` and
   `_scan_settings`, but the suite is a signature match on literal code points. JSON
   expresses the identical string as pure ASCII escapes, so `​` (or the surrogate
@@ -774,6 +774,34 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   already re-serializes with `ensure_ascii=False` before matching, which is exactly why
   the *structured* paths are escape-immune. ~5 lines per scanner; `_dedupe` handles the
   overlap.
+
+  **Done.** The audit's estimate held, and the blast radius was wider than the two cells
+  it had measured: with the wiring removed, all **12** cells (4 stealth checks × 3 JSON
+  artifact classes) fail, not just invisible/tags on mcp.json. New module-level
+  `_decode_json_unicode_escapes` resolves escapes **above U+007F only**, in place — the
+  ASCII ones are left alone so an escaped newline cannot renumber every line below it,
+  which is what keeps a reported line number pointing at the right line of the real file
+  (asserted). Surrogate pairs are combined so an astral Tags code point is the one
+  character the checks expect (JSON has no other way to write it); an unpaired surrogate
+  is dropped rather than emitted, since it would raise on any later encode. Escaped
+  backslashes are honoured via the backslash run's parity, so a literal `\\u200b` in a
+  Windows path stays literal. Unlike a `json.loads`/`dumps` round-trip this also works on
+  a config that does not parse (trailing comma, `//` comment) — the case that most needs
+  it. Wired at all three raw-text sites through one `_check_stealth_channels_json` helper
+  (mirroring how `_check_stealth_channels` itself was introduced to stop per-site drift),
+  which runs the suite over the literal text and the decoded text and collapses to one
+  finding per rule, preferring the literal hit's line number. Verified: a strict no-op on
+  5,289 real agent artifacts (293 findings, byte-identical set, scan volume unchanged);
+  non-vacuously via a re-serialization sweep — all 55 real mcp.json/settings.json
+  rewritten into the bypassing `ensure_ascii=True` form score identically, and 4 of them
+  carry non-ASCII so their escaped form genuinely drives the decoder instead of hitting
+  its no-escape early return. 49 new tests (`tests/test_json_escape_stealth.py`: decoder
+  units incl. line-count preservation, surrogate pairing, backslash parity, lone-surrogate
+  safety and never-raises fuzzing; the 4×3 reach matrix in escaped form; escaped-vs-literal
+  finding parity; benign baselines at every JSON site incl. an escaped emoji ZWJ sequence;
+  and the measured regressions). Payloads are imported from `test_stealth_reach_parity`
+  so the two suites cannot drift onto different attack strings. Full suite **1857 green**
+  (was 1808).
 
 - F6. [ ] **Paste/OOB sink list asymmetry — 11 hosts known to MCP-005 are invisible to
   every sibling rule** — `_MCP_RAW_SOURCE_HOSTS` lists 13 paste hosts; the shared
