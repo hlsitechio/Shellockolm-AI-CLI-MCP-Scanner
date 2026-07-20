@@ -1331,10 +1331,19 @@ MCP_RULES: List[AgentRule] = [
 
 
 # Rules whose subject is the server's LAUNCH PATH (command + args) rather than the
-# full command+args+env join: the two that assert "this config AUTO-EXECUTES code".
+# full command+args+env join: the ones that assert "this config AUTO-EXECUTES code".
 # An env entry is data the process receives, not a command line the agent runs, so
 # matching an exec shape inside one is a false positive (see _scan_mcp_structured).
-_LAUNCH_PATH_ONLY_RULES: Set[str] = {"AGENT-MCP-001", "AGENT-MCP-008"}
+#
+# AGENT-MCP-002 ("runs an unpinned remote package") belongs here for the same reason
+# and was missing: a package is pinned or not by its command line, never by an env
+# value. Matching it against the env join made an env VALUE able to supply the `-y`
+# the rule looks for — a Slack token ending in `-Y` (the pattern is case-insensitive)
+# turned `npx some-mcp API_KEY=xoxb-…-Y` into an "unpinned launcher" finding whose
+# evidence span then carried the raw credential into the serialized report. Scoping
+# the rule to the launch path removes the false positive and the leak with it; the
+# evidence scrub below is the second line of defence for the rules that must see env.
+_LAUNCH_PATH_ONLY_RULES: Set[str] = {"AGENT-MCP-001", "AGENT-MCP-002", "AGENT-MCP-008"}
 
 
 # --- AGENT-MCP-004: broad host-secret exfil via an MCP server's env block ------
@@ -3330,7 +3339,10 @@ class AgentSupplyChainScanner(BaseScanner):
                     subject = launch if rule.id in _LAUNCH_PATH_ONLY_RULES else joined
                     m = rule.pattern.search(subject)
                     if m:
-                        evidence = self._mask_secret(m.group(0)) if rule.secret else self._redact(m.group(0))
+                        evidence = (
+                            self._mask_secret(m.group(0)) if rule.secret
+                            else self._redact(self._scrub_secrets(m.group(0)))
+                        )
                         out.append(self._mk(rule, loc, "mcp-config", evidence))
             out += self._check_jwt_secrets(joined, fp, "mcp-config", loc_override=loc)
             out += self._check_mcp_env_exfil(name, cfg, fp)
@@ -4225,6 +4237,23 @@ class AgentSupplyChainScanner(BaseScanner):
     def _redact(s: str) -> str:
         s = " ".join(s.split())
         return s[:97] + "..." if len(s) > 100 else s
+
+    def _scrub_secrets(self, evidence: str) -> str:
+        """Mask any credential sitting inside a NON-secret rule's evidence span.
+
+        The secret rules mask their own match, but a generic rule matched against the
+        command+args+env join can SWALLOW a neighbouring credential into its span and
+        emit it verbatim — the finding text is copied into `--json` and SARIF, so the
+        report becomes a second copy of the secret it is reporting. Scrubbing the span
+        with the same patterns the secret rules use keeps that impossible regardless of
+        which rule produced the evidence.
+        """
+        for rule in (SECRET_RULE, SECRET2_RULE):
+            if rule.pattern:
+                evidence = rule.pattern.sub(
+                    lambda m: self._mask_secret(m.group(0)), evidence
+                )
+        return evidence
 
     @staticmethod
     def _mask_secret(value: str) -> str:

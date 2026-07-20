@@ -840,6 +840,34 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   port / userinfo / end-of-sentence forms plus every canonical entry). Full suite
   **1969 green** (was 1857). _(commit c0bb139)_
 
+- F14. [x] **AGENT-MCP-002 mis-scoped to the env join — false positive AND a raw
+  credential in the report** — surfaced by the `test_mcp_env_secret_never_unredacted`
+  Hypothesis property test finding `xoxb-0000000000-Y`; pre-existing, reproduced
+  identically against HEAD and unrelated to the F7 routing work in the same run.
+  `_scan_mcp_structured` scopes the rules that assert "this config AUTO-EXECUTES code"
+  to the launch path via `_LAUNCH_PATH_ONLY_RULES`, but AGENT-MCP-002 ("runs an unpinned
+  remote package") was left matching `command + args + env` — even though a package is
+  pinned or not by its command line. The rule's terminator is `-y` compiled
+  case-insensitively, so any env VALUE ending in `-Y` supplies it: a Slack bot token
+  does, turning `npx some-mcp API_KEY=xoxb-…-Y` into an "unpinned launcher" finding
+  although the launcher carries no `-y` and no `@latest`. Worse, evidence is
+  `m.group(0)` and the span now reached the end of the secret, so the raw token was
+  embedded in the finding text — which `to_dict()` copies into `--json` and SARIF,
+  making the scanner's own report a second copy of the credential it was reporting.
+
+  **Done.** Fixed at the root: AGENT-MCP-002 joins `_LAUNCH_PATH_ONLY_RULES`, so env
+  never reaches it — killing the false positive and the leak together. Added
+  `_scrub_secrets` as the second line of defence for the rules that legitimately DO read
+  env (the exfil/secret set), masking any credential inside a non-secret rule's span
+  with the secret rules' own patterns, so the property holds whatever matched. Costs
+  nothing: a genuinely unpinned launcher always lives in command+args, and the finding
+  set over 5,344 real agent artifacts is unchanged (no corpus AGENT-MCP-002 was
+  env-driven). 18 new tests (`tests/test_mcp_env_evidence_leak.py`: three real
+  trailing-`Y` token shapes × no-leak / no-fabricated-finding / secret-still-detected,
+  the three real unpinned forms still firing, coexistence with an env secret, and
+  scrub units incl. a leaves-ordinary-evidence-alone baseline); 8 of them fail at HEAD.
+  Full suite **1987 green** (was 1969). _(commit PENDING)_
+
 - F7. [ ] **Real MCP config filenames never routed to `_scan_mcp`** — `MCP_NAMES` is
   `{mcp.json, .mcp.json, claude_desktop_config.json}` + `*.mcp.json`. An identical
   malicious server (gist launcher + AWS env + `alwaysAllow:["*"]`) fires in those, but
