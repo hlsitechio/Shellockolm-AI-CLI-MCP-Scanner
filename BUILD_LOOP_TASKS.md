@@ -952,7 +952,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   every-form→8.8.8.8 + private-form decode, strict-subset non-IPv4 rejection incl. the
   `int()`-leniency guards, e2e MCP-005 positive/negative over integer/hex/octal/2-part +
   numeric-looking-hostname baseline, and the MCP-006 mirror units); full suite **2089
-  green** (was 2041); `ruff check src` + `mypy` clean. _(commit PENDING)_
+  green** (was 2041); `ruff check src` + `mypy` clean. _(commit 8b86730)_
 
 - F9. [ ] **Trailing-dot FQDN evades `_check_mcp_remote_source`** — the host suffix match
   has no `rstrip(".")`, so `https://raw.githubusercontent.com./…` and `https://pastebin.com./raw/…`
