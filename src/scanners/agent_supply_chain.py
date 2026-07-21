@@ -1151,6 +1151,29 @@ _HOST_END = r"(?![A-Za-z0-9-])"
 _HOST_START = r"(?<![A-Za-z0-9-])"
 
 
+def _normalize_host(host: str) -> str:
+    """Canonicalize a URL host for COMPARISON against a known-host list.
+
+    Lowercases, strips surrounding whitespace and an IPv6 literal's `[]`, and — the
+    load-bearing part — drops the trailing dot of a fully-qualified name. `example.com.`
+    and `example.com` are the SAME host to every resolver and launcher, so a comparison
+    site that omits the strip is directly evadable: `https://raw.githubusercontent.com./x.ts`
+    fetches the identical bytes as the dotless form while scoring 0. The same omission
+    also runs the other way — `http://localhost./mcp` stops looking like localhost and a
+    local-dev endpoint gets reported as a public one.
+
+    Every host-comparison site derives from this one helper so the normalization cannot
+    drift between them (it previously existed only inside `_n8n_is_oob_sink`, which is
+    why that rule was the only one the trailing dot did not evade).
+
+    NOT used for the numeric-IP path: `_classify_ip_host` implements WHATWG's IPv4
+    parser, which allows exactly ONE trailing dot, and that spec rule is what a real
+    launcher applies. Hostname suffix matching is safe to normalize more aggressively
+    because extra dots can only ever *reveal* a known host, never invent one.
+    """
+    return host.strip().strip("[]").rstrip(".").lower()
+
+
 def _oob_sink_alternation() -> str:
     """Regex alternation matching any canonical OOB capture/paste sink host.
 
@@ -1617,7 +1640,7 @@ def _is_local_or_private_host(host: str) -> bool:
     Mirrors _is_public_ip_literal's `ipaddress` classification (an IP literal is
     "local" iff it is NOT globally routable), and adds the reserved private-use
     hostname suffixes (localhost / *.local / *.internal / *.lan / host.docker.internal)."""
-    h = host.strip().strip("[]").lower()
+    h = _normalize_host(host)
     if not h:
         return True  # no reachable remote host
     if h == "localhost" or h == "host.docker.internal":
@@ -1898,7 +1921,7 @@ _N8N_ANY_URL = re.compile(r"https?://[^\s\"'<>)\\]+", re.IGNORECASE)
 
 def _n8n_is_oob_sink(host: str) -> bool:
     """True if `host` is a known out-of-band / request-capture / paste sink."""
-    h = host.strip().strip("[]").lower().rstrip(".")
+    h = _normalize_host(host)
     if not h:
         return False
     for known in _N8N_OOB_SINK_HOSTS:
@@ -1913,7 +1936,7 @@ def _n8n_is_external_host(host: str) -> bool:
     Used for the DIRECT-EMBED case so a local-dev fixture (localhost, 127.0.0.1, a
     private RFC1918 address, *.local) is never treated as an exfil destination.
     """
-    h = host.strip().strip("[]").lower()
+    h = _normalize_host(host)
     if not h:
         return False
     try:
@@ -3610,7 +3633,7 @@ class AgentSupplyChainScanner(BaseScanner):
             return []
         for m in _MCP_URL.finditer(joined):
             raw_host = m.group(1)
-            host = raw_host.lower()
+            host = _normalize_host(raw_host)
             reason = None
             if any(host == h or host.endswith("." + h) for h in _MCP_RAW_SOURCE_HOSTS):
                 reason = f"raw/paste source host {host}"

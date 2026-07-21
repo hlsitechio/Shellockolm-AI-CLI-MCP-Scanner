@@ -954,12 +954,33 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   numeric-looking-hostname baseline, and the MCP-006 mirror units); full suite **2089
   green** (was 2041); `ruff check src` + `mypy` clean. _(commit 8b86730)_
 
-- F9. [ ] **Trailing-dot FQDN evades `_check_mcp_remote_source`** — the host suffix match
-  has no `rstrip(".")`, so `https://raw.githubusercontent.com./…` and `https://pastebin.com./raw/…`
-  score **0** while the dotless forms fire. Reachability confirmed against the live host
-  (a served 404, not a DNS failure). Uppercase, `:443` and `userinfo@` forms are all
-  handled correctly — only the trailing dot slips. One-line fix, and the sibling
-  `_n8n_is_oob_sink` already performs exactly this normalization.
+- F9. [x] **Trailing-dot FQDN evades `_check_mcp_remote_source`** — confirmed live:
+  `https://raw.githubusercontent.com./e/v/s.ts` and `https://pastebin.com./raw/AbC`
+  scored **0** while the dotless forms fired AGENT-MCP-005. Root cause was one missing
+  `rstrip(".")`, but it was missing at **three** of the four host-comparison sites — the
+  normalization existed only as a private copy inside `_n8n_is_oob_sink`, which is
+  exactly why that rule was the only one the trailing dot did not evade. Fixed by
+  promoting it to a single shared `_normalize_host()` primitive (lowercase + strip
+  whitespace / `[]` / trailing dots) that **every** host-comparison site now derives
+  from, so the normalization cannot drift between them again. That also closed the two
+  **inverse false positives** the same omission produced in the other direction:
+  `http://localhost./mcp` and `http://box.local./mcp` stopped looking local and were
+  reported as public cleartext endpoints by AGENT-MCP-006 (`_is_local_or_private_host`),
+  and `_n8n_is_external_host` treated a trailing-dot local host as an external exfil
+  destination. Deliberately NOT applied to the numeric-IP path: `_classify_ip_host`
+  implements WHATWG's IPv4 parser, which allows exactly ONE trailing dot, and that spec
+  rule is what a launcher actually applies — hostname suffix matching is safe to
+  normalize more aggressively because extra dots can only ever *reveal* a known host,
+  never invent one (the public-IP half of MCP-005 already handled `8.8.8.8.` correctly
+  via F8's normalizer). Verified a **strict no-op on the real corpus**: 304 findings,
+  byte-identical before and after, across 5,316 real artifacts (2,688 skills / 97 MCP
+  configs / 1,158 commands / 1,296 subagents / 60 instruction files / 17 `.claude`
+  settings). 27 new tests (`_normalize_host` units incl. IPv6 `[]` + multi-dot + already-
+  canonical, MCP-005 positives for raw/gist/paste/subdomain/uppercase FQDN forms, a
+  trailing-dot vendor-host anti-FP, MCP-006 local-host FQDN anti-FPs incl.
+  `host.docker.internal.` + a still-fires public baseline, `_is_local_or_private_host`
+  units both ways, and an `_n8n_is_oob_sink` behaviour-preservation guard); full suite
+  **2116 green** (was 2089); `ruff check src` + `mypy` clean. _(commit __PENDING__)_
 
 - F10. [ ] **AGENT-MCP-004's service association is satisfied by attacker-controlled
   text** — `_check_mcp_env_exfil` builds `ident` from the server `name` + `command` +
