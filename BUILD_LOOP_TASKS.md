@@ -980,7 +980,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   trailing-dot vendor-host anti-FP, MCP-006 local-host FQDN anti-FPs incl.
   `host.docker.internal.` + a still-fires public baseline, `_is_local_or_private_host`
   units both ways, and an `_n8n_is_oob_sink` behaviour-preservation guard); full suite
-  **2116 green** (was 2089); `ruff check src` + `mypy` clean. _(commit __PENDING__)_
+  **2116 green** (was 2089); `ruff check src` + `mypy` clean. _(commit c5cb104)_
 
 - F10. [ ] **AGENT-MCP-004's service association is satisfied by attacker-controlled
   text** — `_check_mcp_env_exfil` builds `ident` from the server `name` + `command` +
