@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Relicensed from MIT to the PolyForm Strict License 1.0.0 (source-available).**
+  Shellockolm is now source-available, not open source: free for personal, research,
+  and nonprofit use, but commercial/business use requires a paid commercial license
+  (see `COMMERCIAL-LICENSE.md`), and the code may no longer be copied, forked,
+  redistributed, or modified. The source stays fully readable so the tool can still
+  be audited. Updated `LICENSE`, `pyproject.toml`, `mcp.json`, `README.md`, and the
+  `src/licensing.py` docstring; runtime behaviour is unchanged. Website marketing
+  copy still advertises the old MIT/open-core promise and must be updated to match.
+
 ### Fixed
 
 - **JSON `\uXXXX` escapes no longer defeat the entire stealth suite on config artifacts.**

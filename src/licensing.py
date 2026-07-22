@@ -1,10 +1,17 @@
 """
-Shellockolm licensing — open-core.
+Shellockolm licensing — source-available, dual-licensed.
 
-The scanner is free and MIT-licensed; the repository stays fully downloadable and
-the free feature set NEVER requires a key. A license only UNLOCKS extra Pro features
-(advanced rule packs, premium reports, continuous monitoring). Nothing free is
-ever taken away.
+The source is published under the PolyForm Strict License 1.0.0: free for personal,
+research, and nonprofit use, but NOT for commercial/business use, and never
+copyable, forkable, or redistributable. Commercial use requires a paid commercial
+license from HLS iTech (see COMMERCIAL-LICENSE.md), which also provisions the
+license key that UNLOCKS the Pro / Team feature tiers (advanced rule packs, premium
+reports, continuous monitoring).
+
+This module's only job is server-authoritative key resolution — "is a valid
+Pro/Team key present?". It deliberately does NOT decide commercial-use rights or
+price; those live in the commercial agreement and on the licensing server. The core
+feature set runs with no key and makes zero network calls (see Behaviour below).
 
 License resolution order:
   1. env  SHELLOCKOLM_LICENSE          (the key string)

@@ -6,7 +6,7 @@
   "homepage": "https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner",
   "repository": "https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner",
   "author": "hlsitechio",
-  "license": "MIT",
+  "license": "LicenseRef-PolyForm-Strict-1.0.0",
   "server": {
     "command": "shellockolm-mcp",
     "args": [],

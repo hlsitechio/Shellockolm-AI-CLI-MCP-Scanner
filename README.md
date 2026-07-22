@@ -91,7 +91,8 @@ Step 2 prints the finding and exits non-zero (findings gate the build):
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
 [![MCP Server](https://img.shields.io/badge/MCP-AI%20Agent%20Ready-success)](docs/MCP_SETUP.md)
 [![Claude Compatible](https://img.shields.io/badge/Claude-Desktop%20%26%20Code%20CLI-blueviolet)](docs/CLAUDE_CODE_CLI.md)
-[![MIT License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![License: PolyForm Strict](https://img.shields.io/badge/license-PolyForm%20Strict-red)](LICENSE)
+[![Commercial license available](https://img.shields.io/badge/commercial-license%20available-blueviolet)](COMMERCIAL-LICENSE.md)
 [![One-Line Install](https://img.shields.io/badge/install-one%20line-success)](docs/INSTALL.md)
 [![v3.0.0](https://img.shields.io/badge/version-3.0.0-orange)](https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/releases/latest)
 
@@ -833,7 +834,7 @@ The scanner sits **outside the blast radius** of the ecosystem it's auditing.
 - **No Upload** — Your code never leaves your system
 - **No Telemetry** — Zero data collection
 - **No API Keys** — Works completely offline
-- **Open Source** — Full transparency (MIT License)
+- **Source-Available** — Full transparency; audit exactly what it does (PolyForm Strict License; commercial license required for business use)
 
 ---
 
@@ -959,7 +960,17 @@ Found a bug? Have a feature request? Want to add CVE coverage?
 
 ## 📝 License
 
-MIT License — See [LICENSE](LICENSE)
+Shellockolm is **source-available, not open source**.
+
+- **Source code:** [PolyForm Strict License 1.0.0](LICENSE) — free for **personal,
+  hobby, research, and nonprofit** use. You may read and audit the source, but you
+  may **not** copy, redistribute, fork, modify, or use it commercially.
+- **Commercial / business use** requires a paid license — see
+  [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md) or
+  [shellockolm.netlify.app](https://shellockolm.netlify.app).
+
+Transparency for trust; a real license for protection. Copyright © 2025–2026
+HLS iTech (Hubert Larose-Surprenant). All rights reserved.
 
 **📚 More Documentation:**
 - [🤖 Agent Supply-Chain Scanner Guide](docs/AGENT_SCANNER.md)
