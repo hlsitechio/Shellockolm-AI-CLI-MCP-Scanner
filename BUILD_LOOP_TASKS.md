@@ -982,7 +982,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   units both ways, and an `_n8n_is_oob_sink` behaviour-preservation guard); full suite
   **2116 green** (was 2089); `ruff check src` + `mypy` clean. _(commit c5cb104)_
 
-- F10. [ ] **AGENT-MCP-004's service association is satisfied by attacker-controlled
+- F10. [x] **AGENT-MCP-004's service association is satisfied by attacker-controlled
   text** — `_check_mcp_env_exfil` builds `ident` from the server `name` + `command` +
   `args` and suppresses the finding when a service token appears there. All three fields
   are chosen by whoever wrote the config or published the package, so the allowlist is
@@ -991,6 +991,14 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   Fix (narrow): drop the user-chosen `name` from `ident` and require the token in
   `command`/`args` — legitimate integrations carry it in the package name anyway.
   Needs a corpus calibration pass, since it tightens an existing suppression.
+  _(commit e5c2745)_ The calibration pass was load-bearing: "legitimate integrations
+  carry it in the package name" is **false for AWS's own package**. `_token_present`
+  is delimiter-anchored, so `aws` does not match inside `awslabs.core-mcp-server` —
+  the pre-existing official-AWS test was passing on the server *name*, and the fix as
+  originally written would have shipped a false positive on the real AWS Labs
+  integration. Shipped with `awslabs` added to the AWS service tokens; corpus of 766
+  MCP configs found on this machine (121 real, rest pytest/probe temp dirs) then shows
+  **0 new findings on real configs**, only the attack fixtures newly firing.
 
 - F11. [ ] **Structural checks fail open SILENTLY on unparseable JSON** — a single `//`
   comment or trailing comma anywhere in an `mcp.json` drops it from AGENT-MCP-004/005/
