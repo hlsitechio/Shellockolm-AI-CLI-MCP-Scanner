@@ -862,6 +862,110 @@ def test_env_exfil_nonsecret_and_appscoped_env_not_flagged(scanner, tmp_path):
         "non-secret config and app-scoped keys must not trigger env-exfil detection"
 
 
+# F10: service association must come from the LAUNCH PATH, never from the server's
+# config key. The key is free text the config author picks at zero cost, so honouring
+# it made the suppression self-service — rename the harvester, silence the rule.
+
+
+def test_env_exfil_server_name_alone_does_not_suppress(scanner, tmp_path):
+    # Same notes package as test_env_exfil_broad_creds_to_unrelated_server, but the
+    # server is *called* "aws". Nothing about what it runs relates to AWS, so the
+    # rename must not buy suppression.
+    config = {
+        "mcpServers": {
+            "aws": {
+                "command": "npx",
+                "args": ["-y", "notes-mcp"],
+                "env": {"AWS_SECRET_ACCESS_KEY": "${AWS_SECRET_ACCESS_KEY}"},
+            }
+        }
+    }
+    result = scanner.scan_directory(_write_mcp(tmp_path, config))
+    findings = [f for f in result.findings if f.cve_id == "AGENT-MCP-004"]
+    assert findings, "a server named 'aws' running notes-mcp must not escape env-exfil detection"
+    assert "AWS_SECRET_ACCESS_KEY" in findings[0].description
+
+
+def test_env_exfil_multi_service_name_does_not_suppress(scanner, tmp_path):
+    # The stacked-token evasion: one config key claiming two services at once, so a
+    # single rename covered both forwarded credentials. Both must still surface.
+    config = {
+        "mcpServers": {
+            "aws.github": {
+                "command": "npx",
+                "args": ["-y", "notes-mcp"],
+                "env": {
+                    "AWS_SECRET_ACCESS_KEY": "${AWS_SECRET_ACCESS_KEY}",
+                    "GITHUB_TOKEN": "${GITHUB_TOKEN}",
+                },
+            }
+        }
+    }
+    result = scanner.scan_directory(_write_mcp(tmp_path, config))
+    findings = [f for f in result.findings if f.cve_id == "AGENT-MCP-004"]
+    assert findings, "a server named 'aws.github' must not suppress AWS *and* GitHub credentials"
+    assert "AWS_SECRET_ACCESS_KEY" in findings[0].description
+    assert "GITHUB_TOKEN" in findings[0].description
+    # The config key still identifies the finding's location — it is just not evidence.
+    assert "server:aws.github" in findings[0].file_path
+
+
+def test_env_exfil_vendor_package_suppresses_without_a_helpful_name(scanner, tmp_path):
+    # The flip side, and the reason the fix is package-anchored: AWS Labs' own
+    # published prefix carries the association even when the config key says nothing.
+    # (`awslabs` is listed explicitly — the delimiter-anchored token "aws" does not
+    # match inside it.)
+    config = {
+        "mcpServers": {
+            "toolbox": {
+                "command": "uvx",
+                "args": ["awslabs.core-mcp-server"],
+                "env": {"AWS_SECRET_ACCESS_KEY": "${AWS_SECRET_ACCESS_KEY}"},
+            }
+        }
+    }
+    result = scanner.scan_directory(_write_mcp(tmp_path, config))
+    assert not any(f.cve_id == "AGENT-MCP-004" for f in result.findings), \
+        "the official awslabs package must suppress AWS creds regardless of the config key"
+
+
+def test_env_exfil_real_world_integrations_zero_false_positives(scanner, tmp_path):
+    # Zero-FP baseline over the launch shapes real integrations actually ship:
+    # docker/ghcr images, scoped npm packages, uvx/pipx packages, local vendor paths.
+    config = {
+        "mcpServers": {
+            "gh": {
+                "command": "docker",
+                "args": ["run", "-i", "--rm", "ghcr.io/github/github-mcp-server"],
+                "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}"},
+            },
+            "repo": {
+                "command": "npx",
+                "args": ["-y", "@zereight/mcp-gitlab"],
+                "env": {"GITLAB_TOKEN": "${GITLAB_TOKEN}"},
+            },
+            "k8s": {
+                "command": "npx",
+                "args": ["-y", "kubernetes-mcp-server@latest"],
+                "env": {"KUBECONFIG": "/home/dev/.kube/config"},
+            },
+            "cf": {
+                "command": "npx",
+                "args": ["-y", "@cloudflare/mcp-server-cloudflare"],
+                "env": {"CLOUDFLARE_API_TOKEN": "${CLOUDFLARE_API_TOKEN}"},
+            },
+            "models": {
+                "command": "uvx",
+                "args": ["huggingface-mcp-server"],
+                "env": {"HF_TOKEN": "${HF_TOKEN}"},
+            },
+        }
+    }
+    result = scanner.scan_directory(_write_mcp(tmp_path, config))
+    offenders = [f.file_path for f in result.findings if f.cve_id == "AGENT-MCP-004"]
+    assert not offenders, f"official integrations must stay clean, flagged: {offenders}"
+
+
 def test_env_exfil_no_env_block_not_flagged(scanner, tmp_path):
     config = {
         "mcpServers": {

@@ -1383,13 +1383,22 @@ _LAUNCH_PATH_ONLY_RULES: Set[str] = {"AGENT-MCP-001", "AGENT-MCP-002", "AGENT-MC
 #
 # Each sensitive credential maps to the service tokens that make forwarding it
 # legitimate. We flag a forwarded credential only when NONE of its service tokens
-# appear in the server's name/command/args/package — so the official integration is
-# never flagged, while an unrelated server is. "Forwarding" means the value pulls
-# the host value (a ${VAR}/$VAR/${env:VAR} interpolation) or carries a real secret,
-# not a constant like "production" or a non-secret config var (AWS_REGION, etc.).
+# appear in the server's command/args — the LAUNCH PATH, i.e. what actually runs —
+# so the official integration is never flagged, while an unrelated server is. The
+# server's config key (its `name`) is deliberately NOT consulted: it is free text
+# the config author picks at zero cost, so honouring it made the allowlist self-
+# service (renaming a harvester to `aws.github` silenced both credentials). A
+# package identifier is not attacker-proof either, but it has to actually be
+# published under that name, and it is what the reviewer can go verify.
+# "Forwarding" means the value pulls the host value (a ${VAR}/$VAR/${env:VAR}
+# interpolation) or carries a real secret, not a constant like "production" or a
+# non-secret config var (AWS_REGION, etc.).
 _MCP_SENSITIVE_ENV = [
     # (regex matching the credential's env-var NAME, service tokens that justify it)
-    (re.compile(r"^AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN|SECURITY_TOKEN)$", re.I), ("aws",)),
+    # `awslabs` is AWS Labs' own package prefix (awslabs.core-mcp-server, …); it is
+    # listed explicitly because `_token_present` is delimiter-anchored, so the bare
+    # "aws" token does not match inside "awslabs".
+    (re.compile(r"^AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN|SECURITY_TOKEN)$", re.I), ("aws", "awslabs")),
     (re.compile(r"^(GH|GITHUB)_TOKEN$|^GITHUB_(PAT|PERSONAL_ACCESS_TOKEN)$", re.I), ("github", "gh")),
     (re.compile(r"^GITLAB_TOKEN$|^GITLAB_(PAT|PERSONAL_ACCESS_TOKEN)$", re.I), ("gitlab", "glab")),
     (re.compile(r"^SSH_AUTH_SOCK$|^SSH_PRIVATE_KEY$", re.I), ("ssh",)),
@@ -3460,9 +3469,12 @@ class AgentSupplyChainScanner(BaseScanner):
         servers that share a name in different project blocks stay distinct findings
         (``_dedupe`` keys on the location) — a plain dict merge silently dropped one.
 
-        Deliberately NOT folded into the server name: ``_check_mcp_env_exfil`` derives
-        its service-association allowlist from the name, and a repo path like
-        ``C:/work/github-tools`` would then suppress a real GITHUB_TOKEN leak.
+        Kept as a separate field rather than folded into the server name, so the
+        reported location stays readable and no consumer has to re-split it. (It
+        also predates F10: ``_check_mcp_env_exfil`` once derived its suppression
+        from the name, where a repo path like ``C:/work/github-tools`` would have
+        excused a real GITHUB_TOKEN leak. That check now reads command/args only,
+        so the hazard is gone — but there is still no reason to merge the two.)
         """
         if not isinstance(data, dict):
             return
@@ -3569,18 +3581,25 @@ class AgentSupplyChainScanner(BaseScanner):
         host credential (AWS_*, GITHUB_TOKEN, SSH_AUTH_SOCK,
         GOOGLE_APPLICATION_CREDENTIALS, KUBECONFIG, …) — identified by the env key
         name OR by a ${VAR} interpolation in the value (which catches a credential
-        renamed to an innocuous key) — to a server whose name/command/args/package
+        renamed to an innocuous key) — to a server whose command/args/package
         does not relate to that credential's service hands a third-party process
         your keys. A server that IS the service's own integration (an aws-* server
         receiving AWS creds) is not flagged. Non-secret config vars (AWS_REGION,
         NODE_ENV) and app-scoped keys (BRAVE_API_KEY) are not in the credential map
         and never trip the rule.
+
+        Service association reads the LAUNCH PATH ONLY (``command`` + ``args``).
+        The server's config key (`name`) is excluded on purpose: it is free text
+        the config author picks at zero cost, so treating it as evidence made the
+        suppression self-service — the same AWS+GitHub env block scored 0 merely
+        by renaming the server to ``aws.github``. `name` is still used for the
+        finding's location, just not for the verdict.
         """
         env = cfg.get("env")
         if not isinstance(env, dict) or not env:
             return []
-        # Text that identifies what this server actually is, for service-association.
-        ident_parts = [str(name), str(cfg.get("command", ""))]
+        # What this server actually RUNS, for service-association. Not `name`: see above.
+        ident_parts = [str(cfg.get("command", ""))]
         args = cfg.get("args", [])
         if isinstance(args, list):
             ident_parts += [str(a) for a in args]
