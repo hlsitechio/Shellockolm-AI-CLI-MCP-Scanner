@@ -1009,7 +1009,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   settings.json fails closed on a parse error). But the reporting defect stands on its
   own regardless of exploitability: an **unscanned** artifact currently renders as
   **clean**. Fix: emit a warning when a routed artifact fails to parse. _(commit
-  ee5abd8)_ Scope grew twice on contact with the code, both times because the original
+  cb1c1da)_ Scope grew twice on contact with the code, both times because the original
   one-line fix would have been *reported* but not *seen*:
   (1) the gap is not MCP-only — `settings.json` (AGENT-HOOK-001/002/003, AGENT-PERM-001)
   and n8n exports (AGENT-N8N-002) have no raw-text fallback **at all**, so they lose
