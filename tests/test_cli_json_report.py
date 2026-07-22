@@ -104,6 +104,11 @@ def test_schema_top_level_keys_and_version():
         "total_findings", "by_severity", "items_scanned", "scanners_run",
         "findings_suppressed", "findings_below_confidence",
         "findings_diff_filtered", "findings_baselined", "findings_config_ignored",
+        # Coverage, not filtering: `partial` is true when some artifact could NOT be
+        # fully examined (an unparseable JSON config, a truncated input, a time-budget
+        # cutoff), with the detail in `warnings`. Without it a pipeline reads an
+        # UNSCANNED artifact as a clean one (F11). Additive within schema 1.0.
+        "partial", "warnings",
     }
 
 

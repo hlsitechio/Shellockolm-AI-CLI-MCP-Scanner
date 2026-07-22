@@ -1000,7 +1000,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   MCP configs found on this machine (121 real, rest pytest/probe temp dirs) then shows
   **0 new findings on real configs**, only the attack fixtures newly firing.
 
-- F11. [ ] **Structural checks fail open SILENTLY on unparseable JSON** — a single `//`
+- F11. [x] **Structural checks fail open SILENTLY on unparseable JSON** — a single `//`
   comment or trailing comma anywhere in an `mcp.json` drops it from AGENT-MCP-004/005/
   006/007 to **0 findings**, with `result.warnings == []` and `result.errors == []`. The
   four structural MCP rules have no regex twin, so the raw-text fallback recovers
@@ -1008,7 +1008,39 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   client accepting a JSON superset, which the audit could NOT confirm (Claude Code's
   settings.json fails closed on a parse error). But the reporting defect stands on its
   own regardless of exploitability: an **unscanned** artifact currently renders as
-  **clean**. Fix: emit a warning when a routed artifact fails to parse.
+  **clean**. Fix: emit a warning when a routed artifact fails to parse. _(commit
+  ee5abd8)_ Scope grew twice on contact with the code, both times because the original
+  one-line fix would have been *reported* but not *seen*:
+  (1) the gap is not MCP-only — `settings.json` (AGENT-HOOK-001/002/003, AGENT-PERM-001)
+  and n8n exports (AGENT-N8N-002) have no raw-text fallback **at all**, so they lose
+  more than MCP does; and there is a **worse case than the one filed** — a config under
+  a filename no name rule knows (`.gemini/settings.json`, `tools/registry.json`) is
+  claimed by the CONTENT route, which classifies *by parsing*, so an unparseable one
+  loses its route as well as its checks and reaches **no scan path whatsoever**. That
+  case is warned separately (`NOT routed`), including the `.claude/settings.json` hybrid
+  that keeps its name-routed settings scan and silently loses only its MCP half.
+  (2) `ScanResult.warnings` reached the MCP payload but was **dropped entirely by the
+  CLI** — so the pre-existing truncation and time-budget warnings were invisible to
+  every `shellockolm scan` user too. Now surfaced in the human output and added to
+  `scan --json` as `summary.partial` / `summary.warnings` (additive within schema 1.0,
+  documented in the README, contract test updated). The verdict panel itself is
+  downgraded from green **"Status: SECURE"** to **"CLEAN, COVERAGE INCOMPLETE"** when
+  anything went unscanned — a caveat printed under an unqualified "your projects appear
+  secure" is not a correction, and the panel *is* the render F11 is about.
+  Emission sits **inside** the routing branches rather than in a parallel condition, so
+  the warning and the route cannot disagree about what ran, and a single
+  `_json_parse_error()` primitive answers "would the structural checks have run?" for
+  both the report and (by construction) the checks. Warnings are capped at 50 like the
+  error list. Verified **report-only on the real corpus**: 352 findings, byte-identical
+  before and after, across 5,417 real artifacts (2,766 skills / 108 MCP configs / 1,160
+  commands / 1,296 subagents / 64 instruction files / 21 `.claude` settings / 2 n8n
+  workflows), with **0 warnings** — and that zero is non-vacuous: an independent audit
+  of the same corpus found 163 routed/near-routed JSON agent artifacts and `json.loads`
+  rejects **0** of them, so there was genuinely nothing to warn about. The first cut of
+  the unrouted check *did* produce a false positive (`tests/fixtures/manifest.json`,
+  which parses fine but declares no servers) because it keyed on the server-key text
+  without gating on the parse actually failing — caught by the fixture-corpus test. 35
+  new tests; full suite **2155 green** (was 2116); `ruff check src` + `mypy` clean.
 
 - F12. [ ] **AGENT-OBF-002 misses every line-wrapped base64 blob** — `_B64` requires 160
   *contiguous* base64 chars, but every standard emitter wraps: `base64(1)` at 76 cols,
@@ -1026,6 +1058,18 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   and `{"httpUrl": "http://…"}` scores **0** where `url` fires AGENT-MCP-006 (`httpUrl`
   is Gemini's streamable-HTTP transport field). Fix: add `"trust"` to
   `_MCP_AUTOAPPROVE_FIELDS` and `"httpurl"` to `_MCP_URL_FIELDS`.
+
+- F14. [ ] **`scan_text` with no filename hint demotes an unparseable config to prose** —
+  `_classify_text_artifact`'s content sniff classifies BY parsing, so a caller passing an
+  MCP config body with `artifact_type="auto"` and no `filename` gets `"skill"` the moment
+  the JSON does not parse (via the documented "default to the broadest rule set"
+  fallback). The prose rules then run and the MCP rules do not. Milder than F11 — the
+  text IS scanned, just by the wrong rule set — and F11's warning deliberately does not
+  cover it, because the skill route has no structural checks to lose and warning there
+  would fire on every prose artifact. Found while fixing F11; the same
+  "classification-by-parse dies with the parse" root cause. Fix: when the sniff fails to
+  parse but the text carries an MCP / n8n / settings key, classify by that key so F11's
+  warning can report the lost structural half, instead of silently demoting to prose.
 
 ---
 

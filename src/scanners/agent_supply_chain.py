@@ -2781,7 +2781,21 @@ class AgentSupplyChainScanner(BaseScanner):
     # share full of locked or long-path files) can't balloon the result. The scan
     # always continues regardless; this only bounds the reported list.
     MAX_RECORDED_ERRORS = 50
+    # Same idea for the coverage-warning channel: a tree carrying hundreds of
+    # unparseable configs must announce the gap without burying the findings.
+    MAX_RECORDED_WARNINGS = 50
     _B64 = re.compile(r"[A-Za-z0-9+/]{160,}={0,2}")
+
+    # Per-artifact-kind: the structural checks that need a successful ``json.loads``
+    # and therefore go silent — returning nothing, not erroring — on a config the
+    # parser rejects. Drives the coverage warning emitted by
+    # ``_note_unparseable_json``; keyed by the ``artifact`` label the findings use.
+    _STRUCTURAL_JSON_RULES = {
+        "mcp-config": ("AGENT-MCP-004", "AGENT-MCP-005", "AGENT-MCP-006", "AGENT-MCP-007"),
+        "claude-settings": ("AGENT-HOOK-001", "AGENT-HOOK-002", "AGENT-HOOK-003",
+                            "AGENT-PERM-001"),
+        "n8n-workflow": ("AGENT-N8N-002",),
+    }
 
     # Artifact kinds scan_text() can scan in-memory. "auto" infers the kind from a
     # filename hint, then from the content shape (JSON → mcp/n8n; otherwise prose →
@@ -2885,15 +2899,39 @@ class AgentSupplyChainScanner(BaseScanner):
             # MCP servers, is an MCP config whatever the client chose to call it
             # (`.gemini/settings.json` today). Runs only on the JSON left over after the
             # name routes, so a skill/instruction/command file is never re-classified.
+            names_mcp_servers = is_json and any(f'"{k}"' in text for k in _MCP_SERVER_KEYS)
             if is_json and not (is_mcp or is_skill or is_instr or is_command or is_subagent):
                 is_mcp = self._json_declares_mcp_servers(text)
 
+            # Coverage bookkeeping for the warnings below (F11). `parse_reason` is the
+            # single source of truth for "would the structural checks have run?" — the
+            # same question every one of them answers privately with its own
+            # `json.loads`, asked once here so the report and the checks cannot drift.
+            parse_reason = self._json_parse_error(text) if is_json else None
+            # The MCP route is lost OUTRIGHT when a config that names servers does not
+            # parse and no filename claimed it: the content route classifies BY
+            # parsing, so the route dies with the parse. Two shapes reach here — a
+            # `.gemini/settings.json`, which is then scanned by nothing at all, and a
+            # `.claude/settings.json` that also declares servers, which keeps its
+            # settings scan and silently loses only the MCP half. Flagged, never
+            # force-routed: without a parse the server declaration is unconfirmed.
+            lost_mcp_route = parse_reason is not None and names_mcp_servers and not is_mcp
+
+            # Every structural JSON check opens with a `json.loads` and returns [] on
+            # failure, so a config the parser rejects reports zero findings, zero
+            # warnings and zero errors — indistinguishable from a scanned-and-clean
+            # one. Each branch below announces the checks its route was denied, so an
+            # UNSCANNED artifact can never render as CLEAN (F11). The emission sits
+            # INSIDE the routing branches rather than in a parallel condition, so the
+            # warning and the route can never disagree about what actually ran.
             if is_skill:
                 skills += 1
                 result.findings.extend(self._scan_skill(fp, text, quick_mode))
             elif is_mcp:
                 mcps += 1
                 mcp_findings = self._scan_mcp(fp, text)
+                if parse_reason is not None:
+                    self._note_unparseable_json(result, fp, "mcp-config", parse_reason)
                 if is_settings:
                     # A `.claude/settings.json` that ALSO declares servers is both
                     # artifacts at once. Run both scans rather than letting the earlier
@@ -2901,6 +2939,10 @@ class AgentSupplyChainScanner(BaseScanner):
                     # hook/auto-exec coverage.
                     settings += 1
                     mcp_findings = self._dedupe(mcp_findings + self._scan_settings(fp, text))
+                    if parse_reason is not None:
+                        # Both scans lost their structural half; report both losses.
+                        self._note_unparseable_json(result, fp, "claude-settings",
+                                                    parse_reason)
                 result.findings.extend(mcp_findings)
             elif is_instr:
                 instrs += 1
@@ -2914,9 +2956,25 @@ class AgentSupplyChainScanner(BaseScanner):
             elif is_settings:
                 settings += 1
                 result.findings.extend(self._scan_settings(fp, text))
+                if parse_reason is not None:
+                    self._note_unparseable_json(result, fp, "claude-settings",
+                                                parse_reason)
+                if lost_mcp_route and parse_reason is not None:
+                    # It declares servers too, so it also lost the MCP route the
+                    # content classifier would have given it.
+                    self._note_unparseable_json(result, fp, "mcp-config", parse_reason,
+                                                routed=False)
             elif is_json and '"nodes"' in text and '"connections"' in text:
                 workflows += 1
                 result.findings.extend(self._scan_n8n(fp, text))
+                if parse_reason is not None:
+                    self._note_unparseable_json(result, fp, "n8n-workflow", parse_reason)
+            elif lost_mcp_route and parse_reason is not None:
+                # The sharpest case: the file reached NO scan path at all, because the
+                # content route that would have classified it is itself the parse that
+                # failed. Not counted in `mcps` — nothing was scanned — only reported.
+                self._note_unparseable_json(result, fp, "mcp-config", parse_reason,
+                                            routed=False)
 
         if timed_out:
             result.warnings.append(
@@ -2986,6 +3044,74 @@ class AgentSupplyChainScanner(BaseScanner):
         if len(result.errors) >= cls.MAX_RECORDED_ERRORS:
             return
         result.errors.append(f"Could not read {fp}: {type(exc).__name__}: {exc}")
+
+    @staticmethod
+    def _json_parse_error(text: str) -> Optional[str]:
+        """Return a short human reason when ``text`` is not parseable JSON, else None.
+
+        The single place the scan asks "would the structural checks have run?", so the
+        routing layer's coverage warning and the checks' own ``json.loads`` can never
+        disagree about whether a file parsed.
+        """
+        try:
+            json.loads(text)
+        except json.JSONDecodeError as exc:
+            return f"line {exc.lineno} column {exc.colno}: {exc.msg}"
+        except (ValueError, TypeError) as exc:
+            return f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+        return None
+
+    @classmethod
+    def _note_unparseable_json(cls, result: ScanResult, fp: Path, artifact: str,
+                               reason: str, routed: bool = True) -> None:
+        """Record that a JSON agent artifact could not be parsed, so its structural
+        checks did not run — the artifact was NOT cleared, it was never examined.
+
+        Every structural MCP/settings/n8n check opens with ``json.loads`` and returns
+        an empty list on failure. That is the correct behaviour for a check (a broken
+        file is not evidence of an attack), but it made the *report* wrong: a config
+        the parser rejected produced zero findings, zero warnings and zero errors, and
+        so rendered exactly like a config that had been scanned and found clean. Some
+        clients accept a JSON superset (comments, trailing commas) that ``json.loads``
+        does not, which turns the gap into an evasion primitive; but the reporting
+        defect stands on its own even where it isn't weaponizable — an *unscanned*
+        artifact must never render as *clean*.
+
+        ``routed=False`` marks the sharper case: the file never reached a scan path at
+        all, because the content route that would have classified it (parsing the JSON
+        to look for server declarations) is itself what failed.
+        """
+        if len(result.warnings) >= cls.MAX_RECORDED_WARNINGS:
+            return
+        rules = cls._STRUCTURAL_JSON_RULES.get(artifact, ())
+        rule_note = f" ({', '.join(rules)})" if rules else ""
+        scope = (
+            f"it was NOT routed to the {artifact} scan at all"
+            if not routed else
+            f"the structural {artifact} checks{rule_note} could not run"
+        )
+        result.warnings.append(
+            f"{fp}: not valid JSON ({reason}) — {scope}, so coverage of this file is "
+            "PARTIAL and a clean result for it means UNSCANNED, not safe. Note that "
+            "some agent clients accept comments / trailing commas that strict JSON "
+            "rejects, so a config in that superset runs for them but is invisible "
+            "here. Fix the syntax and re-scan."
+        )
+
+    def _note_text_parse_gap(self, result: ScanResult, fp: Path, artifact: str,
+                             text: str, truncated: bool = False) -> None:
+        """:meth:`scan_text`'s half of the coverage warning — same gap, in-memory.
+
+        Skipped when the input was truncated at ``MAX_TEXT_CHARS``: cutting a large
+        config mid-token makes a parse failure a certainty and an artifact of the cut,
+        and that path already records its own PARTIAL warning. Reporting both would
+        blame the file for the scanner's own bound.
+        """
+        if truncated:
+            return
+        reason = self._json_parse_error(text)
+        if reason is not None:
+            self._note_unparseable_json(result, fp, artifact, reason)
 
     @staticmethod
     def _apply_confidence_filter(findings: List[ScanFinding], min_confidence: str) -> int:
@@ -3135,12 +3261,15 @@ class AgentSupplyChainScanner(BaseScanner):
             elif kind == "mcp":
                 result.findings.extend(self._scan_mcp(fp, text))
                 counts["mcp_configs_scanned"] = 1
+                self._note_text_parse_gap(result, fp, "mcp-config", text, truncated)
             elif kind == "n8n":
                 result.findings.extend(self._scan_n8n(fp, text))
                 counts["n8n_workflows_scanned"] = 1
+                self._note_text_parse_gap(result, fp, "n8n-workflow", text, truncated)
             elif kind == "settings":
                 result.findings.extend(self._scan_settings(fp, text))
                 counts["claude_settings_scanned"] = 1
+                self._note_text_parse_gap(result, fp, "claude-settings", text, truncated)
         except Exception as exc:  # defensive: a rule bug must never crash the tool
             self._record_read_error(result, fp, exc)
 

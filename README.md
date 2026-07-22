@@ -411,6 +411,13 @@ pipes straight into `jq` or a CI step. The exit code follows the contract below 
 exits `1`). The schema is a stable contract: within a `schema_version` major, fields are only **added**,
 never renamed or removed.
 
+**Coverage is reported, not assumed.** A JSON agent config that does not parse (a `//` comment or a
+trailing comma in an `mcp.json` / `settings.json` / n8n export) cannot be read by the structural
+checks — so instead of scoring zero and looking clean, it sets `summary.partial` to `true` and lands
+in `summary.warnings` naming the checks that could not run. The human output prints the same thing as
+a **⚠️ PARTIAL COVERAGE** block under the verdict. Gate on it in CI (`jq -e '.summary.partial == false'`)
+if "we scanned everything" is part of what you need to prove — *unscanned* is not *clean*.
+
 **Exit codes (`scan`).** Documented and stable, so CI can branch on them:
 
 | Code | Meaning |
@@ -550,7 +557,9 @@ hook's `entry`, so it survives an `args:` override.
     "findings_below_confidence": 0,    // hidden by --min-confidence
     "findings_diff_filtered": 0,       // dropped because the file is outside --diff scope
     "findings_baselined": 0,           // hidden because already present in --baseline
-    "findings_config_ignored": 0       // hidden by a config-file `ignore` rule/glob
+    "findings_config_ignored": 0,      // hidden by a config-file `ignore` rule/glob
+    "partial": false,                  // true when some artifact could NOT be fully scanned
+    "warnings": []                     // [{ "scanner": "...", "message": "..." }] — the coverage gaps
   },
   "findings": [                        // sorted CRITICAL → INFO
     {

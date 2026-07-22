@@ -766,6 +766,15 @@ def build_json_report(
         for e in r.errors
     ]
 
+    # Coverage warnings are distinct from errors: the scan ran, but part of the tree
+    # was NOT examined (unparseable JSON config, truncated input, time budget hit).
+    # Without them a CI consumer reads an unscanned artifact as a clean one.
+    warnings = [
+        {"scanner": r.scanner_name, "message": str(w)}
+        for r in results
+        for w in getattr(r, "warnings", [])
+    ]
+
     _scan_stats = aggregate_scan_stats(results)
 
     return {
@@ -806,6 +815,12 @@ def build_json_report(
             "findings_config_ignored": sum(
                 r.stats.get("findings_config_ignored", 0) for r in results
             ),
+            # Coverage gaps: artifacts a scanner could not fully examine (an
+            # unparseable JSON config, a truncated input, a time-budget cutoff).
+            # `partial` is the one boolean a CI job needs to tell "clean" apart
+            # from "not actually looked at". Additive to schema 1.0.
+            "partial": bool(warnings),
+            "warnings": warnings,
         },
         "findings": findings_json,
         "errors": errors,
@@ -1483,8 +1498,29 @@ def scan(
                     "file_path": finding.file_path,
                     "remediation": finding.remediation,
                 })
-    else:
-        if not quiet:
+    # Coverage gaps: artifacts a scanner could NOT fully examine (an unparseable JSON
+    # config, a truncated input, a time-budget cutoff). Collected before the verdict is
+    # rendered because it changes the verdict: "no vulnerabilities detected" is only
+    # worth as much as the set of files the scan actually reached, and an UNSCANNED
+    # artifact must never be presented as a clean one (F11).
+    scan_warnings = [
+        (r.scanner_name, str(w))
+        for r in results
+        for w in getattr(r, "warnings", [])
+    ]
+
+    if not all_findings:
+        if not quiet and scan_warnings:
+            console.print(Panel(
+                "[warning]⚠️  No vulnerabilities detected — but the scan did not "
+                "reach every artifact.[/warning]\n\n"
+                f"🔍 {len(scan_warnings)} artifact(s) could not be fully examined "
+                "(details below).\n"
+                "[subtitle]Absence of evidence is not evidence of absence.[/subtitle]",
+                title="🔎 Status: CLEAN, COVERAGE INCOMPLETE",
+                border_style="yellow",
+            ))
+        elif not quiet:
             console.print(Panel(
                 "[success]✅ No vulnerabilities detected![/success]\n\n"
                 "🔍 Investigation complete. Your projects appear secure.\n"
@@ -1492,6 +1528,19 @@ def scan(
                 title="🎉 Status: SECURE",
                 border_style="bright_green",
             ))
+
+    # The detail behind the caveat, printed right after the verdict and before the
+    # quieter dimmed notices.
+    if scan_warnings and not quiet:
+        console.print()
+        console.print(
+            f"[warning]⚠️  PARTIAL COVERAGE — {len(scan_warnings)} artifact(s) were "
+            f"not fully scanned:[/warning]"
+        )
+        for scanner_name, msg in scan_warnings[:10]:
+            console.print(f"  [warning]•[/warning] [{scanner_name}] {msg}")
+        if len(scan_warnings) > 10:
+            console.print(f"  [dim]... and {len(scan_warnings) - 10} more[/dim]")
 
     # Surface allowlisted findings so the suppression is never silent.
     total_suppressed = sum(r.stats.get("findings_suppressed", 0) for r in results)
