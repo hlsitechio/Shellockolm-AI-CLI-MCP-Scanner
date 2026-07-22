@@ -1042,7 +1042,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   without gating on the parse actually failing — caught by the fixture-corpus test. 35
   new tests; full suite **2155 green** (was 2116); `ruff check src` + `mypy` clean.
 
-- F12. [ ] **AGENT-OBF-002 misses every line-wrapped base64 blob** — `_B64` requires 160
+- F12. [x] **AGENT-OBF-002 misses every line-wrapped base64 blob** — `_B64` requires 160
   *contiguous* base64 chars, but every standard emitter wraps: `base64(1)` at 76 cols,
   `openssl` at 64. Same bytes, one line → fires; wrapped → **0** (boundary pinned
   exactly at wrap=159 vs 160). So the rule can never fire on canonical `base64` output.
@@ -1051,6 +1051,28 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   is present — the gap is the blob-alone case (a payload staged for later decoding),
   which is exactly OBF-002's reason to exist. Fix needs care: allowing intervening
   whitespace risks matching prose, so it requires a real-corpus FP pass.
+  **Fixed** by matching the wrap *shape* rather than "base64 chars with whitespace
+  between them": ≥2 adjacent lines that are nothing but base64 and share one width ≥40,
+  optionally closed by a shorter remainder, ≥160 alphabet chars in total. Prose has
+  spaces (so it never reaches 40 unbroken alphabet chars) and does not hold a constant
+  width across adjacent lines. The 160-char budget is now counted across the wrap, so
+  the verdict no longer depends on the emitter's column — verified at 159/160 for
+  contiguous, 64, and 76. Alphabet widened to base64url, which forced a payload-shape
+  guard (≥16 distinct chars, letters *and* digits, not pure hex), because the alphabet
+  overlaps things that are not payloads: hex digests are a strict subset of it and a
+  markdown `-----` rule becomes a 160-char "match". The guard is load-bearing, not
+  decorative — on the real corpus it vetoed exactly 2 contiguous runs, both long `---`
+  rules, that the widened alphabet would otherwise have turned into false positives.
+  Verified **report-only on the real corpus**: 306 findings, byte-identical before and
+  after, across 5,332 real artifacts (2,727 skills / 1,303 subagents / 1,132 commands /
+  95 MCP configs / 60 instruction files / 14 settings), with 0 AGENT-OBF-002 either way
+  — confirming the rule never fired in the field. That zero is non-vacuous: the same
+  9,047 markdown files hold 232 base64-only lines ≥40 wide but only 1 equal-width
+  adjacent streak and 0 streaks reaching the budget, so real prose genuinely does not
+  wrap into fixed-width base64. 36 new tests + 2 fixtures (a 76-column wrapped
+  second-stage installer; a benign `SHA256SUMS` skill whose digest list is uniform-width,
+  in-alphabet, and over budget); full suite **2198 green** (was 2155); `ruff` clean on
+  the changed files. _(commit PENDING)_
 
 - F13. [ ] **Two documented Gemini CLI fields missing from the field sets** —
   `{"trust": true}` scores **0** where the equivalent `alwaysAllow`/`autoApprove` fire

@@ -3,6 +3,14 @@
   "description": "Detection-test corpus for the Shellockolm agent supply-chain scanner. Each entry is a real-shaped agent artifact (skill, MCP config, n8n export, instruction file, slash command, or Claude Code settings) labelled malicious or benign. Malicious fixtures declare the signature rule IDs they MUST trip (a subset check, so broader detection is fine); benign fixtures must produce zero findings at any tier. Consumed by tests/test_fixture_corpus.py.",
   "fixtures": [
     {
+      "path": "skills/malicious/wrapped-base64-payload.skill.md",
+      "artifact_type": "skill",
+      "classification": "malicious",
+      "attack_class": "obfuscation",
+      "expected_rules": ["AGENT-OBF-002"],
+      "description": "A build-helper skill carrying a base64-encoded second-stage installer, line-wrapped at 76 columns the way base64(1) emits it. Pins the wrapped shape: a contiguous-only match scores this 0."
+    },
+    {
       "path": "skills/malicious/tool-poisoning.skill.md",
       "artifact_type": "skill",
       "classification": "malicious",
@@ -119,6 +127,13 @@
       "classification": "benign",
       "expected_rules": [],
       "description": "Exercises the official skill progressive-disclosure pattern ('read forms.md and follow its instructions', 'see ./docs/setup.md') that AGENT-PI-016 calibration deliberately treats as benign. Zero-FP baseline."
+    },
+    {
+      "path": "skills/benign/checksum-manifest.skill.md",
+      "artifact_type": "skill",
+      "classification": "benign",
+      "expected_rules": [],
+      "description": "A checksum-verification skill listing five SHA-256 digests one per line, plus a long horizontal rule. Both shapes live inside the base64 alphabet and clear the wrapped-blob length budget, and neither is an encoded payload. Zero-FP baseline for AGENT-OBF-002."
     },
     {
       "path": "mcp/benign/github-official.mcp.json",

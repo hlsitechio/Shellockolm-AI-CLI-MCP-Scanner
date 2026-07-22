@@ -426,7 +426,7 @@ A long base64-encoded blob is embedded in the artifact; these can conceal payloa
 **Example attack**
 
 ```text
-A multi-kilobyte base64 blob is embedded in the artifact with no explanation (e.g. `data:application/octet-stream;base64,AAAABBBB...` of several KB), concealing a payload or data the reviewer can't read.
+A multi-kilobyte base64 blob is embedded in the artifact with no explanation (e.g. `data:application/octet-stream;base64,AAAABBBB...` of several KB), concealing a payload or data the reviewer can't read. The blob counts whether it sits on one line or arrives line-wrapped the way `base64` (76 columns) and `openssl base64` (64) emit it.
 ```
 
 **Remediation:** Decode and review the blob; remove it if it isn't a legitimate asset.
