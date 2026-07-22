@@ -1072,7 +1072,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   wrap into fixed-width base64. 36 new tests + 2 fixtures (a 76-column wrapped
   second-stage installer; a benign `SHA256SUMS` skill whose digest list is uniform-width,
   in-alphabet, and over budget); full suite **2198 green** (was 2155); `ruff` clean on
-  the changed files. _(commit PENDING)_
+  the changed files. _(commit cc6ad8e)_
 
 - F13. [ ] **Two documented Gemini CLI fields missing from the field sets** —
   `{"trust": true}` scores **0** where the equivalent `alwaysAllow`/`autoApprove` fire
