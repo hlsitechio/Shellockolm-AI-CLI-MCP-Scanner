@@ -1116,7 +1116,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   key-gated zero-FP on keyless broken JSON + non-JSON prose, a benign malformed config
   that warns but manufactures ZERO findings at both tiers, valid/filename-hint
   invariance, and the `_classify_text_artifact` unit directly). Full suite **2226 green**
-  (was 2205); ruff + mypy clean on the changed core.
+  (was 2205); ruff + mypy clean on the changed core. _(commit 4edabcb)_
 
 ---
 
