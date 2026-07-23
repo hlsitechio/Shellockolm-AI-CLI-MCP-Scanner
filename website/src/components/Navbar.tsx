@@ -15,6 +15,7 @@ const Navbar = () => {
   }, []);
 
   const navLinks = [
+    { label: "Scan a Package", href: "#scan" },
     { label: "Demo", href: "#demo" },
     { label: "Features", href: "#features" },
     { label: "Install", href: "#install" },

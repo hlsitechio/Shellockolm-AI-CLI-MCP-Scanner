@@ -1118,6 +1118,36 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   invariance, and the `_classify_text_artifact` unit directly). Full suite **2226 green**
   (was 2205); ruff + mypy clean on the changed core. _(commit 4edabcb)_
 
+- F15. [x] **The site's own source dir was gitignored — the marketing site could not
+  build from a clone** — `.gitignore` began as the standard *Python* template, whose
+  `lib/` rule is **unanchored** and therefore matches at any depth. It silently swallowed
+  `website/src/lib/`, the site's own source directory, hiding `scanEngine.ts` (35 KB — the
+  live npm-registry + OSV.dev client behind the package-scanner section) from every clone.
+  The exact class of bug the `!tests/fixtures/` negation at the bottom of the same file
+  already had to undo for the detection corpus. Invisible to every prior website task
+  because the author's disk HAS the file, so `npm run build` passed locally while a clone
+  got `TS2307: Cannot find module '@/lib/scanEngine'` (reproduced by moving the file
+  aside). Latent until now only because the component importing it was itself uncommitted
+  — a crashed run had left `PackageScannerSection.tsx` + its `App.tsx`/`Navbar.tsx` wiring
+  untracked, so committing that work would have shipped a broken site. **Fixed** by
+  root-anchoring the two Python rules (`lib/`→`/lib/`, `lib64/`→`/lib64/`, with a comment
+  recording why) — setuptools' `build/lib/` is already covered by `build/`, and a
+  repo-wide `git status --ignored` diff confirms the anchoring un-ignores **exactly one**
+  file and nothing else — then committing the recovered website feature. The engine is
+  real, not a mock: it calls `registry.npmjs.org`, `api.npmjs.org/downloads` and
+  `api.osv.dev/v1/query` client-side, so no fabricated scan data ships. Guarded by 7 new
+  tests (`tests/test_website_distribution.py`) that ask **git**, not the filesystem —
+  since "it builds on my machine" structurally cannot catch this: the anchoring regression
+  guard, no `website/src/` file ignored (one batched `git check-ignore --stdin`), every
+  one tracked, and the teeth — every first-party import (`@/…` + relative, resolved the
+  way tsconfig `paths`/vite `alias` do) must land on a **git-tracked** file, with an
+  anti-vacuity assert on the checked count and a pin on the import that exposed the bug.
+  Verified the tests fail on the pre-fix state naming both missing files and pass after;
+  `npm run build` green (1593 modules); full suite **2233 green** (was 2226); ruff clean.
+  Follow-up noted: `website/package-lock.json` is untracked (never added, not ignored), so
+  a clone installs unpinned deps — worth committing for a security product, own run.
+  _(commit __PENDING__)_
+
 ---
 
 Completed prior to this backlog (context): AGENT-PI-001…010, MCP structured scan,

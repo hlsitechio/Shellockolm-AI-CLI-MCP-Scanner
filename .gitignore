@@ -14,8 +14,12 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# NOTE: root-anchored on purpose. An unanchored `lib/` matches at ANY depth and
+# silently swallowed `website/src/lib/` — the marketing site's own source dir —
+# so a clone could not build the site. Python build artifacts only ever land in
+# a root-level lib/ (setuptools' build/lib/ is already covered by `build/`).
+/lib/
+/lib64/
 parts/
 sdist/
 var/
