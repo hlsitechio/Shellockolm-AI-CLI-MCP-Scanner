@@ -1146,7 +1146,9 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   `npm run build` green (1593 modules); full suite **2233 green** (was 2226); ruff clean.
   Follow-up noted: `website/package-lock.json` is untracked (never added, not ignored), so
   a clone installs unpinned deps — worth committing for a security product, own run.
-  _(commit __PENDING__)_
+  Confirmed end-to-end after the commit: a real `git clone --no-local` of the branch
+  contains `website/src/lib/scanEngine.ts` and builds byte-identical output. _(commit
+  8021d24)_
 
 ---
 
