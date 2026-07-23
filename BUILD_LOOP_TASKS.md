@@ -1074,12 +1074,19 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   in-alphabet, and over budget); full suite **2198 green** (was 2155); `ruff` clean on
   the changed files. _(commit cc6ad8e)_
 
-- F13. [ ] **Two documented Gemini CLI fields missing from the field sets** —
-  `{"trust": true}` scores **0** where the equivalent `alwaysAllow`/`autoApprove` fire
+- F13. [x] **Two documented Gemini CLI fields missing from the field sets** —
+  `{"trust": true}` scored **0** where the equivalent `alwaysAllow`/`autoApprove` fire
   AGENT-MCP-007 (Gemini CLI documents `trust` as bypassing all tool-call confirmations),
-  and `{"httpUrl": "http://…"}` scores **0** where `url` fires AGENT-MCP-006 (`httpUrl`
-  is Gemini's streamable-HTTP transport field). Fix: add `"trust"` to
-  `_MCP_AUTOAPPROVE_FIELDS` and `"httpurl"` to `_MCP_URL_FIELDS`.
+  and `{"httpUrl": "http://…"}` scored **0** where `url` fires AGENT-MCP-006 (`httpUrl`
+  is Gemini's streamable-HTTP transport field). **Fixed** by adding `"trust"` to
+  `_MCP_AUTOAPPROVE_FIELDS` and `"httpurl"` to `_MCP_URL_FIELDS`; both field sets are
+  matched case-folded, so each new key inherits the existing rule logic unchanged —
+  `trust` fires only on the boolean-true approve-all form (`trust: false` is the safe
+  default and does not fire), and `httpUrl` inherits the public-vs-local / scheme gate
+  (a secure `httpUrl` and a localhost `httpUrl` do not fire). 7 new tests (MCP-006:
+  httpUrl public-host fires + https/localhost benign baselines; MCP-007: trust:true
+  fires, trust:false benign, plus helper-level cases); full suite **2205 green** (was
+  2198); ruff clean on changed files. _(commit 75b620c)_
 
 - F14. [ ] **`scan_text` with no filename hint demotes an unparseable config to prose** —
   `_classify_text_artifact`'s content sniff classifies BY parsing, so a caller passing an
