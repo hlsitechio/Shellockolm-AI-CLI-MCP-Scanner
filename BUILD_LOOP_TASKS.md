@@ -1088,17 +1088,35 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   fires, trust:false benign, plus helper-level cases); full suite **2205 green** (was
   2198); ruff clean on changed files. _(commit 75b620c)_
 
-- F14. [ ] **`scan_text` with no filename hint demotes an unparseable config to prose** —
-  `_classify_text_artifact`'s content sniff classifies BY parsing, so a caller passing an
-  MCP config body with `artifact_type="auto"` and no `filename` gets `"skill"` the moment
-  the JSON does not parse (via the documented "default to the broadest rule set"
-  fallback). The prose rules then run and the MCP rules do not. Milder than F11 — the
+- F14. [x] **`scan_text` with no filename hint demotes an unparseable config to prose** —
+  `_classify_text_artifact`'s content sniff classified BY parsing, so a caller passing an
+  MCP config body with `artifact_type="auto"` and no `filename` got `"skill"` the moment
+  the JSON did not parse (via the documented "default to the broadest rule set"
+  fallback). The prose rules then ran and the MCP rules did not. Milder than F11 — the
   text IS scanned, just by the wrong rule set — and F11's warning deliberately does not
   cover it, because the skill route has no structural checks to lose and warning there
   would fire on every prose artifact. Found while fixing F11; the same
-  "classification-by-parse dies with the parse" root cause. Fix: when the sniff fails to
-  parse but the text carries an MCP / n8n / settings key, classify by that key so F11's
-  warning can report the lost structural half, instead of silently demoting to prose.
+  "classification-by-parse dies with the parse" root cause. **Fixed** in the content
+  sniff's JSON block: the `json.loads` result now tracks whether the parse actually
+  FAILED (distinct from a JSON `null`), and on a genuine failure the raw text is checked
+  for a structural key — `_MCP_SERVER_KEYS` → `mcp`, `"hooks"` → `settings` — the exact
+  same `names_mcp_servers`/`lost_mcp_route` signal the directory walk already keys on when
+  a parse fails, so the two paths agree. `scan_text` then routes the body to the
+  structural branch: its raw-text rule fallback runs (a malformed `mcpServers` config
+  carrying a `curl|bash` launcher now fires AGENT-MCP-001 where it previously found
+  NOTHING) AND `_note_text_parse_gap` emits the "UNSCANNED, not safe" F11 warning naming
+  the lost structural checks, instead of a silent prose demotion. The fallback is
+  KEY-GATED — a malformed `{…}` naming no structural key stays `skill` and stays silent —
+  and only fires on a parse FAILURE, so the valid-config and filename-hinted paths are
+  byte-unchanged; n8n was already covered by the parse-independent nodes+connections
+  string check above the parse and is pinned so the shared block can't regress it. 21 new
+  tests (`tests/test_scan_text_auto_classify.py`: comment + trailing-comma malformed
+  mcp/settings/n8n classified structurally and warning-named, the teeth proof that
+  routing — not the prose path — surfaces the finding, mcp-before-settings precedence,
+  key-gated zero-FP on keyless broken JSON + non-JSON prose, a benign malformed config
+  that warns but manufactures ZERO findings at both tiers, valid/filename-hint
+  invariance, and the `_classify_text_artifact` unit directly). Full suite **2226 green**
+  (was 2205); ruff + mypy clean on the changed core.
 
 ---
 

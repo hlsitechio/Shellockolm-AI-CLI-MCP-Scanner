@@ -3367,6 +3367,9 @@ class AgentSupplyChainScanner(BaseScanner):
                 data = json.loads(text)
             except (ValueError, TypeError):
                 data = None
+                json_broke = True
+            else:
+                json_broke = False
             if isinstance(data, dict):
                 if "mcpServers" in data or "servers" in data:
                     return "mcp"
@@ -3387,6 +3390,25 @@ class AgentSupplyChainScanner(BaseScanner):
                 # documented value shape via the same extractor the scan uses, so an
                 # unrelated JSON that merely has a "statusLine" string is not misrouted.
                 if self._iter_settings_commands(data):
+                    return "settings"
+            elif json_broke:
+                # F14: this content sniff classifies BY parsing, so a config whose JSON
+                # is malformed (a trailing comma / `//` comment some agent clients
+                # accept but strict json.loads rejects) would otherwise fall straight
+                # through to "skill" and be scanned by the prose rules — its structural
+                # MCP/settings half silently lost with NO coverage warning (milder than
+                # F11: the text IS scanned, just by the wrong rule set). When the raw
+                # text still NAMES a structural key, classify by it — the same
+                # `_MCP_SERVER_KEYS` / `"hooks"` signal the directory walk keys its
+                # `names_mcp_servers`/`lost_mcp_route` on when a parse fails — so
+                # scan_text routes it to the structural branch: the raw-text rule
+                # fallback runs AND `_note_text_parse_gap` emits the "UNSCANNED, not
+                # safe" F11 warning, instead of a silent prose demotion. (An n8n export
+                # is already caught by the parse-independent nodes+connections check
+                # above; MCP is checked before settings to match the parsed-dict order.)
+                if any(f'"{k}"' in text for k in _MCP_SERVER_KEYS):
+                    return "mcp"
+                if '"hooks"' in text:
                     return "settings"
         return "skill"
 
