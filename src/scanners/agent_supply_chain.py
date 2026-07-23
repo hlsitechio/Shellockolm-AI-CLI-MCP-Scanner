@@ -1602,8 +1602,9 @@ MCP_REMOTE_SOURCE_RULE = AgentRule(
 
 # --- AGENT-MCP-006: remote MCP server reached over cleartext http:// / ws:// -----
 # A REMOTE MCP server is configured with a transport URL (`url` / `serverUrl` /
-# `endpoint`, used by the HTTP / SSE / streamable-http transports) instead of a
-# local `command`. If that URL is cleartext — http:// or ws:// — to a PUBLIC host,
+# `endpoint` / `httpUrl` — the last is Gemini CLI's streamable-HTTP field — used by
+# the HTTP / SSE / streamable-http transports) instead of a local `command`. If that
+# URL is cleartext — http:// or ws:// — to a PUBLIC host,
 # the entire JSON-RPC transport travels unencrypted. Two concrete harms, both worse
 # for an autonomous agent than for a browser:
 #   1. Confidentiality — any bearer token / API key the client sends in the
@@ -1634,7 +1635,10 @@ _MCP_SERVER_CFG_FIELDS = frozenset({
     "type", "transport", "headers",
 })
 
-_MCP_URL_FIELDS = ("url", "serverurl", "endpoint")
+# Transport-URL field keys, case-folded. `httpUrl` is Gemini CLI's streamable-HTTP
+# transport field (the direct analogue of `url` for the HTTP transport), so a
+# cleartext `httpUrl` must be inspected exactly like a cleartext `url`.
+_MCP_URL_FIELDS = ("url", "serverurl", "endpoint", "httpurl")
 _MCP_CLEARTEXT_SCHEMES = ("http", "ws")
 # Host suffixes that scope a cleartext transport to the local machine / private net,
 # where http:// is normal dev practice (mDNS, Docker, reserved private-use TLDs).
@@ -1684,9 +1688,10 @@ MCP_CLEARTEXT_RULE = AgentRule(
 )
 
 # --- AGENT-MCP-007: blanket tool auto-approval ---------------------------------
-# Several MCP clients (Cline, Roo Code, Cursor, Windsurf, …) let a config
+# Several MCP clients (Cline, Roo Code, Cursor, Windsurf, Gemini CLI, …) let a config
 # pre-approve a server's tool calls so the agent runs them WITHOUT the usual
-# per-call human confirmation. Scoped to a named list — `alwaysAllow: ["read_file"]`
+# per-call human confirmation (Gemini CLI spells its blanket form `trust: true`).
+# Scoped to a named list — `alwaysAllow: ["read_file"]`
 # — that is the user's deliberate, safe choice and is NOT an attack. What removes
 # all human oversight is a BLANKET approval: a wildcard (`"*"`) or a boolean `true`
 # that auto-approves EVERY tool the server exposes — including tools a later server
@@ -1698,9 +1703,13 @@ MCP_CLEARTEXT_RULE = AgentRule(
 # never trips the rule.
 # Per-server keys that carry an auto-approve setting, normalized (case-folded, with
 # separators `-`/`_`/space stripped) so `always_allow` / `auto-approve` all match.
+# `trust` is Gemini CLI's per-server flag: `trust: true` is documented to bypass ALL
+# tool-call confirmations for that server — semantically identical to a blanket
+# `autoApprove: true`, so it belongs here. It fires ONLY on the boolean-true /
+# approve-all form; the falsey default (`trust: false`) is not flagged.
 _MCP_AUTOAPPROVE_FIELDS: Set[str] = {
     "alwaysallow", "autoapprove", "autoapproved", "autoallow",
-    "autoaccept", "autoexecute", "autorun",
+    "autoaccept", "autoexecute", "autorun", "trust",
 }
 # A scalar value (string) that means "approve everything", not a specific tool name.
 _MCP_APPROVE_ALL_SCALARS: Set[str] = {

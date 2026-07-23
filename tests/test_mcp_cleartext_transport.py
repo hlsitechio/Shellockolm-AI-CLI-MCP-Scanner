@@ -95,6 +95,13 @@ def test_serverurl_field_key_flagged(tmp_path):
     assert RULE in _ids(tmp_path, config)
 
 
+def test_httpurl_field_key_flagged(tmp_path):
+    # `httpUrl` is Gemini CLI's streamable-HTTP transport field — the direct analogue
+    # of `url`, so a cleartext value to a public host must fire exactly like `url`.
+    config = {"mcpServers": {"gem": {"httpUrl": "http://tools.vendor.net/mcp"}}}
+    assert RULE in _ids(tmp_path, config)
+
+
 def test_flagged_in_claude_desktop_named_config(tmp_path):
     # A config not literally named mcp.json is still routed through the structured path.
     config = {"mcpServers": {"remote": {"url": "http://mcp.example.com/sse"}}}
@@ -128,6 +135,20 @@ def test_https_remote_not_flagged(tmp_path):
 
 def test_wss_remote_not_flagged(tmp_path):
     config = {"mcpServers": {"remote": {"serverUrl": "wss://mcp.vendor.io/sse"}}}
+    assert RULE not in _ids(tmp_path, config)
+
+
+def test_httpurl_https_not_flagged(tmp_path):
+    # A secure `httpUrl` (Gemini CLI streamable-HTTP over TLS) is the normal case and
+    # must not fire — the field key alone is never the signal, only the scheme is.
+    config = {"mcpServers": {"gem": {"httpUrl": "https://tools.vendor.net/mcp"}}}
+    assert RULE not in _ids(tmp_path, config)
+
+
+def test_httpurl_localhost_not_flagged(tmp_path):
+    # A cleartext `httpUrl` to localhost is normal dev practice — same local/private
+    # exemption as `url`, so the new field must inherit it, not over-fire.
+    config = {"mcpServers": {"gem": {"httpUrl": "http://localhost:8080/mcp"}}}
     assert RULE not in _ids(tmp_path, config)
 
 

@@ -102,6 +102,13 @@ def test_field_key_spelling_variants_flagged(tmp_path, key):
     assert RULE in _ids(tmp_path, config), f"key {key!r} should be recognized as an auto-approve field"
 
 
+def test_gemini_trust_true_flagged(tmp_path):
+    # Gemini CLI's `trust: true` bypasses ALL tool-call confirmations for the server —
+    # semantically identical to a blanket `autoApprove: true`, so it must fire MCP-007.
+    config = {"mcpServers": {"gem": {"command": "npx", "args": ["srv"], "trust": True}}}
+    assert RULE in _ids(tmp_path, config)
+
+
 def test_flagged_in_claude_code_named_config(tmp_path):
     # A config not literally named mcp.json is still routed through the structured path.
     config = {"mcpServers": {"remote": {"command": "npx", "args": ["x"], "alwaysAllow": ["*"]}}}
@@ -156,6 +163,14 @@ def test_no_autoapprove_field_not_flagged(tmp_path):
     assert RULE not in _ids(tmp_path, config)
 
 
+def test_gemini_trust_false_not_flagged(tmp_path):
+    # The Gemini CLI default (`trust: false`) keeps per-call confirmations on — not an
+    # attack, must not fire. Guards against the `trust` field over-firing on the
+    # common falsey value.
+    config = {"mcpServers": {"gem": {"command": "npx", "args": ["srv"], "trust": False}}}
+    assert RULE not in _ids(tmp_path, config)
+
+
 def test_named_tool_called_all_is_not_a_wildcard_scalar(tmp_path):
     # A *list* element must be exactly a wildcard token; a plausible real tool name
     # like "all_files" is not "all" and stays a scoped, non-blanket approval.
@@ -179,6 +194,7 @@ def test_integer_one_not_treated_as_blanket(tmp_path):
     ({"autoApprove": True}, "autoApprove"),
     ({"auto_approve": "all"}, "auto_approve"),
     ({"autoRun": "any"}, "autoRun"),
+    ({"trust": True}, "trust"),  # Gemini CLI blanket-trust form
 ])
 def test_helper_detects_blanket(cfg, expect_key):
     hit = _mcp_blanket_autoapprove(cfg)
@@ -194,6 +210,7 @@ def test_helper_detects_blanket(cfg, expect_key):
     {"command": "npx", "args": ["srv"]},
     {"autoApprove": 1},
     {"alwaysAllow": ["all_tools"]},
+    {"trust": False},  # Gemini CLI default — confirmations stay on
 ])
 def test_helper_returns_none_for_non_blanket(cfg):
     assert _mcp_blanket_autoapprove(cfg) is None
