@@ -1255,6 +1255,30 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   THREAT_MODEL.md drift `--check` green; self-scan gate still 0 HIGH+ (52 items).
   _(commit ef61a3f)_
 
+- C18. [x] **AGENT-PI-009 now reaches Gemma and Cohere Command-R chat-template tokens** —
+  detection expansion. The forged-control-token rule covered ChatML/Llama (`<|im_start|>`,
+  `<|eot_id|>`, `<|start_header_id|>`), Mistral (`<<SYS>>`, `[INST]`), and the
+  `<|system|>`/`<|user|>`/`<|assistant|>` role pipes, but **missed two major open-model
+  dialects**: Gemma's `<start_of_turn>` / `<end_of_turn>` turn delimiters and Cohere
+  Command-R's `<|SYSTEM_TOKEN|>` / `<|USER_TOKEN|>` / `<|CHATBOT_TOKEN|>` /
+  `<|START_OF_TURN_TOKEN|>` / `<|END_OF_TURN_TOKEN|>` role tokens. An artifact that embeds
+  one forges a privileged system turn on a Gemma- or Command-R-served agent exactly as
+  `<|im_start|>system` does on a ChatML one, yet all four Gemma/Command-R payloads scored
+  **0** findings before this change (confirmed live). Fix adds one new alternation branch
+  (`<\s*(?:start_of_turn|end_of_turn)\s*>`) plus five token names to the existing `<|…|>`
+  group; the rule compiles case-insensitively, so the uppercase Command-R tokens match.
+  **Zero-FP verified NON-VACUOUSLY on real content:** the live scanner over the whole real
+  corpus (`~/.claude` + `G:/skills`, **9,258 scanned files**) produced **5** PI-009
+  findings, **all** from pre-existing branches (`<|im_start|>`, "…developer mode") and
+  **0** from either new branch — because a raw sweep found **0** files containing any added
+  token, so the widening is a strict superset that adds a finding only on the literal
+  token. 5 new positive tests (2 Gemma + 2 Command-R payloads added to the PI-009
+  parametrize, all HIGH/CRITICAL) + 1 benign-negative test (turn-related prose, a spaced
+  `<start of turn>` pseudo-tag, and unrelated `<startup>`/`<end>` tags all stay clean).
+  RULES.md regenerated (rule text + example attack). Full suite **2306 passed / 1 skipped**
+  (was 2301, +5); ruff clean on the module; strict-mypy unaffected (regex-string edit).
+  _(commit CPLACEHOLDER)_
+
 ---
 
 Completed prior to this backlog (context): AGENT-PI-001…010, MCP structured scan,
