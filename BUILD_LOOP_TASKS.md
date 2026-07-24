@@ -1277,7 +1277,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   `<start of turn>` pseudo-tag, and unrelated `<startup>`/`<end>` tags all stay clean).
   RULES.md regenerated (rule text + example attack). Full suite **2306 passed / 1 skipped**
   (was 2301, +5); ruff clean on the module; strict-mypy unaffected (regex-string edit).
-  _(commit CPLACEHOLDER)_
+  _(commit f4d6c16)_
 
 ---
 
