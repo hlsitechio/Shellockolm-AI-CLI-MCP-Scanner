@@ -21,8 +21,18 @@ file. So these tests ask git, not the filesystem:
 Everything is derived from ``git ls-files``/``git check-ignore``, so a new
 component that imports a newly-ignored module fails here rather than in a
 downstream user's clone.
+
+The second half covers *what a clone installs*. Shipping the sources is only
+half the guarantee: ``website/package-lock.json`` was untracked, so every clone
+ran ``npm install`` and re-resolved 17 caret-ranged direct dependencies (179
+packages) fresh from the registry — the site a contributor or CI builds was not
+the site the author built. For a scanner whose own ``AGENT-MCP-002`` rule flags
+unpinned remote packages, that is the bug we sell the cure for. Meanwhile
+``node_modules/`` matched no ignore rule at all (only ``node_modules_cache/``),
+so a ``git add -A`` would stage the entire installed dependency tree.
 """
 
+import json
 import re
 import shutil
 import subprocess
@@ -32,7 +42,14 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 GITIGNORE = REPO_ROOT / ".gitignore"
-WEBSITE_SRC = REPO_ROOT / "website" / "src"
+WEBSITE = REPO_ROOT / "website"
+WEBSITE_SRC = WEBSITE / "src"
+PACKAGE_JSON = WEBSITE / "package.json"
+LOCKFILE = WEBSITE / "package-lock.json"
+
+# A concrete, fully-resolved version: "18.3.1", "7.18.1", "1.0.0-beta.2".
+# Anything carrying a range operator (^ ~ * >= ||) is not pinned.
+_CONCRETE_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 
 # Suffixes that are real site sources (an import must land on one of these).
 SOURCE_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".css")
@@ -214,3 +231,132 @@ def test_package_scanner_section_imports_the_scan_engine(website_files):
     section = WEBSITE_SRC / "components" / "PackageScannerSection.tsx"
     assert section.is_file(), "PackageScannerSection.tsx is missing"
     assert "@/lib/scanEngine" in _first_party_imports(section)
+
+
+# ── a clone must install the SAME dependency tree ─────────────────────────────
+
+
+@pytest.fixture(scope="module")
+def manifest() -> dict:
+    assert PACKAGE_JSON.is_file(), f"missing {PACKAGE_JSON}"
+    return json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="module")
+def lockfile() -> dict:
+    assert LOCKFILE.is_file(), f"missing {LOCKFILE}"
+    return json.loads(LOCKFILE.read_text(encoding="utf-8"))
+
+
+def test_website_lockfile_is_tracked(tracked_paths):
+    """Untracked => every clone re-resolves the caret ranges from scratch."""
+    assert "website/package-lock.json" in tracked_paths, (
+        "website/package-lock.json is not tracked, so a clone runs `npm install` "
+        "and floats every transitive dependency instead of `npm ci` installing "
+        "the exact tree this repo was built and audited against"
+    )
+
+
+def test_website_lockfile_is_not_gitignored():
+    """Guard the other direction: an ignore rule would silently unpin the site."""
+    proc = _git("check-ignore", "website/package-lock.json")
+    assert proc.returncode == 1, (
+        "a .gitignore rule matches website/package-lock.json "
+        f"({proc.stdout.strip()}) — that removes dependency pinning from clones"
+    )
+
+
+def test_lockfile_root_entry_matches_package_json(manifest, lockfile):
+    """A stale lockfile is worse than none: `npm ci` aborts the build."""
+    root = lockfile["packages"][""]
+    for field in ("dependencies", "devDependencies"):
+        assert root.get(field, {}) == manifest.get(field, {}), (
+            f"package-lock.json is out of sync with package.json ({field}); "
+            "`npm ci` will fail. Run `npm install` and commit the lockfile."
+        )
+
+
+def test_lockfile_pins_every_declared_dependency(manifest, lockfile):
+    """Each declared range must resolve to one concrete version in the lock."""
+    declared = {
+        **manifest.get("dependencies", {}),
+        **manifest.get("devDependencies", {}),
+    }
+    assert declared, "package.json declares no dependencies — guard is vacuous"
+
+    packages = lockfile["packages"]
+    unpinned: list[str] = []
+    for name, spec in declared.items():
+        entry = packages.get(f"node_modules/{name}")
+        if entry is None:
+            unpinned.append(f"{name} ({spec}): absent from the lockfile")
+            continue
+        version = entry.get("version", "")
+        if not _CONCRETE_VERSION_RE.match(version):
+            unpinned.append(f"{name} ({spec}): locked to {version!r}, not exact")
+    assert not unpinned, f"dependencies a clone would not pin: {unpinned}"
+
+
+def test_every_locked_package_has_an_integrity_hash(lockfile):
+    """Tamper-evidence — the reason a lockfile is worth committing at all."""
+    packages = lockfile["packages"]
+    resolved = {
+        name: entry
+        for name, entry in packages.items()
+        if name and not entry.get("link")
+    }
+    assert len(resolved) > 50, (
+        f"only {len(resolved)} locked packages — the guard looks vacuous"
+    )
+    missing = [name for name, entry in resolved.items() if not entry.get("integrity")]
+    assert not missing, (
+        "locked packages without a subresource-integrity hash, so a swapped "
+        f"tarball would install silently: {missing}"
+    )
+
+
+# ── the installed tree must never be committable ──────────────────────────────
+
+
+def test_node_modules_is_gitignored():
+    """`node_modules_cache/` does NOT match `node_modules/` — that was the gap."""
+    # Works whether or not the tree is installed: check-ignore is pattern-only.
+    for path in ("website/node_modules", "website/node_modules/react/package.json"):
+        proc = _git("check-ignore", path)
+        assert proc.returncode == 0, (
+            f"{path} is not gitignored — `git add -A` would stage the whole "
+            "installed dependency tree into a security scanner's repo"
+        )
+
+
+def test_claude_ignore_rule_stays_anchored_to_website():
+    """A blanket `.claude/` would swallow the tracked detection corpus."""
+    lines = [
+        line.strip()
+        for line in GITIGNORE.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    assert ".claude/" not in lines, (
+        "'.claude/' in .gitignore is unanchored and matches at any depth, which "
+        "hides the tests/fixtures/**/.claude/ detection corpus from clones. "
+        "Anchor it (e.g. 'website/.claude/')."
+    )
+
+
+def test_tracked_claude_fixture_corpus_is_not_ignored(tracked_paths):
+    """The teeth for the rule above: ask git about the real corpus files."""
+    corpus = sorted(p for p in tracked_paths if "/.claude/" in p)
+    assert corpus, "no tracked .claude fixtures found — the guard is vacuous"
+    proc = subprocess.run(
+        ["git", "check-ignore", "--stdin"],
+        cwd=REPO_ROOT,
+        input="\n".join(corpus),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode in (0, 1), f"git check-ignore failed: {proc.stderr}"
+    ignored = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+    assert not ignored, (
+        f"detection-corpus fixtures hidden from every clone: {ignored}"
+    )

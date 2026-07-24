@@ -239,6 +239,19 @@ __cache__/
 .vulnerability_cache/
 node_modules_cache/
 
+# Frontend dependencies (website/) — the installed tree, never the lockfile.
+# `node_modules_cache/` above does NOT match `node_modules/`, so without this
+# rule a `git add -A` stages the whole installed dependency tree (6.5k files)
+# into a security scanner's repo. `website/package-lock.json` is deliberately
+# TRACKED, so a clone installs the exact pinned versions via `npm ci`.
+node_modules/
+
+# Local agent/editor tooling for the website workspace (dev-server launch
+# config). Anchored to website/ on purpose: a blanket `.claude/` would swallow
+# the tracked detection corpus under tests/fixtures/**/.claude/ — the same
+# class of bug the unanchored `lib/` rule caused for website/src/lib/.
+website/.claude/
+
 # User-specific configuration
 config.local.json
 config.user.json
