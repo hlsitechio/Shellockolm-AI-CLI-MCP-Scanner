@@ -1193,6 +1193,68 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   reproduces **byte-identical** bundle hashes with react-router pinned to the patched
   7.18.1. _(commit 03a4a91)_
 
+- C17. [x] **The Claude Code PLUGIN package is now a scannable artifact tree — closing a
+  whole-format blind spot on the ecosystem's unit of distribution** — C12/C13 shared a
+  *payload pattern* across two auto-exec sites, C14 a *sink host list* across three
+  rules, C15 the *credential family* and C16 the *stealth suite* across every artifact
+  class. This is the same defect one level up: not a rule that failed to reach a site,
+  but a whole distribution format whose artifacts reached **no site at all**. A plugin is
+  how the ecosystem ships agent content — add a marketplace, install a plugin, and it
+  brings commands, subagents, skills, an MCP config and a `hooks` registry with it — yet
+  a measured **3-class × 2-placement matrix** was blind in **4 of 6 cells** against the
+  committed HEAD. Two independent causes. **(1)** `SETTINGS_NAMES` knows only
+  `settings.json` / `settings.local.json`, so a plugin's hook file — `hooks/hooks.json`,
+  or whatever name its `plugin.json` points at (real marketplace plugins ship
+  `codex-hooks.json`, `hooks-cursor.json`) — was routed by nothing: the identical
+  `curl … | bash` + `webhook.site` payload scored **2 findings (AGENT-HOOK-001 +
+  AGENT-HOOK-003) in a `.claude/settings.json` and ZERO in the plugin hook file beside
+  it**. That is the worst cell in the matrix — a hook command auto-executes on a
+  lifecycle event with **no per-invocation prompt**, and unlike the pre-install cases it
+  was invisible **even after installation**: on this machine **83 live hook registries
+  under `~/.claude` were read by no rule at all**. **(2)** `_is_command_file` /
+  `_is_subagent_file` require a `.claude` ancestor, which holds for an *installed* plugin
+  (`~/.claude/plugins/…`) but not for a plugin **repo**, where `commands/` and `agents/`
+  sit at the plugin root — so they were unscannable at exactly the moment the check is
+  worth something: reviewing a cloned plugin *before* installing it. Fixes are structural
+  and add **no detection rule** (count stays 42). Hook files route by a content
+  **signature** — a top-level `hooks` dict keyed by a real Claude Code lifecycle event —
+  the same shape as the existing `_json_declares_mcp_servers` content route, so every
+  place a registry can live is covered instead of a list of filenames (that is what
+  catches the 41 individually-named hook definitions a hook-library plugin ships).
+  Commands/agents widen their `.claude` anchor with the plugin's own official marker
+  (`<root>/.claude-plugin/plugin.json`), so **carrying the marker is what makes a
+  directory plugin content** and an unrelated `commands/` or a Python package's `agents/`
+  is still never treated as agent artifacts; every path occurrence is tried as a
+  candidate root (outermost first), which a fixed-position resolve gets wrong in both
+  directions — a namespaced `commands/commands/x.md` is rooted at the outer plugin while
+  a plugin vendored under an unrelated `commands/` is rooted at the inner one (my own
+  last-occurrence first cut failed the former; the test caught it and the **implementation**
+  was fixed, not the test). Coverage honesty holds: an unparseable hook file loses the
+  route with the parse, so it emits the F11 "UNSCANNED, not safe" warning instead of
+  vanishing. Matrix **4/6 → 0/6**. **Zero-FP verified NON-VACUOUSLY on real content:**
+  the machine's `~/.claude` tree + `G:/skills` (2,803 skills, 1,303 subagents, 1,158
+  commands, 101 MCP configs, 61 instruction files) produces a finding set
+  **byte-identical before and after** — **336 findings** — while
+  `claude_settings_scanned` rises **17 → 100**: 83 real hook registries that no rule had
+  ever opened (32× `hooks.json`, 9× `codex-hooks.json`, `hooks-cursor.json`, and 41
+  individually-named hook definitions), every one of them correctly a genuine registry
+  and every one clean. The zero is real rather than a route that never fires: those
+  **same 83 files each with ONE planted `curl | bash` hook command are caught 83/83**.
+  For the repo placement, a **real installed plugin copied OUT of the `.claude` tree**
+  scans its command and subagent where before it scanned neither (and still reports zero
+  findings — it is a legit plugin). 60 new tests
+  (`tests/test_plugin_package_coverage.py`: the 3×3 reach matrix asserted directly plus
+  rule-set *parity* with the `.claude` placement, the measured regressions, the content
+  route as a unit over every lifecycle event + 8 non-registry JSON shapes, custom hook
+  filenames, marker gating incl. the two namespacing directions and a marker-dir-without-
+  manifest case, 8 benign baselines, the strict-superset guards — `.vscode/settings.json`
+  still ignored, a dual MCP+hooks config still gets **both** scans — and the F11 coverage
+  warning in both directions) — **mutation-verified**: reverting the hook route fails 16,
+  the command widening 7, the subagent widening 4, and dropping the marker gate 4. Full
+  suite **2301 passed / 1 skipped** (was 2241, +60); ruff + strict-mypy clean; RULES.md +
+  THREAT_MODEL.md drift `--check` green; self-scan gate still 0 HIGH+ (52 items).
+  _(commit COMMIT_HASH)_
+
 ---
 
 Completed prior to this backlog (context): AGENT-PI-001…010, MCP structured scan,

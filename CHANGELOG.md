@@ -22,6 +22,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A Claude Code plugin is now a scannable artifact tree — closing a whole-format blind
+  spot on the ecosystem's unit of distribution.** A plugin ships commands, subagents,
+  skills, an MCP config and a `hooks` registry, but 4 of the 6 class × placement cells
+  reached no scan path at all. **(1)** `SETTINGS_NAMES` knows only `settings.json` /
+  `settings.local.json`, so a plugin's hook file — `hooks/hooks.json`, or whatever name
+  its `plugin.json` points at (real marketplace plugins ship `codex-hooks.json`,
+  `hooks-cursor.json`) — was routed by nothing: the identical `curl … | bash` payload
+  scored 2 findings (AGENT-HOOK-001 + AGENT-HOOK-003) in a `.claude/settings.json` and
+  **zero** in the plugin hook file beside it. That is the worst cell in the matrix — a
+  hook command auto-executes on a lifecycle event with no per-invocation prompt, and it
+  was invisible **even after installation** (on the author's machine, 83 live hook
+  registries under `~/.claude` were read by no rule). Hook files now route by a content
+  **signature** — a top-level `hooks` dict keyed by a real lifecycle event — mirroring
+  the existing `_json_declares_mcp_servers` route, so every place a registry can live is
+  covered rather than a list of filenames. **(2)** `_is_command_file` /
+  `_is_subagent_file` require a `.claude` ancestor, which holds for an *installed*
+  plugin but not for a plugin **repo**, where `commands/` and `agents/` sit at the plugin
+  root — so they were unscannable at exactly the moment the check is worth something:
+  reviewing a cloned plugin *before* installing it. Both now also accept the plugin's own
+  official marker (`<root>/.claude-plugin/plugin.json`), so carrying the marker is what
+  makes a directory plugin content and an unrelated `commands/` or `agents/` folder is
+  still never treated as agent artifacts. No detection rule was added (count stays 42)
+  and an unparseable hook file is reported, never silently dropped. Verified on 5,400+
+  real agent artifacts: the finding set is **byte-identical** (336) while
+  `claude_settings_scanned` rises **17 → 100**, and those same 83 real hook files each
+  with one planted payload are caught **83/83**.
+
 - **JSON `\uXXXX` escapes no longer defeat the entire stealth suite on config artifacts.**
   The four stealth checks (invisible characters PI-005, Unicode Tags PI-007, bidi PI-010,
   homoglyphs PI-011) are signature matches on literal code points — which is exactly what

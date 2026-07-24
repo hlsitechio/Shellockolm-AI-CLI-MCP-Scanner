@@ -1635,6 +1635,29 @@ _MCP_SERVER_CFG_FIELDS = frozenset({
     "type", "transport", "headers",
 })
 
+# --- Claude Code hook-registry shape -------------------------------------------
+# The lifecycle events a `hooks` block registers auto-running shell commands on.
+# These distinctive PascalCase identifiers are the runtime's dispatch vocabulary, so
+# a top-level `hooks` map keyed by one of them is a SIGNATURE of a Claude Code hook
+# registry — not a guess. That matters because the registry is not confined to
+# `.claude/settings.json`: a *plugin* ships its own hook file (`hooks/hooks.json`,
+# or any name its plugin.json points at — real marketplace plugins use
+# `codex-hooks.json`, `hooks-cursor.json`), and those commands auto-execute exactly
+# like a settings.json hook. Routing by this signature rather than by filename is
+# what lets one rule set cover every place a hook registry can live.
+_HOOK_EVENT_NAMES = frozenset({
+    "pretooluse", "posttooluse", "userpromptsubmit", "notification",
+    "stop", "subagentstop", "subagentstart", "precompact",
+    "sessionstart", "sessionend",
+})
+# Directory that marks a Claude Code PLUGIN root (`<plugin>/.claude-plugin/plugin.json`).
+# A plugin's commands/ and agents/ live at the plugin root, NOT under a `.claude`
+# tree, so the `.claude`-ancestor anchor that guards those classes only matches once
+# the plugin is INSTALLED. The marker is what makes a cloned plugin repo — the thing
+# you review *before* installing — scannable.
+_PLUGIN_MARKER_DIR = ".claude-plugin"
+_PLUGIN_MANIFEST = "plugin.json"
+
 # Transport-URL field keys, case-folded. `httpUrl` is Gemini CLI's streamable-HTTP
 # transport field (the direct analogue of `url` for the HTTP transport), so a
 # cleartext `httpUrl` must be inspected exactly like a cleartext `url`.
@@ -2737,8 +2760,9 @@ class AgentSupplyChainScanner(BaseScanner):
     NAME = "agent"
     DESCRIPTION = (
         "Scans the AI-agent coding supply chain (skills, MCP configs, n8n workflows, "
-        "slash commands, settings.json hooks) for prompt injection, secret "
-        "exfiltration, tool poisoning, and auto-running hook RCE"
+        "slash commands, subagents, plugin packages, settings.json and plugin hooks) "
+        "for prompt injection, secret exfiltration, tool poisoning, and auto-running "
+        "hook RCE"
     )
     CVE_IDS: List[str] = []
     SUPPORTED_PACKAGES = ["agent-skill", "mcp-config", "n8n-workflow", "agent-command", "agent-subagent", "claude-settings"]
@@ -2861,6 +2885,10 @@ class AgentSupplyChainScanner(BaseScanner):
             except Exception:
                 pro = False
         self.pro = bool(pro)
+        # Candidate plugin root (lowercased str) -> does it carry the plugin marker.
+        # A plugin's artifacts share one root, so the walk asks the same question many
+        # times; caching keeps the marker probe to one stat per plugin.
+        self._plugin_root_cache: Dict[str, bool] = {}
 
     def _extra(self) -> List[AgentRule]:
         """Pro-only rules, included when a valid Pro/Team license is active."""
@@ -2913,8 +2941,12 @@ class AgentSupplyChainScanner(BaseScanner):
             is_skill = name in self.SKILL_NAMES or name.endswith(".skill.md")
             is_mcp = name in self.MCP_NAMES or name.endswith(".mcp.json")
             is_instr = self._is_instruction_file(fp)
-            is_command = self._is_command_file(fp)
-            is_subagent = self._is_subagent_file(fp)
+            # A plugin's commands/ and agents/ sit at the PLUGIN root, not under a
+            # `.claude` tree, so the installed-only `.claude` anchor is widened by the
+            # plugin marker — otherwise a cloned plugin repo (what you review BEFORE
+            # installing) reaches no scan path at all.
+            is_command = self._is_command_file(fp) or self._is_plugin_command_file(fp)
+            is_subagent = self._is_subagent_file(fp) or self._is_plugin_subagent_file(fp)
             is_settings = name in self.SETTINGS_NAMES and self._under_claude(fp)
             is_json = name.endswith(".json")
             if not (is_skill or is_mcp or is_instr or is_command or is_subagent or is_json):
@@ -2941,6 +2973,16 @@ class AgentSupplyChainScanner(BaseScanner):
             if is_json and not (is_mcp or is_skill or is_instr or is_command or is_subagent):
                 is_mcp = self._json_declares_mcp_servers(text)
 
+            # Same content route for the OTHER auto-executing registry: a `hooks` block
+            # keyed by real lifecycle events is a hook registry wherever it lives, so a
+            # plugin's hooks/hooks.json (or the custom name its plugin.json points at)
+            # gets the identical AGENT-HOOK-* coverage settings.json already had.
+            # Deliberately not excluded by `is_mcp`: a file may declare both registries,
+            # and the branch below runs both scans for exactly that case.
+            names_hook_events = is_json and self._names_hook_events(text)
+            if is_json and not (is_settings or is_skill or is_instr or is_command or is_subagent):
+                is_settings = self._json_declares_hook_events(text)
+
             # Coverage bookkeeping for the warnings below (F11). `parse_reason` is the
             # single source of truth for "would the structural checks have run?" — the
             # same question every one of them answers privately with its own
@@ -2954,6 +2996,10 @@ class AgentSupplyChainScanner(BaseScanner):
             # settings scan and silently loses only the MCP half. Flagged, never
             # force-routed: without a parse the server declaration is unconfirmed.
             lost_mcp_route = parse_reason is not None and names_mcp_servers and not is_mcp
+            # The hook-registry route is content-based for the same reason and dies the
+            # same way: a plugin hook file that does not parse is classified by nothing,
+            # so its AGENT-HOOK-* checks never run. Announced, never force-routed.
+            lost_hooks_route = parse_reason is not None and names_hook_events and not is_settings
 
             # Every structural JSON check opens with a `json.loads` and returns [] on
             # failure, so a config the parser rejects reports zero findings, zero
@@ -3007,12 +3053,17 @@ class AgentSupplyChainScanner(BaseScanner):
                 result.findings.extend(self._scan_n8n(fp, text))
                 if parse_reason is not None:
                     self._note_unparseable_json(result, fp, "n8n-workflow", parse_reason)
-            elif lost_mcp_route and parse_reason is not None:
+            elif parse_reason is not None and (lost_mcp_route or lost_hooks_route):
                 # The sharpest case: the file reached NO scan path at all, because the
                 # content route that would have classified it is itself the parse that
-                # failed. Not counted in `mcps` — nothing was scanned — only reported.
-                self._note_unparseable_json(result, fp, "mcp-config", parse_reason,
-                                            routed=False)
+                # failed. Not counted in `mcps`/`settings` — nothing was scanned — only
+                # reported, once per route the file lost.
+                if lost_mcp_route:
+                    self._note_unparseable_json(result, fp, "mcp-config", parse_reason,
+                                                routed=False)
+                if lost_hooks_route:
+                    self._note_unparseable_json(result, fp, "claude-settings", parse_reason,
+                                                routed=False)
 
         if timed_out:
             result.warnings.append(
@@ -3454,6 +3505,30 @@ class AgentSupplyChainScanner(BaseScanner):
             return False
         return ".claude" in parts[:parts.index("agents")]
 
+    def _is_plugin_command_file(self, fp: Path) -> bool:
+        """A slash command shipped by a Claude Code PLUGIN (`<plugin>/commands/**/*.md`).
+
+        Same artifact, same trust boundary and same scan path as
+        `.claude/commands/**/*.md` — a plugin's commands become slash commands the
+        agent runs — but they live at the plugin root, so the `.claude` anchor misses
+        them in a cloned plugin repo. Gated on the plugin marker, so an unrelated
+        `commands/` directory is still never treated as agent content.
+        """
+        if fp.suffix.lower() != ".md":
+            return False
+        return self._plugin_root(fp, "commands") is not None
+
+    def _is_plugin_subagent_file(self, fp: Path) -> bool:
+        """A subagent definition shipped by a Claude Code PLUGIN (`<plugin>/agents/**/*.md`).
+
+        The plugin-root counterpart of `_is_subagent_file`, on the same terms as
+        `_is_plugin_command_file`: identical artifact, identical scan path, gated on
+        the plugin marker rather than a `.claude` ancestor.
+        """
+        if fp.suffix.lower() != ".md":
+            return False
+        return self._plugin_root(fp, "agents") is not None
+
     @staticmethod
     def _has_dir_chain(parts: List[str], parent: str, child: str) -> bool:
         """True if the lowercased path-part list contains `parent` immediately
@@ -3701,6 +3776,87 @@ class AgentSupplyChainScanner(BaseScanner):
             any(str(f).strip().lower() in _MCP_SERVER_CFG_FIELDS for f in cfg)
             for _scope, _name, cfg in cls._iter_mcp_servers(data)
         )
+
+    @classmethod
+    def _json_declares_hook_events(cls, text: str) -> bool:
+        """True when `text` parses as a config that DECLARES a Claude Code hook registry.
+
+        The content route for auto-executing hook commands, mirroring
+        `_json_declares_mcp_servers`. `SETTINGS_NAMES` only knows `settings.json` /
+        `settings.local.json`, so a **plugin's** hook file — `hooks/hooks.json`, or
+        whatever name its plugin.json points at — reached no scan path at all: the
+        identical `curl | bash` payload scored 2 findings in a `.claude/settings.json`
+        and ZERO in the plugin hook file beside it, both in a cloned plugin repo AND
+        in an installed plugin under `~/.claude/plugins/`.
+
+        Requires a top-level `hooks` DICT keyed by at least one real lifecycle event,
+        so an unrelated JSON that happens to carry a `hooks` key (a list, or a map of
+        arbitrary names) is not dragged onto the settings rule path.
+        """
+        if '"hooks"' not in text:
+            return False  # cheap reject before paying for a parse
+        try:
+            data = json.loads(text)
+        except (ValueError, TypeError):
+            return False
+        if not isinstance(data, dict):
+            return False
+        hooks = data.get("hooks")
+        if not isinstance(hooks, dict):
+            return False
+        return any(str(k).strip().lower() in _HOOK_EVENT_NAMES for k in hooks)
+
+    @staticmethod
+    def _names_hook_events(text: str) -> bool:
+        """Raw-text (parse-free) signal that `text` looks like a hook registry.
+
+        The coverage-warning counterpart of `_json_declares_hook_events`, used the same
+        way `names_mcp_servers` is: when a hook file does not parse, the content route
+        that would have classified it dies with the parse, so this is how the walk still
+        knows the file was NOT scanned (F11 — an unscanned artifact must never render
+        as clean).
+        """
+        if '"hooks"' not in text:
+            return False
+        lowered = text.lower()
+        return any(f'"{event}"' in lowered for event in _HOOK_EVENT_NAMES)
+
+    def _plugin_root(self, fp: Path, dirname: str) -> Optional[Path]:
+        """The Claude Code plugin root owning `fp`, when `fp` sits under `<root>/<dirname>/`.
+
+        A plugin's `commands/` and `agents/` directories live at the PLUGIN root, not
+        under a `.claude` tree — so `_is_command_file` / `_is_subagent_file`, which
+        require a `.claude` ancestor, only match once the plugin is installed
+        (`~/.claude/plugins/...`). Reviewing a cloned plugin repo *before* installing
+        it — the moment the check is actually worth something — found nothing.
+
+        The plugin root is identified by its official marker
+        (`<root>/.claude-plugin/plugin.json`), so an ordinary repo's `commands/` or a
+        Python package's `agents/` is never mistaken for plugin content: carrying the
+        marker is what makes a directory a plugin. Results are cached per candidate
+        root because a plugin's artifacts share one root and the walk asks repeatedly.
+        """
+        parts = [p.lower() for p in fp.parts]
+        # EVERY occurrence is a candidate root, outermost first. Trying only one
+        # position gets a real layout wrong either way: a namespaced subdirectory
+        # (`<plugin>/commands/commands/x.md`) is rooted at the outer plugin, while a
+        # plugin vendored beneath an unrelated `commands/` folder is rooted at the
+        # inner one. Whichever candidate carries the marker is the plugin.
+        for idx, part in enumerate(parts):
+            if part != dirname or idx == 0:
+                continue
+            root = Path(*fp.parts[:idx])
+            key = str(root).lower()
+            cached = self._plugin_root_cache.get(key)
+            if cached is None:
+                try:
+                    cached = (root / _PLUGIN_MARKER_DIR / _PLUGIN_MANIFEST).is_file()
+                except OSError:
+                    cached = False
+                self._plugin_root_cache[key] = cached
+            if cached:
+                return root
+        return None
 
     @staticmethod
     def _mcp_server_loc(fp: Path, name: str, scope: str = "") -> str:
