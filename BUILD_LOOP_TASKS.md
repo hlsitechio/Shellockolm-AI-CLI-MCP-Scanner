@@ -1253,7 +1253,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   the command widening 7, the subagent widening 4, and dropping the marker gate 4. Full
   suite **2301 passed / 1 skipped** (was 2241, +60); ruff + strict-mypy clean; RULES.md +
   THREAT_MODEL.md drift `--check` green; self-scan gate still 0 HIGH+ (52 items).
-  _(commit COMMIT_HASH)_
+  _(commit ef61a3f)_
 
 ---
 
