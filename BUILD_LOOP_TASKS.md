@@ -1150,6 +1150,49 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   contains `website/src/lib/scanEngine.ts` and builds byte-identical output. _(commit
   8021d24)_
 
+- F16. [x] **The website lockfile was untracked and `node_modules/` matched no ignore rule
+  — clones installed an unpinned dependency tree** — the follow-up F15 flagged. Two
+  supply-chain hygiene gaps in the repo of a product whose **own `AGENT-MCP-002` rule flags
+  unpinned remote packages**. **(1)** `website/package-lock.json` was untracked (never
+  added, *not* ignored), so every clone ran `npm install` and re-resolved the **17
+  caret-ranged direct dependencies (179 packages)** fresh from the registry — the site a
+  contributor or CI built was not the site the author built. That is the F15 "builds on my
+  machine" class one layer down: F15 fixed *which sources* ship, this fixes *which
+  dependencies* a clone installs. **(2)** `node_modules/` matched **no** ignore rule at all
+  — the only nearby pattern is `node_modules_cache/`, which does not match it — so a
+  `git add -A` would stage the entire installed tree (**6,550 files**) into a security
+  scanner's repo. Fixed by tracking the lockfile and adding an anchored `node_modules/` +
+  `website/.claude/` (local dev-server launch config) rule, each with a comment recording
+  why. The `.claude` rule is **anchored to `website/` on purpose**: a blanket `.claude/`
+  would swallow the tracked `tests/fixtures/**/.claude/` detection corpus — precisely the
+  unanchored-rule bug F15 had to undo for `website/src/lib/`, so the fix deliberately does
+  not re-commit it. **The lockfile committed is a clean one:** `npm audit` on the
+  pre-existing tree reported 3 moderate react-router advisories
+  (`GHSA-wrjc-x8rr-h8h6` open redirect, `GHSA-h8fp-f39c-q6mh` RSC XSS,
+  `GHSA-337j-9hxr-rhxg` constructor injection — all fixed in 7.18.0); pinning a
+  known-vulnerable tree in a security product would be indefensible, and `package.json`
+  already permitted the fix (`^7.13.0`), so a plain `npm audit fix` bumped 7.17.0→7.18.1
+  with **no** `package.json` change. Honest scope: those advisories cover SSR/RSC paths
+  this static marketing site does not use, and the emitted bundle hashes are byte-identical
+  before and after — the bump changes no shipped code, it only stops the lockfile pinning
+  vulnerable versions. 8 new tests (`tests/test_website_distribution.py`) that ask **git and
+  the lockfile**, not the filesystem, since "it works on my machine" structurally cannot
+  catch this: the lockfile is tracked **and** is not ignored (both directions — an ignore
+  rule would silently unpin the site), its root entry equals `package.json` so `npm ci`
+  cannot abort on drift, every declared dependency resolves to a **concrete** version, every
+  locked package carries a subresource-**integrity** hash (with an anti-vacuity floor), and
+  `node_modules` is ignored — plus the F15-class regression guard on my own change (no
+  blanket `.claude/`, with teeth that ask git about the real tracked corpus files).
+  Verified: the tracked-lockfile guard **fails pre-fix** naming the exact defect and passes
+  after; a repo-wide sweep confirms the new rules ignore exactly `node_modules` +
+  `website/.claude` and leave **all 265 tracked files un-ignored**; clean-slate `npm ci`
+  exit 0 with **0 vulnerabilities**; `npm run build` green (1593 modules); full suite
+  **2241 passed / 1 skipped** (was 2233, +8); ruff + strict-mypy clean; self-scan gate still
+  0 HIGH+ (52 items). Confirmed end-to-end after the commit: a real `git clone --no-local`
+  of the branch ships the lockfile, has no `node_modules`, and `npm ci` → `npm run build`
+  reproduces **byte-identical** bundle hashes with react-router pinned to the patched
+  7.18.1. _(commit 03a4a91)_
+
 ---
 
 Completed prior to this backlog (context): AGENT-PI-001…010, MCP structured scan,
