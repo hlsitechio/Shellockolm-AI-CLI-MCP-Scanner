@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A hook registry keyed by another client's event names is no longer invisible to
+  the directory walk.** A `hooks` block auto-runs shell commands with no
+  per-invocation prompt, so failing to *route* one is worse than a missed pattern —
+  the file is never opened by any rule, and a clean report for it means UNSCANNED,
+  not safe. The content route that classifies a hook registry qualified a file on one
+  arm: a top-level `hooks` dict keyed by a name in Claude Code's lifecycle vocabulary.
+  That made the gate an allow-list of event NAMES, and it guarded the **primary**
+  entry point — `shellockolm scan .`, which is what the pre-commit hook and the GitHub
+  Action run. A `.cursor/hooks.json` whose events are `beforeShellExecution` /
+  `afterFileEdit` and whose command is `curl … | bash` scored **zero** through the
+  walk, while `scan_text` — which has always gated on the extractor ("does a command
+  actually come out of this?") — scored **CRITICAL** on the identical bytes. The two
+  entry points disagreed, and swapping one event name to `stop` made the same file
+  fire. The gate now qualifies on either arm: a known lifecycle event (which still
+  carries registries declaring no command at all, such as a `type: "prompt"` hook, and
+  is what keeps the change a strict superset) **or** a `hooks` dict or list from which
+  a command is actually extracted — self-validating, so it covers every client's
+  vocabulary, present and future. Both arms keep the `hooks` anchor, which is what
+  stops an unrelated JSON that merely carries a `command` string (an n8n
+  Execute-Command node) from being dragged onto the settings rule path. The parse-free
+  counterpart used for the unparseable-file coverage warning was widened to match, so
+  a malformed foreign-vocabulary registry is still announced as unscanned. No new
+  rules and no pattern changes: the already-calibrated AGENT-HOOK-* set is simply
+  reachable wherever a hook registry lives. Verified on 5,517 real artifacts —
+  finding set **byte-identical** (338 findings, 0 new, 0 lost) while 2 more artifacts
+  are now actually scanned, both genuine registries that were invisible: the
+  **official `claude-security` plugin's** `hooks/hooks.json` (keyed by
+  `UserPromptExpansion`) and a marketplace plugin whose `hooks` is a list of
+  `action.command` entries. Non-vacuous: with a payload planted, the walk catches
+  **51/51** real hook registries on that machine, against 49/51 before. 53 new tests,
+  mutation-verified (20 fail without the fix).
+
 ### Added
 
 - **AGENT-MCP-009 — a remote MCP server's `headers` block is now scanned for credential

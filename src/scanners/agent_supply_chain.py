@@ -3344,9 +3344,11 @@ class AgentSupplyChainScanner(BaseScanner):
                 is_mcp = self._json_declares_mcp_servers(text)
 
             # Same content route for the OTHER auto-executing registry: a `hooks` block
-            # keyed by real lifecycle events is a hook registry wherever it lives, so a
-            # plugin's hooks/hooks.json (or the custom name its plugin.json points at)
-            # gets the identical AGENT-HOOK-* coverage settings.json already had.
+            # that names a real lifecycle event OR yields an extractable command is a
+            # hook registry wherever it lives, so a plugin's hooks/hooks.json (or the
+            # custom name its plugin.json points at — or another client's event
+            # vocabulary entirely) gets the identical AGENT-HOOK-* coverage
+            # settings.json already had.
             # Deliberately not excluded by `is_mcp`: a file may declare both registries,
             # and the branch below runs both scans for exactly that case.
             names_hook_events = is_json and self._names_hook_events(text)
@@ -4149,7 +4151,7 @@ class AgentSupplyChainScanner(BaseScanner):
 
     @classmethod
     def _json_declares_hook_events(cls, text: str) -> bool:
-        """True when `text` parses as a config that DECLARES a Claude Code hook registry.
+        """True when `text` parses as a config that DECLARES an auto-running hook registry.
 
         The content route for auto-executing hook commands, mirroring
         `_json_declares_mcp_servers`. `SETTINGS_NAMES` only knows `settings.json` /
@@ -4159,9 +4161,35 @@ class AgentSupplyChainScanner(BaseScanner):
         and ZERO in the plugin hook file beside it, both in a cloned plugin repo AND
         in an installed plugin under `~/.claude/plugins/`.
 
-        Requires a top-level `hooks` DICT keyed by at least one real lifecycle event,
-        so an unrelated JSON that happens to carry a `hooks` key (a list, or a map of
-        arbitrary names) is not dragged onto the settings rule path.
+        A registry qualifies on EITHER of two arms, and the second is what keeps the
+        route from being an allow-list of names:
+
+          (1) VOCABULARY — a top-level `hooks` DICT keyed by a known Claude Code
+              lifecycle event. This arm carries registries that declare no command at
+              all (a `type: "prompt"` hook), which the extractor cannot see.
+          (2) EXTRACTOR — a top-level `hooks` dict OR LIST from which
+              `_iter_hook_commands` actually pulls a command string. Self-validating:
+              if a command can be extracted, the file auto-runs code, whatever the
+              client calls its events.
+
+        Arm (2) exists because arm (1) alone was a silent evasion of the WALK — the
+        primary path (`shellockolm scan .`, the pre-commit hook, the GitHub Action).
+        `_HOOK_EVENT_NAMES` is Claude Code's vocabulary, so a hook registry keyed by
+        ANY other client's events was classified by nothing and never scanned, while
+        `scan_text`'s `auto` mode — which has always gated on the extractor — flagged
+        the very same bytes. Confirmed on real content: an identical
+        `curl … | bash` in a `.cursor/hooks.json` keyed by `beforeShellExecution` /
+        `afterFileEdit` scored ZERO through the walk and CRITICAL through `scan_text`;
+        swapping one event name to `stop` (which happens to be in the set) made the
+        same file fire. Two genuine registries on this machine were invisible for
+        exactly this reason — the OFFICIAL `claude-security` plugin's
+        `hooks/hooks.json` (keyed by `UserPromptExpansion`) and a marketplace plugin
+        whose `hooks` is a LIST of `action.command` entries.
+
+        The `hooks` anchor is kept on BOTH arms deliberately: it is what stops an
+        unrelated JSON that merely carries a `command` string somewhere (an n8n
+        Execute-Command node, a task runner) from being dragged onto the settings
+        rule path.
         """
         if '"hooks"' not in text:
             return False  # cheap reject before paying for a parse
@@ -4172,9 +4200,13 @@ class AgentSupplyChainScanner(BaseScanner):
         if not isinstance(data, dict):
             return False
         hooks = data.get("hooks")
-        if not isinstance(hooks, dict):
-            return False
-        return any(str(k).strip().lower() in _HOOK_EVENT_NAMES for k in hooks)
+        if isinstance(hooks, dict) and any(
+            str(k).strip().lower() in _HOOK_EVENT_NAMES for k in hooks
+        ):
+            return True
+        if isinstance(hooks, (dict, list)) and cls._iter_hook_commands(hooks):
+            return True
+        return False
 
     @staticmethod
     def _names_hook_events(text: str) -> bool:
@@ -4185,10 +4217,17 @@ class AgentSupplyChainScanner(BaseScanner):
         that would have classified it dies with the parse, so this is how the walk still
         knows the file was NOT scanned (F11 — an unscanned artifact must never render
         as clean).
+
+        Mirrors both arms of its parsing counterpart at the text level — a known event
+        name, or a `command` key alongside the `hooks` key — so a malformed hook
+        registry keyed by another client's events is still announced as unscanned
+        rather than passing silently as clean.
         """
         if '"hooks"' not in text:
             return False
         lowered = text.lower()
+        if '"command"' in lowered:
+            return True
         return any(f'"{event}"' in lowered for event in _HOOK_EVENT_NAMES)
 
     def _plugin_root(self, fp: Path, dirname: str) -> Optional[Path]:
