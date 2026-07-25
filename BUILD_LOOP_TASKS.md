@@ -1636,7 +1636,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   from placeholder literals to plausible ones (the Discord/AWS/OpenAI fixtures were
   themselves docs-shaped). Full suite **2682 passed / 1 skipped** (was 2601, +81);
   `ruff check src` clean; configured `mypy` gate clean; self-scan gate 0 HIGH+ (exit 0).
-  _(commit PENDING)_
+  _(commit 39983e4)_
 
 - F20. [ ] **A plugin's root-level scripts are not bundle members** — F18 scopes to
   "an ancestor directory holds a SKILL.md", which covers skills and any plugin whose
