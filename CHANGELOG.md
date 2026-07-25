@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The out-of-band exfil check now reaches inside generated content.** The
+  unanalysable-line guard below is honest, but it left an evasion an attacker can aim
+  for: minify the payload and the `AGENT-SCRIPT-*` checks switch themselves off. The
+  guard is an argument about patterns that reason **across a line**, and it does not
+  apply to a pattern whose match is a single self-delimiting token — the same reason the
+  hardcoded-credential family was already exempt. `AGENT-SCRIPT-003` is exactly that
+  shape (`https://…<capture-host>`, bounded by whitespace or a quote, **zero** `[^\n]`
+  proximity windows), so it now runs on generated lines too; a test asserts that window
+  count, so a later edit that adds one to an exempt pattern fails instead of silently
+  widening the exemption. `AGENT-SCRIPT-001` (6 windows) and `AGENT-SCRIPT-002` (4) keep
+  the guard. Census over the real corpus first, as required: of the matches the guard
+  withholds, **AGENT-SCRIPT-003 has 0 and AGENT-SCRIPT-001 has 0, while AGENT-SCRIPT-002
+  has 34 across 9 files — all 34 false positives** in one plugin's vendored esbuild
+  output, which is the guard earning its keep. Measured outcome: **0 new findings across
+  all 1,804 real bundled/plugin scripts**, while a sink URL planted inside the real
+  generated line of each of the 65 files carrying one is caught in **65/65** (0/65
+  before). The coverage warning now derives the rules it names from the exemption set,
+  so it reports the gap that actually remains rather than a stale list of three.
+
 - **A Claude Code plugin's executable files are now scanned as bundle members.** The
   bundled-script site defined membership as "an ancestor directory holds a `SKILL.md`",
   which covers skills and any plugin whose scripts happen to sit inside a skill

@@ -1695,16 +1695,65 @@ each is a separate rule family with its own calibration burden. Ranked by severi
 
 ## Open follow-ups (surfaced by the F20 plugin-root pass, not yet worked)
 
-- F21. [ ] **A payload hidden inside generated content is announced, not detected** —
-  the `_UNREVIEWABLE_LINE_CHARS` guard is honest (F11: the gap is reported, never passed
-  as clean) but it is still a gap an attacker can aim for: minify the payload and the
-  three line-relative `AGENT-SCRIPT-*` rules withhold. The credential family already
-  reaches there because it matches a literal rather than a line, which is the hint at
-  the fix: a detection that does not depend on line structure — e.g. extracting the
-  string-literal table from a bundle and scanning THAT, or treating "ships build output
-  with no generating source in the bundle" as its own signal. Needs a census before
-  wiring, like F20: the benign base rate for vendored bundles in plugins is high (65
-  files on this machine's corpus), so any rule here must clear that bar first.
+- F21. [x] **A payload hidden inside generated content is announced, not detected** —
+  **the census the note demanded is what decided the shape of the fix, and it was
+  sharper than either option the note sketched.** Counting the matches
+  `_UNREVIEWABLE_LINE_CHARS` currently withholds across the real corpus (1,804
+  bundled/plugin scripts from `~/.claude` + `G:/skills`, 65 carrying a generated line):
+  **AGENT-SCRIPT-003 `0`, AGENT-SCRIPT-001 `0`, AGENT-SCRIPT-002 `34` across 9 files —
+  and all 34 are false positives**, one plugin's vendored esbuild output across nine
+  versions (`atob(` / `fromCharCode(` inside a minified percent-decoder landing within
+  the rule's own 80-char window of an unrelated `Function`, a `-EncodedCommand` help
+  string). So the guard is not one thing: it earns its keep on 002 and is **pure lost
+  coverage on 003**. No string-literal table needed — the note's own hint ("the
+  credential family already reaches there because it matches a literal rather than a
+  line") generalises into the actual principle: **the guard is an argument about
+  patterns that reason ACROSS a line, and it never applied to a pattern whose match is
+  one self-delimiting token.** `_HOOK_OOB_EXFIL` is mechanically that (an
+  `https?://…<sink-host>` match bounded by whitespace or a quote, with **zero**
+  `[^\n]{0,N}` proximity windows — so it matches identically on a 40-char line and a
+  70,000-char one, asserted as behaviour), while `_FETCH_EXEC` carries **6** such windows
+  and `_OBFUSCATED_EXEC` **4**. Hence a new `_SELF_DELIMITING_RULE_IDS` exemption, stated
+  as a property rather than a special case and enforced by an **anti-drift test on the
+  window count**, so adding a window to an exempt pattern fails the build instead of
+  silently making the exemption unsound. 001 measures 0 withheld matches too but **keeps
+  the guard on the mechanism**: its windows mean a 0 today is not a promise about
+  tomorrow's corpus — the guard is only dropped where the argument for it never held,
+  never merely where it currently costs nothing. `_note_unreviewable_lines` now **derives**
+  the rule list it names from that set instead of hardcoding three, because overstating
+  a coverage gap is still a wrong statement about what was scanned (F11 doctrine, applied
+  in the direction that flatters us). **Verified on real content, not fixtures: 0
+  AGENT-SCRIPT-003 findings across all 1,804 real scripts — byte-identical to before the
+  exemption — while a sink URL planted inside the genuine generated line of each of the
+  65 files is caught 65/65 (0/65 before).** Live CLI proof on a plugin that minifies a
+  `process.env` POST to webhook.site into a 48k-char `mcp-server.cjs`: **0 findings /
+  exit 0 at HEAD, 1 HIGH / exit 1 after**, with the warning correctly narrowing from
+  three rules to two. 17 new tests (`tests/test_generated_content_reach.py`: the
+  window-count anti-drift guard **and its non-vacuity counterpart**, length-independent
+  matching, the exempt⊆URL-shaped invariant, the gate's default/opt-out/comment-half/
+  no-op cases, scanner-level detection at 2.5k and 70k chars, the real-corpus 002 FP
+  shape as a regression guard, a benign vendored-bundle baseline, 001 staying withheld,
+  per-match coverage preservation, and the warning being derived rather than hardcoded).
+  Full suite **2731 passed / 1 skipped** (was 2714, +17); `ruff check src` clean;
+  configured `mypy` gate clean; self-scan gate 0 HIGH+ (exit 0). _(commit PENDING)_
+
+---
+
+## Open follow-ups (surfaced by the F21 generated-content pass, not yet worked)
+
+- F22. [ ] **Fetch-exec and obfuscated-exec are still blind inside generated content** —
+  F21 closed the third of the gap that could be closed on principle; the other two rules
+  are withheld on a measured basis (002) and a mechanical one (001), and the warning now
+  says so precisely. Closing them needs what F21 did NOT need: an actual re-tokenisation
+  of the generated line, because the failure is that `[^\n]{0,N}` means "one statement"
+  in source and "fifteen tokens" in minified code. The tractable version is to split a
+  generated line into statements (`;`/`}` at brace depth 0, respecting string literals)
+  and run the two rules per STATEMENT rather than per line — that restores the windows'
+  intended meaning without inventing a parser. The bar to clear is already measured and
+  specific: the 34 known false positives in this machine's corpus (`atob(`/
+  `fromCharCode(` near a minifier-adjacent `Function`; a `-EncodedCommand` help string)
+  must all stay suppressed, and a payload planted mid-bundle must be caught — F21's
+  0/65→65/65 harness is reusable as-is for the second half.
 
 ---
 

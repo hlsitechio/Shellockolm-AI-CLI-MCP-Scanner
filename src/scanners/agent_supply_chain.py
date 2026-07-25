@@ -2784,6 +2784,13 @@ _INERT_COMMENT_START = re.compile(r"^\s*(?:#|//|--|/\*|\*|::|REM\b|rem\b)")
 # The guard is applied PER MATCH, not per file, so a script with one long generated
 # line keeps full coverage on every other line of itself — the gate is only withheld
 # where it was never meaningful.
+#
+# It is also applied PER RULE (F21). The paragraphs above are an argument about
+# patterns that reason across a LINE, and it does not transfer to a pattern whose match
+# is a single self-delimiting token — see `_SELF_DELIMITING_RULE_IDS`. Withholding such
+# a rule here would be pure lost coverage: it buys no false-positive protection, while
+# "minify the payload" is exactly the evasion an attacker reaches for once the guard is
+# known.
 _UNREVIEWABLE_LINE_CHARS = 2000
 # A line that hands a STRING to an executor. Its presence cancels the inert-context
 # suppression below, because there the quoted text is precisely what gets run.
@@ -2796,7 +2803,8 @@ _LINE_EXECUTOR = re.compile(
 )
 
 
-def _is_inert_code_context(text: str, pos: int, quoted_is_inert: bool = True) -> bool:
+def _is_inert_code_context(text: str, pos: int, quoted_is_inert: bool = True,
+                           length_guard: bool = True) -> bool:
     """True when the match at ``pos`` is data the script never executes.
 
     A script is CODE, not prose, and the false positives a code file produces are
@@ -2826,18 +2834,21 @@ def _is_inert_code_context(text: str, pos: int, quoted_is_inert: bool = True) ->
     exists to catch. A comment is never executed in any of these languages, so that half
     still applies everywhere.
 
-    A match on a line at or beyond ``_UNREVIEWABLE_LINE_CHARS`` is treated as inert
-    unconditionally: that is generated content (a minified module, an embedded blob),
-    where none of the three tests below carry information — see the constant for the
-    measurement and the reasoning. Withholding a gate we cannot compute is the honest
-    outcome, and ``_has_unreviewable_line`` is what stops the withholding from being
-    silent.
+    A match on a line at or beyond ``_UNREVIEWABLE_LINE_CHARS`` is treated as inert:
+    that is generated content (a minified module, an embedded blob), where none of the
+    three tests below carry information — see the constant for the measurement and the
+    reasoning. Withholding a gate we cannot compute is the honest outcome, and
+    ``_has_unreviewable_line`` is what stops the withholding from being silent.
+
+    ``length_guard=False`` turns that last test off for a rule whose match cannot span a
+    line — see ``_SELF_DELIMITING_RULE_IDS`` for which rules qualify and why the guard's
+    argument does not reach them.
     """
     line_start = text.rfind("\n", 0, pos) + 1
     line_end = text.find("\n", pos)
     if line_end == -1:
         line_end = len(text)
-    if line_end - line_start >= _UNREVIEWABLE_LINE_CHARS:
+    if length_guard and line_end - line_start >= _UNREVIEWABLE_LINE_CHARS:
         return True
     line = text[line_start:line_end]
     if _LINE_EXECUTOR.search(line):
@@ -2912,6 +2923,31 @@ BUNDLED_SCRIPT_RULES: List[AgentRule] = [
 # `_is_inert_code_context` applies (a string literal is how every language writes a URL —
 # see that function). Keyed by id so the pairing is visible next to the rules themselves.
 _SCRIPT_URL_SHAPED_RULE_IDS: Set[str] = {"AGENT-SCRIPT-003"}
+# Rules exempt from `_UNREVIEWABLE_LINE_CHARS` — they still run on generated content
+# (F21). The guard's whole argument is that a pattern reasoning across a LINE loses its
+# meaning when the "line" is a whole minified module. A pattern whose match is ONE
+# self-delimiting token never reasoned across a line in the first place, so the argument
+# never applied to it — this is the same exemption the credential family already has in
+# `_scan_bundled_script`, stated as a property instead of a special case.
+#
+# `_HOOK_OOB_EXFIL` qualifies mechanically: `\bhttps?://[^\s"'`]*<sink-host>` is bounded
+# by whitespace or a quote, contains ZERO `[^\n]{0,N}` proximity windows, and therefore
+# matches identically on a 40-character line and a 70,000-character one. The other two
+# do not, and are not exempt: `_FETCH_EXEC` carries 6 such windows and `_OBFUSCATED_EXEC`
+# 4 — the exact mechanism by which `String.fromCharCode(parseInt(s,16))` in a minified
+# percent-decoder lands within 80 characters of an unrelated `Function`. A test asserts
+# this window count, so a later edit that adds a window to an exempt pattern fails rather
+# than silently unsoundly widening the exemption.
+#
+# MEASURED before wiring, as F21 required. Over the real corpus (1,804 bundled/plugin
+# scripts from ~/.claude + G:/skills, 65 of them carrying a generated line), the matches
+# the length guard currently withholds are: AGENT-SCRIPT-001 **0**, AGENT-SCRIPT-003
+# **0**, AGENT-SCRIPT-002 **34** across 9 files — every one of the 34 a false positive in
+# one plugin's vendored esbuild output (`atob(`/`fromCharCode(` near a minifier-adjacent
+# `Function`, a `-EncodedCommand` help string). So the guard earns its keep for 002 and
+# is pure lost coverage for 003; 001 measures 0 too but keeps the guard on the mechanism
+# above, because its windows mean a 0 today is not a promise about tomorrow's corpus.
+_SELF_DELIMITING_RULE_IDS: Set[str] = {"AGENT-SCRIPT-003"}
 
 # Pattern rules deliberately NOT applied to slash-command files. Command files are
 # model-facing prose like skills, but they carry dense legitimate imperative developer
@@ -3949,12 +3985,18 @@ class AgentSupplyChainScanner(BaseScanner):
         """Announce the bundled scripts that carry generated content the rules can't read.
 
         The bundled-script counterpart of :meth:`_note_unparseable_json`, and the same
-        doctrine (F11): the three AGENT-SCRIPT-* rules and the `_is_inert_code_context`
-        gate they share are all defined PER LINE, so a minified module or an embedded
-        blob on one enormous line is a region they cannot analyse — and an unanalysed
-        region must never render as an analysed-and-clean one. The rest of each file is
-        still fully covered (the guard is per match), so this reports a PARTIAL gap, not
-        a skipped file.
+        doctrine (F11): the line-relative AGENT-SCRIPT-* rules and the
+        `_is_inert_code_context` gate they share are defined PER LINE, so a minified
+        module or an embedded blob on one enormous line is a region they cannot analyse
+        — and an unanalysed region must never render as an analysed-and-clean one. The
+        rest of each file is still fully covered (the guard is per match), so this
+        reports a PARTIAL gap, not a skipped file.
+
+        The gap it names shrank at F21 and the text tracks that exactly: the rules still
+        withheld are derived from `_SELF_DELIMITING_RULE_IDS` rather than hardcoded, so
+        exempting another rule cannot leave this warning overstating the gap. Claiming
+        less coverage than you have is a smaller sin than claiming more, but it is still
+        a wrong statement about what was scanned.
 
         Emitted as ONE rolled-up warning rather than one per file, which is a coverage
         decision, not a cosmetic one: a single real plugin vendoring its build output
@@ -3972,14 +4014,20 @@ class AgentSupplyChainScanner(BaseScanner):
         more = len(worst) - cls._MAX_LISTED_UNREVIEWABLE
         if more > 0:
             shown += f", and {more} more"
+        withheld = ", ".join(sorted(
+            rule.id for rule in BUNDLED_SCRIPT_RULES
+            if rule.id not in _SELF_DELIMITING_RULE_IDS
+        ))
+        reached = ", ".join(sorted(_SELF_DELIMITING_RULE_IDS))
         result.warnings.append(
             f"{len(worst)} bundled script(s) carry generated content — a minified bundle "
             "or an embedded blob on one enormous line, not reviewable source. The "
-            "auto-exec checks (AGENT-SCRIPT-001, AGENT-SCRIPT-002, AGENT-SCRIPT-003) are "
-            "line-relative, so they were NOT applied on that content and a clean result "
-            "for it means UNSCANNED, not safe; the rest of each file was scanned "
-            "normally, and the hardcoded-credential checks ran everywhere. Review the "
-            f"generating source rather than the build artifact. Longest: {shown}."
+            f"line-relative auto-exec checks ({withheld}) were NOT applied on that "
+            "content, so a clean result for it means UNSCANNED, not safe; the rest of "
+            f"each file was scanned normally, and the checks that match a single "
+            f"self-delimiting literal ({reached}, plus the hardcoded-credential checks) "
+            "ran everywhere. Review the generating source rather than the build "
+            f"artifact. Longest: {shown}."
         )
 
     def _note_text_parse_gap(self, result: ScanResult, fp: Path, artifact: str,
@@ -4507,20 +4555,25 @@ class AgentSupplyChainScanner(BaseScanner):
         measured on the real corpus and which rules it kept out.
 
         A generated region (a minified module, an embedded blob) is where that gate
-        stops meaning anything, so `_is_inert_code_context` withholds these three rules
-        there and `_note_unreviewable_lines` announces the gap. The credential family
-        below is deliberately NOT withheld — it is a signature match on a literal, so it
-        does not depend on line structure, and a key pasted into a build artifact is
-        exactly as leaked as one in the source.
+        stops meaning anything, so `_is_inert_code_context` withholds the LINE-RELATIVE
+        rules there and `_note_unreviewable_lines` announces the gap. Two families are
+        deliberately NOT withheld, on one principle: a match that is a single
+        self-delimiting literal does not depend on line structure, so nothing about it
+        changes when the line is a whole minified module. That covers the credential
+        family below (a key pasted into a build artifact is exactly as leaked as one in
+        the source) and, since F21, `_SELF_DELIMITING_RULE_IDS` — otherwise "minify the
+        payload" is a published way to switch the out-of-band sink check off.
         """
         findings: List[ScanFinding] = []
         for rule in BUNDLED_SCRIPT_RULES:
             if rule.pattern is None:
                 continue
             quoted_is_inert = rule.id not in _SCRIPT_URL_SHAPED_RULE_IDS
+            length_guard = rule.id not in _SELF_DELIMITING_RULE_IDS
             match = next(
                 (m for m in rule.pattern.finditer(text)
-                 if not _is_inert_code_context(text, m.start(), quoted_is_inert)),
+                 if not _is_inert_code_context(text, m.start(), quoted_is_inert,
+                                               length_guard)),
                 None,
             )
             if match is None:
