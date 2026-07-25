@@ -1518,7 +1518,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   **mutation-verified: 23 of the 35 fail without the wiring**, and the 12 that pass are
   the regression guards. Full suite **2554 passed / 1 skipped** (was 2519, +35);
   `ruff check src` clean; `mypy` clean; self-scan gate still 0 HIGH+ (52 items, exit 0).
-  _(commit COMMIT_HASH)_
+  _(commit a0b62a7)_
 
 ---
 
