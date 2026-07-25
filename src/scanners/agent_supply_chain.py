@@ -17,9 +17,10 @@ Artifacts covered:
   - Slash commands: .claude/commands/**/*.md (prompt files the agent runs on demand)
   - Subagents:      .claude/agents/**/*.md (the body becomes a delegated agent's system prompt)
   - Bundled scripts: the executable payload files a skill bundle ships beside its
-                    SKILL.md (scripts/*.sh, *.py, *.ps1, *.js, …) — progressive
-                    disclosure means the prose stays clean and the payload lives in
-                    the file the agent is told to run
+                    SKILL.md, and the ones a Claude Code PLUGIN ships at its root
+                    beside .claude-plugin/plugin.json (scripts/*.sh, *.py, *.ps1,
+                    *.js, hooks/*, …) — progressive disclosure means the prose stays
+                    clean and the payload lives in the file the agent is told to run
   - Settings:       .claude/settings.json / settings.local.json — every documented key
                     whose value is a shell command the agent auto-runs with no prompt
                     (`hooks` lifecycle events, plus `statusLine`, `apiKeyHelper`,
@@ -2751,6 +2752,39 @@ BUNDLED_SCRIPT_EXTENSIONS: Tuple[str, ...] = (
 # A comment opener at the start of a line, across every language the extensions above
 # cover (sh/py/rb/pl `#`, js `//` and `/* *`, sql-ish `--`, batch `::` / `REM`).
 _INERT_COMMENT_START = re.compile(r"^\s*(?:#|//|--|/\*|\*|::|REM\b|rem\b)")
+# Length past which a "line" is GENERATED content — a minified/bundled module, an
+# embedded blob — rather than a line of reviewable source, and every line-relative gate
+# in this module stops meaning anything on it.
+#
+# This is not an aesthetic judgement about long lines; it is the precondition the whole
+# script rule set is built on. Three separate mechanisms are defined PER LINE:
+#
+#   * `_INERT_COMMENT_START` — a comment marker at line start. Minification strips
+#     every comment, so the test can never fire.
+#   * the quote-parity half of `_is_inert_code_context` — "an odd number of quotes
+#     precedes the match on its line". Over 60,000 characters of dense minified code
+#     the parity is a coin flip, not evidence.
+#   * `_LINE_EXECUTOR`, which CANCELS the suppression when the line hands a string to
+#     an executor. A whole bundled module on one line contains `exec`/`eval`/`spawn`
+#     somewhere with near-certainty, so the cancel fires unconditionally — which is
+#     precisely how a `curl … | sh` sitting inside a bundle's *help message* survived
+#     the gate on the real corpus.
+#
+# The rules' own proximity windows degrade the same way: `[^\n]{0,80}` is about one
+# statement in real source and about fifteen tokens in minified code, which is how
+# `String.fromCharCode(parseInt(s,16))` in a minified percent-decoder ends up 80
+# characters from an unrelated `Function` and reads as decode-then-eval.
+#
+# The bound is MEASURED, not guessed. Over the real corpus (3,151 bundled/plugin
+# scripts under the size cap, from ~/.claude + G:/skills) the longest line in a
+# hand-written script is 1,456 characters and the band [1500, 2000) is EMPTY; every
+# line at or above 2,000 is generated or embedded content (esbuild/webpack output at
+# 2,273-69,947 characters, one official plugin's 3,301-character embedded prompt JSON).
+#
+# The guard is applied PER MATCH, not per file, so a script with one long generated
+# line keeps full coverage on every other line of itself — the gate is only withheld
+# where it was never meaningful.
+_UNREVIEWABLE_LINE_CHARS = 2000
 # A line that hands a STRING to an executor. Its presence cancels the inert-context
 # suppression below, because there the quoted text is precisely what gets run.
 _LINE_EXECUTOR = re.compile(
@@ -2791,11 +2825,20 @@ def _is_inert_code_context(text: str, pos: int, quoted_is_inert: bool = True) ->
     ``urlopen(\"https://webhook.site/…\")`` — the single most likely form of the exfil it
     exists to catch. A comment is never executed in any of these languages, so that half
     still applies everywhere.
+
+    A match on a line at or beyond ``_UNREVIEWABLE_LINE_CHARS`` is treated as inert
+    unconditionally: that is generated content (a minified module, an embedded blob),
+    where none of the three tests below carry information — see the constant for the
+    measurement and the reasoning. Withholding a gate we cannot compute is the honest
+    outcome, and ``_has_unreviewable_line`` is what stops the withholding from being
+    silent.
     """
     line_start = text.rfind("\n", 0, pos) + 1
     line_end = text.find("\n", pos)
     if line_end == -1:
         line_end = len(text)
+    if line_end - line_start >= _UNREVIEWABLE_LINE_CHARS:
+        return True
     line = text[line_start:line_end]
     if _LINE_EXECUTOR.search(line):
         return False
@@ -2805,6 +2848,20 @@ def _is_inert_code_context(text: str, pos: int, quoted_is_inert: bool = True) ->
         return False
     prefix = text[line_start:pos]
     return any(prefix.count(quote) % 2 == 1 for quote in ("'", '"', "`"))
+
+
+def _has_unreviewable_line(text: str) -> int:
+    """Length of the longest generated line in ``text``, or 0 if there is none.
+
+    The reporting half of the guard in :func:`_is_inert_code_context`. A script that
+    ships a minified module or an embedded blob is analysed everywhere except on that
+    content, and the F11 doctrine that governs the JSON coverage warnings applies
+    verbatim here: a region the scanner could not analyse must never render as a region
+    it analysed and found clean. Returns the length rather than a bool so the warning
+    can quote the number the reader needs to recognise the file.
+    """
+    longest = max((len(line) for line in text.split("\n")), default=0)
+    return longest if longest >= _UNREVIEWABLE_LINE_CHARS else 0
 
 
 SCRIPT_FETCH_EXEC_RULE = AgentRule(
@@ -3493,6 +3550,9 @@ class AgentSupplyChainScanner(BaseScanner):
     # Same idea for the coverage-warning channel: a tree carrying hundreds of
     # unparseable configs must announce the gap without burying the findings.
     MAX_RECORDED_WARNINGS = 50
+    # How many generated-content scripts the rolled-up warning names before it says
+    # "and N more". The COUNT is always exact; this only bounds the path list.
+    _MAX_LISTED_UNREVIEWABLE = 5
     # AGENT-OBF-002 blob detection. Two shapes, one budget.
     #   * contiguous — the blob sits on one line. The alphabet covers standard base64
     #     (`+/`) AND base64url (`-_`), which every JS `btoa`-adjacent and JWT-adjacent
@@ -3610,6 +3670,9 @@ class AgentSupplyChainScanner(BaseScanner):
         bundled_scripts = 0
         examined = 0
         timed_out = False
+        # (path, longest line) for every bundled script carrying generated content.
+        # Accumulated across the walk and reported ONCE — see _note_unreviewable_lines.
+        unreviewable: List[Tuple[Path, int]] = []
         for fp in targets:
             if deadline is not None and time.monotonic() > deadline:
                 timed_out = True
@@ -3627,8 +3690,8 @@ class AgentSupplyChainScanner(BaseScanner):
             is_subagent = self._is_subagent_file(fp) or self._is_plugin_subagent_file(fp)
             is_settings = name in self.SETTINGS_NAMES and self._under_claude(fp)
             is_json = name.endswith(".json")
-            # An executable payload a skill bundle ships. Checked last and only for the
-            # script extensions, so it never competes with a name-based route above.
+            # An executable payload a skill bundle or a plugin ships. Checked last and
+            # only for the script extensions, so it never competes with a name route.
             is_bundled_script = self._is_bundled_script(fp)
             if not (is_skill or is_mcp or is_instr or is_command or is_subagent
                     or is_json or is_bundled_script):
@@ -3739,6 +3802,9 @@ class AgentSupplyChainScanner(BaseScanner):
                     self._note_unparseable_json(result, fp, "n8n-workflow", parse_reason)
             elif is_bundled_script:
                 bundled_scripts += 1
+                longest_line = _has_unreviewable_line(text)
+                if longest_line:
+                    unreviewable.append((fp, longest_line))
                 result.findings.extend(self._scan_bundled_script(fp, text))
             elif parse_reason is not None and (lost_mcp_route or lost_hooks_route):
                 # The sharpest case: the file reached NO scan path at all, because the
@@ -3751,6 +3817,8 @@ class AgentSupplyChainScanner(BaseScanner):
                 if lost_hooks_route:
                     self._note_unparseable_json(result, fp, "claude-settings", parse_reason,
                                                 routed=False)
+
+        self._note_unreviewable_lines(result, unreviewable)
 
         if timed_out:
             result.warnings.append(
@@ -3873,6 +3941,45 @@ class AgentSupplyChainScanner(BaseScanner):
             "some agent clients accept comments / trailing commas that strict JSON "
             "rejects, so a config in that superset runs for them but is invisible "
             "here. Fix the syntax and re-scan."
+        )
+
+    @classmethod
+    def _note_unreviewable_lines(cls, result: ScanResult,
+                                 scripts: List[Tuple[Path, int]]) -> None:
+        """Announce the bundled scripts that carry generated content the rules can't read.
+
+        The bundled-script counterpart of :meth:`_note_unparseable_json`, and the same
+        doctrine (F11): the three AGENT-SCRIPT-* rules and the `_is_inert_code_context`
+        gate they share are all defined PER LINE, so a minified module or an embedded
+        blob on one enormous line is a region they cannot analyse — and an unanalysed
+        region must never render as an analysed-and-clean one. The rest of each file is
+        still fully covered (the guard is per match), so this reports a PARTIAL gap, not
+        a skipped file.
+
+        Emitted as ONE rolled-up warning rather than one per file, which is a coverage
+        decision, not a cosmetic one: a single real plugin vendoring its build output
+        across a few versions contributes 65 such files on this machine's corpus, enough
+        to fill `MAX_RECORDED_WARNINGS` on its own and silently push out the
+        unparseable-JSON warnings — the other half of the same doctrine. The count is
+        always exact; the paths are the worst offenders by line length, so the file most
+        worth reviewing is never the one that got truncated away.
+        """
+        if not scripts or len(result.warnings) >= cls.MAX_RECORDED_WARNINGS:
+            return
+        worst = sorted(scripts, key=lambda item: item[1], reverse=True)
+        shown = ", ".join(f"{fp} ({longest:,} chars)"
+                          for fp, longest in worst[:cls._MAX_LISTED_UNREVIEWABLE])
+        more = len(worst) - cls._MAX_LISTED_UNREVIEWABLE
+        if more > 0:
+            shown += f", and {more} more"
+        result.warnings.append(
+            f"{len(worst)} bundled script(s) carry generated content — a minified bundle "
+            "or an embedded blob on one enormous line, not reviewable source. The "
+            "auto-exec checks (AGENT-SCRIPT-001, AGENT-SCRIPT-002, AGENT-SCRIPT-003) are "
+            "line-relative, so they were NOT applied on that content and a clean result "
+            "for it means UNSCANNED, not safe; the rest of each file was scanned "
+            "normally, and the hardcoded-credential checks ran everywhere. Review the "
+            f"generating source rather than the build artifact. Longest: {shown}."
         )
 
     def _note_text_parse_gap(self, result: ScanResult, fp: Path, artifact: str,
@@ -4321,15 +4428,26 @@ class AgentSupplyChainScanner(BaseScanner):
         yield from rec(root, 0)
 
     def _is_bundled_script(self, fp: Path) -> bool:
-        """An executable payload file shipped inside a skill bundle.
+        """An executable payload file a skill bundle or a PLUGIN ships.
 
         A skill bundle is the directory that holds a `SKILL.md`; the documented format
         puts companion payloads beside it (`scripts/setup.sh`, `scripts/process.py`),
-        and the prose tells the agent to run them. Membership is therefore "an ancestor
-        directory contains a SKILL.md", checked for the file's own directory and up to
-        `_MAX_BUNDLE_ANCESTORS` levels above it — deep enough for the real layouts
-        (`<bundle>/scripts/`, `<bundle>/reference/scripts/`) without turning a stray
-        script anywhere in a repo into a bundle member.
+        and the prose tells the agent to run them. A Claude Code PLUGIN is the second
+        shape of the same thing: it ships executables at the PLUGIN root — beside
+        `.claude-plugin/plugin.json`, in `scripts/` or `hooks/` — referenced by its
+        commands, agents and hook registry rather than by a SKILL.md. Same trust model
+        (the code arrives with the artifact and is never separately vetted), so the same
+        membership, on the same terms as `_is_plugin_command_file`/`_is_plugin_subagent_file`:
+        the official marker is what makes a directory a plugin, so an ordinary repo's
+        `scripts/` is still never treated as agent content.
+
+        Membership is therefore "an ancestor directory holds a SKILL.md, or is a plugin
+        root", checked for the file's own directory and up to `_MAX_BUNDLE_ANCESTORS`
+        levels above it — deep enough for the real layouts (`<bundle>/scripts/`,
+        `<bundle>/reference/scripts/`, `<plugin>/hooks/`) without turning a stray script
+        anywhere in a repo into a bundle member. Census over the real corpus: 479 plugin
+        roots carry 368 scripts (under the size cap) that no SKILL.md ancestor claimed,
+        so this is the difference between scanning a plugin's executables and not.
 
         The extension test runs FIRST and is a set lookup, so the ancestor stats happen
         only for the handful of candidate files, and the per-directory answer is cached
@@ -4351,13 +4469,34 @@ class AgentSupplyChainScanner(BaseScanner):
                 self._skill_bundle_cache[key] = cached
             if cached:
                 return True
+            if self._is_plugin_root(parent):
+                return True
             if parent.parent == parent:
                 break
             parent = parent.parent
         return False
 
+    def _is_plugin_root(self, directory: Path) -> bool:
+        """True when `directory` carries the Claude Code plugin marker.
+
+        The directory-keyed form of the probe `_plugin_root` runs per path segment,
+        sharing its `_plugin_root_cache` so a plugin whose commands and scripts are both
+        walked pays for one stat. Split out because bundle membership asks about an
+        ancestor CHAIN, while `_plugin_root` asks about a NAMED segment
+        (`<root>/commands/…`) — the same question from two directions.
+        """
+        key = str(directory).lower()
+        cached = self._plugin_root_cache.get(key)
+        if cached is None:
+            try:
+                cached = (directory / _PLUGIN_MARKER_DIR / _PLUGIN_MANIFEST).is_file()
+            except (OSError, ValueError):
+                cached = False
+            self._plugin_root_cache[key] = cached
+        return cached
+
     def _scan_bundled_script(self, fp: Path, text: str) -> List[ScanFinding]:
-        """Scan one executable file a skill bundle ships (AGENT-SCRIPT-001/002/003).
+        """Scan one executable file a skill bundle or plugin ships (AGENT-SCRIPT-001/002/003).
 
         Deliberately NOT the prose path: a script is code, so the natural-language
         heuristics that keep skills honest would misread its comments and strings.
@@ -4366,6 +4505,13 @@ class AgentSupplyChainScanner(BaseScanner):
         detection regex, a grep pattern, an echoed message — is not mistaken for the
         payload. See the census beside `BUNDLED_SCRIPT_RULES` for what that
         measured on the real corpus and which rules it kept out.
+
+        A generated region (a minified module, an embedded blob) is where that gate
+        stops meaning anything, so `_is_inert_code_context` withholds these three rules
+        there and `_note_unreviewable_lines` announces the gap. The credential family
+        below is deliberately NOT withheld — it is a signature match on a literal, so it
+        does not depend on line structure, and a key pasted into a build artifact is
+        exactly as leaked as one in the source.
         """
         findings: List[ScanFinding] = []
         for rule in BUNDLED_SCRIPT_RULES:
@@ -4649,15 +4795,7 @@ class AgentSupplyChainScanner(BaseScanner):
             if part != dirname or idx == 0:
                 continue
             root = Path(*fp.parts[:idx])
-            key = str(root).lower()
-            cached = self._plugin_root_cache.get(key)
-            if cached is None:
-                try:
-                    cached = (root / _PLUGIN_MARKER_DIR / _PLUGIN_MANIFEST).is_file()
-                except OSError:
-                    cached = False
-                self._plugin_root_cache[key] = cached
-            if cached:
+            if self._is_plugin_root(root):
                 return root
         return None
 

@@ -246,7 +246,7 @@ Traditional scanners check *your dependencies*. The **agent scanner** checks the
 - **Slash commands** — `.claude/commands/**/*.md` (the prompt files an agent runs on demand)
 - **Subagents** — `.claude/agents/**/*.md` (the body becomes a delegated agent's system prompt)
 - **Settings** — `.claude/settings.json` / `settings.local.json`: `hooks` blocks (shell commands the agent auto-runs on lifecycle events) and the `permissions` block (a blanket grant that turns off the per-call confirmation prompt)
-- **Bundled scripts** — the executable payload files a skill ships beside its `SKILL.md` (`scripts/*.sh`, `*.py`, `*.ps1`, `*.js`, …). Skills use *progressive disclosure*, so the prose you review can be clean while the payload sits in the file that prose tells the agent to run
+- **Bundled scripts** — the executable payload files a skill ships beside its `SKILL.md`, and the ones a Claude Code **plugin** ships at its root beside `.claude-plugin/plugin.json` (`scripts/*.sh`, `hooks/*.py`, `*.ps1`, `*.js`, …). Skills use *progressive disclosure*, so the prose you review can be clean while the payload sits in the file that prose tells the agent to run; a plugin's executables are referenced by its commands, agents and hook registry the same way. Generated content (a minified bundle, an embedded blob) is reported as **partially scanned**, never silently passed as clean
 
 Detections: prompt injection / instruction override, hidden conditional triggers, **secret-exfiltration
 instructions**, tool poisoning / remote-script execution, **rug-pull (unpinned) MCP servers**,

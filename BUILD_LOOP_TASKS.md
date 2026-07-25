@@ -1638,14 +1638,73 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   `ruff check src` clean; configured `mypy` gate clean; self-scan gate 0 HIGH+ (exit 0).
   _(commit 39983e4)_
 
-- F20. [ ] **A plugin's root-level scripts are not bundle members** — F18 scopes to
-  "an ancestor directory holds a SKILL.md", which covers skills and any plugin whose
-  scripts sit inside a skill directory, but a Claude Code plugin can ship executables at
-  the PLUGIN root (beside `plugin.json`, referenced by its commands/agents rather than a
-  SKILL.md). The plugin-marker probe already exists (`_is_plugin_command_file` /
-  `_plugin_root_cache`), so widening membership is small — but it is a different corpus
-  and needs its own census before wiring, since plugin roots carry build tooling that a
-  skill's `scripts/` does not.
+- F20. [x] **A plugin's root-level scripts are not bundle members** — bundle membership
+  now also accepts a **plugin root**, on the same terms as `_is_plugin_command_file` /
+  `_is_plugin_subagent_file`: the official `.claude-plugin/plugin.json` marker is what
+  makes a directory a plugin, so an ordinary repo's `scripts/` is still never treated as
+  agent content, and the `_MAX_BUNDLE_ANCESTORS` bound is unchanged. `_plugin_root`'s
+  per-segment probe was split into a directory-keyed `_is_plugin_root` so the ancestor-
+  chain question and the named-segment question share one cache and one stat per plugin.
+  **Census first, as the note demanded — and it was the census that decided the shape of
+  the change.** 479 plugin roots carry 1,115 candidate scripts, 717 already members and
+  **368 not** (under the size cap). Wiring membership ALONE was not shippable: scoring
+  the three `AGENT-SCRIPT-*` rules over those 368 files produced **9 findings, all 9
+  false positives**, every one on a line of **52,272–69,947 characters** inside one
+  plugin's vendored esbuild output. The mechanism is a property of the rule set, not of
+  that plugin: **every gate here is defined PER LINE and minification destroys lines** —
+  `_INERT_COMMENT_START` can never fire (minifiers strip comments), quote parity over
+  60k characters of dense code is a coin flip, `_LINE_EXECUTOR` finds an `exec`/`eval`
+  somewhere on a whole-module line and so CANCELS the suppression unconditionally (which
+  is exactly how a `curl -LsSf … | sh` sitting in a bundled *help message string*
+  survived the gate), and the rules' own `[^\n]{0,80}` proximity window is one statement
+  in real source but fifteen tokens in minified code (how `String.fromCharCode(
+  parseInt(s,16))` in a percent-decoder lands 80 chars from an unrelated `Function` and
+  reads as decode-then-eval). So the widening ships with `_UNREVIEWABLE_LINE_CHARS`:
+  a match on a line ≥ 2,000 chars is unanalysable. **The bound is measured, not
+  guessed** — across 3,151 real bundled/plugin scripts the longest hand-written line is
+  1,456 and the band **[1500, 2000) is EMPTY**; every line ≥ 2,000 is generated or
+  embedded content (esbuild output at 2,273–69,947, one official plugin's 3,301-char
+  embedded prompt JSON). Applied **PER MATCH**, not per file, so a script with one
+  embedded blob keeps full coverage on every other line of itself; the credential family
+  is deliberately **exempt** (a signature match on a literal does not depend on line
+  structure, and a key in a build artifact is exactly as leaked as one in source —
+  asserted, redaction included). The withheld coverage is announced per F11 in ONE
+  rolled-up warning naming the worst offenders by line length: a per-file warning
+  saturated `MAX_RECORDED_WARNINGS` on the real corpus (50/50) and silently pushed out
+  the unparseable-JSON warnings — the other half of the same doctrine — so the roll-up
+  is a coverage decision, not cosmetics (real corpus: 50 warnings → 1, naming exactly 65
+  files). **Verified end-to-end against a pre-change baseline of the real corpus
+  (`~/.claude` + `G:/skills`): 308 → 308 findings, byte-identical, 0 gained, 0 lost,
+  while `bundled_scripts_scanned` goes 1,437 → 1,804 (+367).** Strict no-op at the
+  existing site by construction and by measurement (0 of 2,783 skill-bundle scripts
+  carry a ≥2,000-char line; the site's one true positive, a genuine
+  `curl -fsSL https://bun.sh/install | bash` at line length 53, is kept). Non-vacuity
+  measured on real content: a payload planted on its own line is caught in **368/368** of
+  the newly reachable files, minified ones included. Live CLI proof on a plugin whose
+  `scripts/deploy.sh` is a cradle: **0 findings at HEAD, 1 HIGH + exit 1 after**. 32 new
+  tests (`tests/test_plugin_bundle_scripts.py` — plugin membership across scripts/hooks/
+  root and every extension, the marker-required and ancestor-bound anti-over-reach
+  cases, the two real-corpus FP shapes as regression guards, guard unit tests incl. the
+  inclusive boundary and the no-trailing-newline case, the executor-cancel mechanism,
+  per-match coverage preservation, credential exemption + redaction, warning roll-up /
+  ordering / cap, and a strict-no-op guard for the skill-bundle site). Full suite **2714
+  passed / 1 skipped** (was 2682, +32); `ruff check src` clean; configured `mypy` gate
+  clean; self-scan gate 0 HIGH+ (exit 0). _(commit PENDING)_
+
+---
+
+## Open follow-ups (surfaced by the F20 plugin-root pass, not yet worked)
+
+- F21. [ ] **A payload hidden inside generated content is announced, not detected** —
+  the `_UNREVIEWABLE_LINE_CHARS` guard is honest (F11: the gap is reported, never passed
+  as clean) but it is still a gap an attacker can aim for: minify the payload and the
+  three line-relative `AGENT-SCRIPT-*` rules withhold. The credential family already
+  reaches there because it matches a literal rather than a line, which is the hint at
+  the fix: a detection that does not depend on line structure — e.g. extracting the
+  string-literal table from a bundle and scanning THAT, or treating "ships build output
+  with no generating source in the bundle" as its own signal. Needs a census before
+  wiring, like F20: the benign base rate for vendored bundles in plugins is high (65
+  files on this machine's corpus), so any rule here must clear that bar first.
 
 ---
 

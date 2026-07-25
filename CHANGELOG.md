@@ -9,7 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A Claude Code plugin's executable files are now scanned as bundle members.** The
+  bundled-script site defined membership as "an ancestor directory holds a `SKILL.md`",
+  which covers skills and any plugin whose scripts happen to sit inside a skill
+  directory — but a plugin ships executables at the **plugin root**, beside
+  `.claude-plugin/plugin.json`, referenced by its commands, agents and hook registry
+  rather than by a `SKILL.md`. Those files reached no scan path at all, the same class
+  of hole already closed for a plugin's prose artifacts. Membership now also accepts a
+  plugin root, on the same terms: the official marker is what makes a directory a
+  plugin, so an ordinary repo's `scripts/` is still never treated as agent content, and
+  the ancestor bound is unchanged. Census over the real corpus: **479 plugin roots
+  carrying 368 scripts** (under the size cap) that no `SKILL.md` ancestor claimed;
+  `bundled_scripts_scanned` goes from 1,437 to 1,804 on that corpus.
+
 ### Fixed
+
+- **Generated content is no longer read as if it were source.** Every gate in the
+  bundled-script rule set is defined **per line** — the comment marker, the quote-parity
+  half of the inert-context test, the executor cancel, and the rules' own `[^\n]{0,80}`
+  proximity windows — and minification destroys lines. Scoring the `AGENT-SCRIPT-*`
+  rules over the newly reachable plugin scripts produced **9 findings, all 9 false
+  positives**, every one on a line of 52,272–69,947 characters inside one plugin's
+  vendored esbuild output: a `curl … | sh` sitting in a bundled *help message* (the
+  executor cancel fires unconditionally when a whole module is on one line), and
+  `String.fromCharCode(parseInt(s,16))` in a minified percent-decoder landing 80
+  characters from an unrelated `Function`. A match on a line at or beyond 2,000
+  characters is now treated as unanalysable. The bound is measured: across 3,151 real
+  bundled/plugin scripts the longest hand-written line is 1,456 characters and the band
+  [1500, 2000) is **empty**, so it is a strict no-op at the existing skill-bundle site
+  (0 of 2,783 files there carry such a line). The guard is applied **per match**, so a
+  script with one embedded blob keeps full coverage on every other line of itself, and
+  the hardcoded-credential family is deliberately exempt — it matches a literal, not a
+  line, and a key in a build artifact is exactly as leaked as one in the source. The
+  withheld coverage is announced in one rolled-up warning naming the worst offenders
+  (F11: an unanalysed region must never render as analysed-and-clean), rather than one
+  warning per file, which on the real corpus filled the 50-warning cap by itself and
+  pushed out the unparseable-JSON warnings. End-to-end the change is **0 findings gained
+  and 0 lost** on the real corpus (308 → 308, byte-identical), and non-vacuous: a payload
+  planted on its own line is caught in **368/368** of the newly reachable files.
 
 - **`AGENT-SECRET-001` was wrong on every real artifact it fired on.** Measured over the
   full real corpus on the development machine (`~/.claude` + `G:/skills`, 5,000+ agent
