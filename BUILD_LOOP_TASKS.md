@@ -1341,7 +1341,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   the new site being a correct sixth use). RULES.md + THREAT_MODEL.md regenerated
   (new `runtime-hijack` threat-class narrative). Full suite **2406 passed / 1 skipped**
   (was 2306, +100); `ruff check src` clean; `mypy` clean (11 files); self-scan gate
-  still 0 HIGH+ (52 items, exit 0); drift `--check` green for both docs. _(commit )_
+  still 0 HIGH+ (52 items, exit 0); drift `--check` green for both docs. _(commit a9fb99a)_
 
 ---
 
