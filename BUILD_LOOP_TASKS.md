@@ -1689,7 +1689,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   per-match coverage preservation, credential exemption + redaction, warning roll-up /
   ordering / cap, and a strict-no-op guard for the skill-bundle site). Full suite **2714
   passed / 1 skipped** (was 2682, +32); `ruff check src` clean; configured `mypy` gate
-  clean; self-scan gate 0 HIGH+ (exit 0). _(commit PENDING)_
+  clean; self-scan gate 0 HIGH+ (exit 0). _(commit 9c5dff0)_
 
 ---
 
