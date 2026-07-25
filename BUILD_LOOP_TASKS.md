@@ -1464,7 +1464,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   because scoping it by path would hand an attacker a one-directory evasion. Full suite
   **2519 passed / 1 skipped** (was 2464); `ruff check src` clean; `mypy` clean;
   self-scan gate still 0 HIGH+ (52 items, exit 0); RULES.md / THREAT_MODEL.md drift
-  green (no rule metadata changed). _(commit PENDING)_
+  green (no rule metadata changed). _(commit 22561f6)_
 
 - F17. [ ] **The credential-exfil rule family reaches the MCP launch path but NOT the
   settings auto-exec command site** — surfaced by the C21 bug-hunt (a differential
