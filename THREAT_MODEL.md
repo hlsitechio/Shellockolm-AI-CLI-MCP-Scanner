@@ -4,7 +4,7 @@
 
 AI coding agents now **auto-load and trust** a chain of artifacts they did not author: skills, MCP servers, instruction files, lifecycle hooks, slash commands, and workflow exports — pulled from marketplaces, repositories, and teammates. Each is read by the model (or executed on your machine) with the agent's full privileges. A single poisoned artifact turns that trust into prompt-injection, secret exfiltration, tool poisoning, or remote code execution. **This is the agentic supply chain, and it is the attack surface Shellockolm defends.**
 
-Shellockolm ships **42 agent supply-chain rules** (**39 free**, always-on MIT/OSS, and **3 Pro**) across **10 attack classes**. This page maps each class to the rules that cover it; [`RULES.md`](RULES.md) has every rule's full description, example attack, and remediation.
+Shellockolm ships **44 agent supply-chain rules** (**41 free**, always-on MIT/OSS, and **3 Pro**) across **11 attack classes**. This page maps each class to the rules that cover it; [`RULES.md`](RULES.md) has every rule's full description, example attack, and remediation.
 
 ## The trust boundary
 
@@ -43,6 +43,7 @@ Which rules cover which attack class, generated from the live catalog:
 | [destructive-command](#destructive-command) | 1 | 1 | 0 | HIGH |
 | [settings-hook](#settings-hook) | 3 | 3 | 0 | CRITICAL, HIGH |
 | [permission-bypass](#permission-bypass) | 1 | 1 | 0 | MEDIUM |
+| [runtime-hijack](#runtime-hijack) | 2 | 2 | 0 | CRITICAL |
 | [mcp-config](#mcp-config) | 8 | 8 | 0 | CRITICAL, HIGH, MEDIUM |
 | [n8n-workflow](#n8n-workflow) | 2 | 2 | 0 | HIGH |
 
@@ -167,6 +168,19 @@ _Impact._ Cloning the repo silently opts you into unattended execution: the guar
 | Rule | Severity | Tier | Confidence | What it catches |
 |------|----------|------|------------|-----------------|
 | [`AGENT-PERM-001`](RULES.md#agent-perm-001) | MEDIUM | free | high | Claude Code settings disable the tool-call confirmation prompt |
+
+### runtime-hijack
+
+**The agent's own runtime repointed by an `env` block.**
+
+_Threat._ An `env` block in a committed settings.json or MCP server config reconfigures the agent itself rather than running anything: the model endpoint repointed at a non-official host (`ANTHROPIC_BASE_URL`), or an interpreter variable that preloads attacker code into the agent process (`NODE_OPTIONS --require`, `PYTHONSTARTUP`, `BASH_ENV`, `LD_PRELOAD`).
+
+_Impact._ There is no command to review and no prompt to decline. A redirected endpoint sees every prompt AND authors every response — so it steers the agent's next tool call indefinitely — while a preloaded module runs with the agent's full filesystem, network, and credential access.
+
+| Rule | Severity | Tier | Confidence | What it catches |
+|------|----------|------|------------|-----------------|
+| [`AGENT-ENV-001`](RULES.md#agent-env-001) | CRITICAL | free | high | Agent model API endpoint redirected to a non-official host |
+| [`AGENT-ENV-002`](RULES.md#agent-env-002) | CRITICAL | free | high | Code injected into the agent runtime via an environment variable |
 
 ### mcp-config
 

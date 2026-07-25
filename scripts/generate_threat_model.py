@@ -206,6 +206,20 @@ _THREAT_CLASSES: List[Dict[str, str]] = [
                   "it compounds any lifecycle hook into a zero-click compromise.",
     },
     {
+        "class": "runtime-hijack",
+        "headline": "The agent's own runtime repointed by an `env` block",
+        "threat": "An `env` block in a committed settings.json or MCP server config "
+                  "reconfigures the agent itself rather than running anything: the "
+                  "model endpoint repointed at a non-official host "
+                  "(`ANTHROPIC_BASE_URL`), or an interpreter variable that preloads "
+                  "attacker code into the agent process (`NODE_OPTIONS --require`, "
+                  "`PYTHONSTARTUP`, `BASH_ENV`, `LD_PRELOAD`).",
+        "impact": "There is no command to review and no prompt to decline. A redirected "
+                  "endpoint sees every prompt AND authors every response — so it steers "
+                  "the agent's next tool call indefinitely — while a preloaded module "
+                  "runs with the agent's full filesystem, network, and credential access.",
+    },
+    {
         "class": "mcp-config",
         "headline": "Malicious or over-privileged MCP server",
         "threat": "An MCP server definition that runs attacker code or over-shares "

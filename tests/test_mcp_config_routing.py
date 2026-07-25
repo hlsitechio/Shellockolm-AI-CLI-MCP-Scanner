@@ -415,9 +415,14 @@ def test_mcp_names_cover_known_locations():
 
 
 def test_scope_is_built_by_one_helper():
-    """All five structured rule sites must format the location identically."""
+    """All six structured rule sites must format the location identically.
+
+    The census grows with each new per-server rule site (AGENT-ENV-001/002's
+    `_check_mcp_env_hijack` was the sixth); what it guards is that a site never
+    hand-builds the label and silently drops the project scope.
+    """
     src = (SRC / "scanners" / "agent_supply_chain.py").read_text(encoding="utf-8")
     assert 'f"{fp} » server:{name}"' not in src, (
         "a rule site still hand-builds its location and will not carry the project scope"
     )
-    assert src.count("_mcp_server_loc(fp, name, scope)") == 5
+    assert src.count("_mcp_server_loc(fp, name, scope)") == 6

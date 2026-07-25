@@ -9,6 +9,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **AGENT-ENV-001 / AGENT-ENV-002 — the `env` block is now scanned as a runtime-hijack
+  channel** (new `runtime-hijack` attack class; rule catalog 42 → 44, both free tier).
+  An agent config's `env` block reconfigures the **agent itself**, with no command to
+  review, no lifecycle hook to notice, and no permission prompt to decline — and every
+  existing rule looked somewhere else: the credential sweep matches secret *values*,
+  AGENT-MCP-004 matches a credential forwarded to the wrong *server*, and AGENT-HOOK-*
+  only reads keys holding a *command*. Confirmed live: a `.claude/settings.json` that
+  redirected all model traffic to an attacker relay **and** preloaded a module into the
+  agent's Node process scored **0 findings**, despite the file being scanned.
+  **AGENT-ENV-001** (CRITICAL) fires when a model-endpoint variable
+  (`ANTHROPIC_BASE_URL`, `ANTHROPIC_BEDROCK_BASE_URL`, `ANTHROPIC_VERTEX_BASE_URL`,
+  `OPENAI_BASE_URL`, …) points at a literal URL whose host is neither the vendor's own
+  endpoint nor a local/private dev address. The host then receives every prompt — plus
+  whatever files and secrets the agent read to build it — and **authors every response**,
+  and the response is what selects the agent's next tool call, so the redirect is a
+  persistent injection channel rather than passive eavesdropping. **AGENT-ENV-002**
+  (CRITICAL) fires on a variable that loads attacker code into the agent process before
+  its own entrypoint runs: `NODE_OPTIONS` carrying a module-loading flag
+  (`--require` / `-r` / `--import` / `--loader` / `--experimental-loader`),
+  `PYTHONSTARTUP`, `BASH_ENV`, `LD_PRELOAD`, `LD_AUDIT`, `DYLD_INSERT_LIBRARIES`. Both
+  run at **both** places an `env` block lives — a `.claude` settings file and each MCP
+  server's per-server `env` — through one shared verdict function, so an identical
+  payload cannot score differently depending on which block it is parked in.
+  Calibrated against real config, not against what sounds dangerous: a sweep of 4,708
+  JSON files on a live machine (54 with `env` blocks, 97 distinct keys) drove four
+  deliberate exclusions — `HTTP_PROXY`/`HTTPS_PROXY` (a published, legitimate
+  `corporate-proxy.json` template sets both), any key merely *containing* `BASE_URL`
+  (a real MCP config sets `CIRCLECI_BASE_URL=https://circleci.com`), the bare
+  `ANTHROPIC_` prefix (`ANTHROPIC_MODEL` / `ANTHROPIC_SMALL_FAST_MODEL` /
+  `ANTHROPIC_VERTEX_PROJECT_ID` / `ANTHROPIC_CUSTOM_HEADERS` are all legitimate), and
+  `PYTHONPATH` (a real template ships `PYTHONPATH: "."`; it shadows resolution but
+  loads nothing). `NODE_EXTRA_CA_CERTS` is excluded on the same grounds as the proxy
+  vars. **Zero-FP verified non-vacuously on real content:** the live scanner over
+  `~/.claude` + `G:/skills` (**5,517 scanned artifacts**) produces a finding set
+  **byte-identical before and after** — 338 findings, 0 new, 0 lost, identical
+  per-scanner stats — while the same real configs *with the payload planted in their
+  own env block* are caught **35/35** across every routed config that carries one.
+  100 new tests (`tests/test_env_runtime_hijack.py`), mutation-verified: reverting the
+  settings wiring fails 4, the MCP wiring 3, the redirect verdict 15, and the
+  NODE_OPTIONS gate 11. RULES.md + THREAT_MODEL.md regenerated.
+
 ### Changed
 
 - **Relicensed from MIT to the PolyForm Strict License 1.0.0 (source-available).**
