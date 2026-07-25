@@ -1343,6 +1343,71 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   (was 2306, +100); `ruff check src` clean; `mypy` clean (11 files); self-scan gate
   still 0 HIGH+ (52 items, exit 0); drift `--check` green for both docs. _(commit a9fb99a)_
 
+- C20. [x] **AGENT-MCP-009: a remote MCP server's `headers` block is scanned for
+  credential forwarding** — detection expansion closing the transport-shaped hole in
+  AGENT-MCP-004 (rule catalog **44 → 45**, **free** tier, HIGH, cvss 8.6).
+  AGENT-MCP-004 flags a broad ambient host credential forwarded to an unrelated server
+  through its `env` block, but a **remote** server has no `env` block at all: the
+  http / sse / streamable-http transports are configured with a `url` plus a `headers`
+  map the client attaches to every JSON-RPC request, and nothing scanned it. Confirmed
+  on disk before the fix — the identical two-credential payload scored **1
+  AGENT-MCP-004 finding in `env` and 0 in `headers`**, while `mcp_configs_scanned`
+  counted the file, so (as with C19) the route existed and simply carried no rule for
+  that block. The header channel is also the **worse** of the two: an `env` value is
+  handed to a process on the user's own machine, which must then choose to exfiltrate
+  it, whereas a header value is transmitted to the third-party host on *every request*
+  — the credential has already left the machine by the time anyone looks. Credential
+  identity reuses AGENT-MCP-004's `_MCP_SENSITIVE_ENV` map wholesale (a "broad ambient
+  credential" is a property of the credential, not of the channel, so one added at
+  either site is known at both), read from a `${VAR}`/`$VAR`/`${env:VAR}`
+  interpolation in the header value or from the header key; a **literal** secret
+  pasted into a header is deliberately left to the raw-text credential rules that
+  already run over the whole config, rather than double-reported.
+  **Service association is where the rule had to differ, and it is the entire
+  calibration:** a remote server has no command/args to associate against, so the
+  evidence is the transport URL — read as the **registrable** domain's leftmost label
+  (`_mcp_transport_domain_label`), with the service token required to sit in that
+  label at a **label boundary** (`_service_in_domain_label`). That distinction decides
+  two real cases in opposite directions: `https://api.githubcopilot.com/mcp/` carrying
+  a `${GITHUB_TOKEN}` is GitHub's OFFICIAL remote MCP server (it is in this machine's
+  real corpus) and is suppressed — note a delimited-token match, which is exactly what
+  AGENT-MCP-004 uses for command/args, does NOT match `github` inside `githubcopilot`,
+  so a naive port of that rule false-positives on the most common remote MCP server in
+  existence — while `https://github.evil.tld/mcp` with the same token still **fires**,
+  because a service name in a subdomain is free to claim and only the registrable
+  domain is honoured. An attacker wanting the suppression must register a domain whose
+  own name carries the service token, the same "it has to actually exist and a
+  reviewer can go verify it" argument AGENT-MCP-004 already makes for package
+  identifiers. command/args are still consulted (delimited-token) so a proxy launcher
+  naming the service is associated too; the server's free-text config `name` is
+  excluded per F10. An IP-literal host yields no label at all rather than a
+  meaningless numeric fragment.
+  **Zero-FP verified NON-VACUOUSLY on real content:** a census of **438 real MCP
+  servers across 104 real configs** found 9 carrying a `headers` block and **none is a
+  leak** — 4 hold a literal service token (no interpolation), 1 a `<YOUR_HF_TOKEN>`
+  placeholder, 1 a `${input:…}` client prompt, 2 app-scoped Datadog keys (not broad
+  ambient credentials, so not in the map), and 1 is the official GitHub server the
+  label rule suppresses; the live Pro scanner over `~/.claude` + `G:/skills`
+  (**5,517 scanned artifacts** — 2,817 skills, 1,301 subagents, 1,132 commands, 102
+  settings, 101 MCP configs, 64 instruction files) produces a finding set
+  **byte-identical before and after** — **338 findings, 0 new, 0 lost**, identical
+  per-scanner stats. The zero is real rather than a route that never fires: those
+  **same 9 real servers with a broad credential planted into their own headers block
+  are caught 9/9** (including the github one, which correctly keeps its own
+  `${GITHUB_TOKEN}` suppressed while the planted AWS key fires). 58 new tests
+  (`tests/test_mcp_header_exfil.py`: positive detection incl. every credential family
+  and every interpolation form, the header-key spellings, free-tier gating, the
+  env-vs-headers anti-evasion parity test, the official-GitHub regression and the
+  subdomain lure, a zero-FP baseline for every one of the 9 real shapes, helper units,
+  and catalog/example wiring) — **mutation-verified**: removing the wiring fails 26,
+  dropping the URL association 2, honouring the whole host instead of the registrable
+  label 4, and dropping the label-boundary requirement 2. Two fixed-count census tests
+  updated (rule catalog 44→45; the `_mcp_server_loc` shared-helper census 6→7, the new
+  site being a correct seventh use). RULES.md + THREAT_MODEL.md regenerated. Full
+  suite **2464 passed / 1 skipped** (was 2406, +58); `ruff check src` clean; `mypy`
+  clean (11 files); self-scan gate still 0 HIGH+ (52 items, exit 0); drift `--check`
+  green for both docs. _(commit HASH_PLACEHOLDER)_
+
 ---
 
 Completed prior to this backlog (context): AGENT-PI-001…010, MCP structured scan,

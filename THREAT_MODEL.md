@@ -4,7 +4,7 @@
 
 AI coding agents now **auto-load and trust** a chain of artifacts they did not author: skills, MCP servers, instruction files, lifecycle hooks, slash commands, and workflow exports — pulled from marketplaces, repositories, and teammates. Each is read by the model (or executed on your machine) with the agent's full privileges. A single poisoned artifact turns that trust into prompt-injection, secret exfiltration, tool poisoning, or remote code execution. **This is the agentic supply chain, and it is the attack surface Shellockolm defends.**
 
-Shellockolm ships **44 agent supply-chain rules** (**41 free**, always-on MIT/OSS, and **3 Pro**) across **11 attack classes**. This page maps each class to the rules that cover it; [`RULES.md`](RULES.md) has every rule's full description, example attack, and remediation.
+Shellockolm ships **45 agent supply-chain rules** (**42 free**, always-on MIT/OSS, and **3 Pro**) across **11 attack classes**. This page maps each class to the rules that cover it; [`RULES.md`](RULES.md) has every rule's full description, example attack, and remediation.
 
 ## The trust boundary
 
@@ -44,7 +44,7 @@ Which rules cover which attack class, generated from the live catalog:
 | [settings-hook](#settings-hook) | 3 | 3 | 0 | CRITICAL, HIGH |
 | [permission-bypass](#permission-bypass) | 1 | 1 | 0 | MEDIUM |
 | [runtime-hijack](#runtime-hijack) | 2 | 2 | 0 | CRITICAL |
-| [mcp-config](#mcp-config) | 8 | 8 | 0 | CRITICAL, HIGH, MEDIUM |
+| [mcp-config](#mcp-config) | 9 | 9 | 0 | CRITICAL, HIGH, MEDIUM |
 | [n8n-workflow](#n8n-workflow) | 2 | 2 | 0 | HIGH |
 
 ## Threats and the rules that cover them
@@ -200,6 +200,7 @@ _Impact._ RCE on your host and/or credential theft the moment the agent starts t
 | [`AGENT-MCP-006`](RULES.md#agent-mcp-006) | MEDIUM | free | high | Remote MCP server uses cleartext http:// transport |
 | [`AGENT-MCP-007`](RULES.md#agent-mcp-007) | MEDIUM | free | high | MCP server blanket-auto-approves every tool call |
 | [`AGENT-MCP-008`](RULES.md#agent-mcp-008) | HIGH | free | high | MCP server launch command runs an obfuscated / encoded payload |
+| [`AGENT-MCP-009`](RULES.md#agent-mcp-009) | HIGH | free | high | Broad host credential sent in an unrelated MCP server's headers |
 
 ### n8n-workflow
 

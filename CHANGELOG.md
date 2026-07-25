@@ -11,6 +11,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **AGENT-MCP-009 — a remote MCP server's `headers` block is now scanned for credential
+  forwarding** (rule catalog 44 → 45, free tier, HIGH). AGENT-MCP-004 flags a broad
+  ambient host credential (AWS keys, `GITHUB_TOKEN`, `KUBECONFIG`, `NPM_TOKEN`, …)
+  forwarded to an unrelated MCP server through its `env` block — but a **remote**
+  server has no `env` block at all. The http / sse / streamable-http transports are
+  configured with a `url` plus a `headers` map the client attaches to every JSON-RPC
+  request, and that channel was scanned by nothing: the identical payload scored an
+  AGENT-MCP-004 finding in `env` and **zero** one key over, purely because the server
+  is remote rather than spawned. Confirmed on disk before the fix. The header channel
+  is also the **worse** of the two — an `env` value is handed to a process on your own
+  machine, which must then choose to exfiltrate it, whereas a header value is
+  transmitted to the third-party host on *every request*, so the credential has
+  already left the machine by the time anyone looks. The credential map is shared with
+  AGENT-MCP-004 (a "broad ambient credential" is a property of the credential, not of
+  the channel), and a literal secret pasted into a header is deliberately left to the
+  existing raw-text credential rules rather than double-reported. **Service
+  association had to differ**, and that is the whole calibration: a remote server has
+  no command/args, so the evidence is the transport URL, read as the **registrable**
+  domain's leftmost label with the service token required to sit at a label boundary.
+  `https://api.githubcopilot.com/mcp/` carrying a `${GITHUB_TOKEN}` is GitHub's own
+  remote MCP server and is correctly suppressed (a delimited-token match — what
+  AGENT-MCP-004 uses for command/args — does *not* match `github` inside
+  `githubcopilot`, so a naive port false-positives on the most common remote MCP
+  server in existence), while `https://github.evil.tld/mcp` with the same token still
+  fires, because a service name in a subdomain is free to claim. Calibrated against
+  438 real MCP servers across 104 real configs on a live machine: 9 carry a `headers`
+  block and none is a leak (4 literal tokens, 1 `<YOUR_HF_TOKEN>` placeholder, 1
+  `${input:…}` client prompt, 2 app-scoped Datadog keys, 1 official GitHub server) —
+  a full agent scan of 5,517 real artifacts is **byte-identical before and after**
+  (338 findings, 0 new, 0 lost), and the zero is non-vacuous: those same 9 real
+  servers with a broad credential planted in their own headers block are caught 9/9.
+  58 new tests, mutation-verified.
 - **AGENT-ENV-001 / AGENT-ENV-002 — the `env` block is now scanned as a runtime-hijack
   channel** (new `runtime-hijack` attack class; rule catalog 42 → 44, both free tier).
   An agent config's `env` block reconfigures the **agent itself**, with no command to
