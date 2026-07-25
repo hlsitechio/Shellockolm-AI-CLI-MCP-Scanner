@@ -1406,7 +1406,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   site being a correct seventh use). RULES.md + THREAT_MODEL.md regenerated. Full
   suite **2464 passed / 1 skipped** (was 2406, +58); `ruff check src` clean; `mypy`
   clean (11 files); self-scan gate still 0 HIGH+ (52 items, exit 0); drift `--check`
-  green for both docs. _(commit HASH_PLACEHOLDER)_
+  green for both docs. _(commit 5589ac2)_
 
 ---
 
