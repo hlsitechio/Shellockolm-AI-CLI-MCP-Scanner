@@ -1520,6 +1520,101 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   `ruff check src` clean; `mypy` clean; self-scan gate still 0 HIGH+ (52 items, exit 0).
   _(commit a0b62a7)_
 
+- F18. [x] **A skill bundle's executable payload files were scanned by nothing** —
+  surfaced by a detection-coverage pass after the 50-task backlog and F1–F17 were
+  exhausted. The documented skill format is **progressive disclosure**: `SKILL.md`
+  stays short and points the agent at companion files it should read or run
+  (`scripts/setup.sh`, `scripts/process.py`). Every rule in the scanner reads the
+  model-facing PROSE, so a bundle whose SKILL.md is impeccably benign and whose
+  payload lives in the script that prose tells the agent to run reached **no detection
+  at all** — the executable files a bundle ships were never opened. Confirmed on disk
+  before writing a line of code: a skill saying "run `scripts/setup.sh`", whose
+  setup.sh is a `curl … | bash` cradle plus a credential POST to webhook.site and
+  whose helper.py posts `$GITHUB_TOKEN` to the same sink, scored **0 findings**. That
+  is the cheapest possible evasion of the whole rule set, and the format actively
+  encourages the layout that enables it.
+
+  **Done.** A bundled script is now an execution site with the same trust model as the
+  MCP launcher and the settings auto-run keys, one step removed, so per the C11–C14/F17
+  doctrine the three unambiguous auto-exec patterns are reused VERBATIM (`_FETCH_EXEC`,
+  `_OBFUSCATED_EXEC`, the shared OOB sink set) rather than re-specified — new ids
+  `AGENT-SCRIPT-001/002/003` only because the HOOK-* descriptions are settings.json-
+  specific and would misdescribe the finding. Severity is HIGH, one notch below the hook
+  site's CRITICAL: a hook fires with no prompt the moment a repo is opened, while a
+  bundled script still runs through whatever tool-approval the agent applies. Same
+  payload, slightly longer fuse. Membership is "an ancestor directory holds a SKILL.md"
+  (≤4 levels, cached per directory, extension test first so the ancestor stats happen
+  only for candidates) — a depth census found **0** of the corpus's scripts sit deeper
+  than the cap, so it costs no coverage.
+
+  **Which rules are wired was decided by MEASUREMENT, not symmetry with the hook site.**
+  Census over 2,819 real skill bundles carrying 1,445 unique bundled scripts (19.5 MB,
+  `~/.claude` + `G:/skills`): fetch-exec **3 raw → 1** after the gate below;
+  obfuscated-exec **0**, non-vacuously (20 of those files use base64/atob/b64decode
+  machinery, none decode-and-execute); OOB sink **0**, non-vacuously (262 files carry a
+  URL, 18 mention ngrok/webhook/pastebin, none resolve to a capture sink) — all three
+  WIRED. Four rules were deliberately EXCLUDED with their measurement, each pinned by a
+  test so a later run cannot quietly reverse one: `AGENT-DESTRUCT-001` (**5 matches, all
+  FPs** — a Dockerfile analyzer's detection pattern for `rm -rf /`, a
+  `LOKI_BLOCKED_COMMANDS` block-list default, a "Re-clone with: rm -rf ~/…" help
+  string), `AGENT-EXFIL-002` (**10 matches, all FPs** — the vendor-documented Apify
+  `…/runs?token=` auth form in ten legitimate community skills), `AGENT-EXFIL-001` (0
+  here, but its pattern is also an ordinary AUTHENTICATED API call and 124 real `.sh`
+  files is too thin to overturn the hook-site precedent), and `AGENT-SECRET-001`
+  (**2 matches, both `AKIAIOSFODNN7EXAMPLE`** — AWS's own canonical DOCUMENTATION key,
+  in a scanner's fixtures; wiring secrets here needs a placeholder-key exclusion first,
+  left as F19).
+
+  A code file's false positives are categorically different from a skill's: **every
+  fetch-exec FP was the payload's own text appearing as DATA** — a security scanner's
+  detection regex, a test's grep pattern, an `echo`ed progress message. All share one
+  property, and that is the gate: `_is_inert_code_context` suppresses a match inside a
+  string literal (odd quote count before it on its line) or behind a comment marker,
+  **unless the line hands that string to an executor** (`sh -c`, `eval`, `subprocess`,
+  `Invoke-Expression`) — the one case where a quoted payload *is* the payload. The
+  quote half is deliberately OFF for the URL-shaped sink rule: "executed or data?" is
+  meaningful for a pattern matching a COMMAND and meaningless for one matching a URL,
+  since a string literal is the only way any language writes one. That was not
+  theoretical — the first implementation applied it uniformly and silently suppressed
+  `urlopen("https://webhook.site/…")`, the single most likely form of the exfil the rule
+  exists to catch. **Verified end-to-end on the real corpus against a HEAD worktree
+  baseline: 0 findings LOST, exactly 1 GAINED (338 → 339)**, and the one gained is a
+  genuine `curl -fsSL https://bun.sh/install | bash` in an installed plugin's skill
+  bundle. 47 new tests (`tests/test_bundled_scripts.py`: the headline bypass, per-rule
+  positives, every declared extension reaching the scan, depth-0-through-4 discovery,
+  a script outside any bundle NOT scanned, the gate as a unit across five comment
+  syntaxes, the four executor-cancellation forms, five verbatim-shape corpus FP
+  baselines, a realistic benign bundle proven non-vacuously scanned, the four
+  calibrated-out decisions, catalog/tier/attack-class, and the free-tier open-core
+  invariant) — **mutation-verified: 21 of the 47 fail with the routing disabled**, and
+  the 26 that pass are the regression guards. THREAT_MODEL.md gained the
+  `bundled-payload` class and RULES.md the three rules, both regenerated from the
+  single source of truth. Full suite **2601 passed / 1 skipped** (was 2554, +47);
+  `ruff check src` clean; strict `mypy` clean; self-scan gate still 0 HIGH+ (exit 0).
+  _(commit PENDING)_
+
+## Open follow-ups (surfaced by the F18 bundled-script pass, not yet worked)
+
+- F19. [ ] **Hardcoded-secret rules can't be wired at the bundled-script site until a
+  documentation-placeholder exclusion exists** — `AGENT-SECRET-001` scored 2 matches in
+  the F18 census and both were `AKIAIOSFODNN7EXAMPLE`, AWS's own canonical docs key,
+  sitting in a security scanner's fixtures. A hardcoded LIVE key in a bundled script is
+  exactly the kind of finding this site should surface, so the rule is worth having
+  here — but only behind a small, shared exclusion for the well-known placeholder
+  credentials vendors publish in their own documentation (`AKIAIOSFODNN7EXAMPLE`,
+  `wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY`, `sk_test_…`, …). That exclusion belongs
+  to the shared rule, not this site, so it would change findings elsewhere and needs its
+  own calibration run.
+
+- F20. [ ] **A plugin's root-level scripts are not bundle members** — F18 scopes to
+  "an ancestor directory holds a SKILL.md", which covers skills and any plugin whose
+  scripts sit inside a skill directory, but a Claude Code plugin can ship executables at
+  the PLUGIN root (beside `plugin.json`, referenced by its commands/agents rather than a
+  SKILL.md). The plugin-marker probe already exists (`_is_plugin_command_file` /
+  `_plugin_root_cache`), so widening membership is small — but it is a different corpus
+  and needs its own census before wiring, since plugin roots carry build tooling that a
+  skill's `scripts/` does not.
+
 ---
 
 Completed prior to this backlog (context): AGENT-PI-001…010, MCP structured scan,

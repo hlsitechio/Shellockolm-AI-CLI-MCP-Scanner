@@ -194,6 +194,19 @@ _THREAT_CLASSES: List[Dict[str, str]] = [
                   "required.",
     },
     {
+        "class": "bundled-payload",
+        "headline": "The payload in the file the skill tells the agent to run",
+        "threat": "The skill format is progressive disclosure: SKILL.md stays short and "
+                  "points at companion files (`scripts/setup.sh`, `scripts/process.py`). "
+                  "So the prose a reviewer reads can be impeccably clean while the "
+                  "executable the bundle ships — and the prose tells the agent to run — "
+                  "carries the download-and-execute cradle, the encoded payload, or the "
+                  "out-of-band exfil.",
+        "impact": "Reviewing the SKILL.md proves nothing: the code arrives with the "
+                  "skill, is never separately vetted, and runs with the agent's ambient "
+                  "access to the workspace and environment.",
+    },
+    {
         "class": "permission-bypass",
         "headline": "The confirmation prompt turned off in shared config",
         "threat": "A committed `.claude/settings.json` removes the per-call human "

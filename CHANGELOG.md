@@ -9,6 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A skill bundle's executable payload files are now scanned (`AGENT-SCRIPT-001/002/003`).**
+  The documented skill format is progressive disclosure: `SKILL.md` stays short and points
+  the agent at companion files it should read or run. Every existing rule reads the
+  model-facing *prose*, so a bundle whose `SKILL.md` is impeccably benign and whose payload
+  lives in the script that prose tells the agent to run reached **no detection at all** —
+  the executable files a bundle ships were never opened. Measured at HEAD, a skill saying
+  "run `scripts/setup.sh`" whose setup.sh is a `curl … | bash` cradle plus a credential POST
+  to webhook.site scored **0 findings**. That is the cheapest possible evasion of the whole
+  rule set, and the format encourages the layout that enables it. A bundled script is now
+  treated as an execution site with the same trust model as the MCP launcher and the
+  settings auto-run keys, one step removed, so the three unambiguous auto-exec patterns are
+  reused verbatim (`_FETCH_EXEC`, `_OBFUSCATED_EXEC`, the shared OOB sink set) rather than
+  re-specified — download-and-execute, obfuscated/encoded execution, and out-of-band
+  exfiltration, at HIGH rather than the hook site's CRITICAL because a bundled script still
+  runs through whatever tool-approval the agent applies. Bundle membership is "an ancestor
+  directory holds a `SKILL.md`" (up to 4 levels, which covers every layout in the real
+  corpus with zero scripts beyond it), and the extension test runs first so the ancestor
+  stats happen only for candidate files. Which rules are wired was decided by **measurement,
+  not symmetry**: a census over 2,819 real skill bundles carrying 1,445 bundled scripts
+  (19.5 MB) kept fetch-exec, obfuscated-exec and the OOB sink, and deliberately excluded
+  `AGENT-DESTRUCT-001` (5 matches, all false positives — a Dockerfile analyzer's detection
+  pattern, a block-list default, a help string), `AGENT-EXFIL-002` (10 matches, all the
+  vendor-documented Apify `?token=` auth form in legitimate community skills),
+  `AGENT-EXFIL-001` (also the shape of an ordinary authenticated API call) and
+  `AGENT-SECRET-001` (2 matches, both AWS's own canonical documentation key) — each pinned
+  by a test carrying its measurement. A code file's false positives are the payload's own
+  text appearing as **data**, so matches are filtered by `_is_inert_code_context`: a match
+  inside a string literal or behind a comment marker is not executed, unless the line hands
+  that string to an executor (`sh -c`, `eval`, `subprocess`), which is the one case where a
+  quoted payload *is* the payload. That gate is what takes the real corpus from 3 fetch-exec
+  matches to 1 — and the one survivor is a genuine
+  `curl -fsSL https://bun.sh/install | bash` in an installed plugin's skill bundle. The
+  quote half is deliberately off for the URL-shaped sink rule, because a string literal is
+  the only way any language writes a URL. End-to-end on the real corpus: **0 findings lost,
+  exactly 1 gained** (338 → 339). 47 new tests; full suite 2,601 green.
+
 ### Fixed
 
 - **A hook registry keyed by another client's event names is no longer invisible to

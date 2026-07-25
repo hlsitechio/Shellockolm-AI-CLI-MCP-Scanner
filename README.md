@@ -246,11 +246,14 @@ Traditional scanners check *your dependencies*. The **agent scanner** checks the
 - **Slash commands** — `.claude/commands/**/*.md` (the prompt files an agent runs on demand)
 - **Subagents** — `.claude/agents/**/*.md` (the body becomes a delegated agent's system prompt)
 - **Settings** — `.claude/settings.json` / `settings.local.json`: `hooks` blocks (shell commands the agent auto-runs on lifecycle events) and the `permissions` block (a blanket grant that turns off the per-call confirmation prompt)
+- **Bundled scripts** — the executable payload files a skill ships beside its `SKILL.md` (`scripts/*.sh`, `*.py`, `*.ps1`, `*.js`, …). Skills use *progressive disclosure*, so the prose you review can be clean while the payload sits in the file that prose tells the agent to run
 
 Detections: prompt injection / instruction override, hidden conditional triggers, **secret-exfiltration
 instructions**, tool poisoning / remote-script execution, **rug-pull (unpinned) MCP servers**,
 invisible-character and **Unicode-Tags ASCII smuggling**, hardcoded credentials, and **auto-running
-hook commands that download-and-execute, run obfuscated payloads, or exfiltrate to out-of-band sinks**.
+hook commands that download-and-execute, run obfuscated payloads, or exfiltrate to out-of-band sinks** —
+the same three payload shapes are also caught in a skill's **bundled scripts**, so a benign-looking
+`SKILL.md` can't hide them in the file it tells the agent to run.
 100% offline.
 
 ```bash

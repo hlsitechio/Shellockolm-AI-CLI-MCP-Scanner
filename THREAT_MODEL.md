@@ -4,7 +4,7 @@
 
 AI coding agents now **auto-load and trust** a chain of artifacts they did not author: skills, MCP servers, instruction files, lifecycle hooks, slash commands, and workflow exports — pulled from marketplaces, repositories, and teammates. Each is read by the model (or executed on your machine) with the agent's full privileges. A single poisoned artifact turns that trust into prompt-injection, secret exfiltration, tool poisoning, or remote code execution. **This is the agentic supply chain, and it is the attack surface Shellockolm defends.**
 
-Shellockolm ships **45 agent supply-chain rules** (**42 free**, always-on MIT/OSS, and **3 Pro**) across **11 attack classes**. This page maps each class to the rules that cover it; [`RULES.md`](RULES.md) has every rule's full description, example attack, and remediation.
+Shellockolm ships **48 agent supply-chain rules** (**45 free**, always-on MIT/OSS, and **3 Pro**) across **12 attack classes**. This page maps each class to the rules that cover it; [`RULES.md`](RULES.md) has every rule's full description, example attack, and remediation.
 
 ## The trust boundary
 
@@ -42,6 +42,7 @@ Which rules cover which attack class, generated from the live catalog:
 | [hardcoded-secret](#hardcoded-secret) | 2 | 2 | 0 | HIGH |
 | [destructive-command](#destructive-command) | 1 | 1 | 0 | HIGH |
 | [settings-hook](#settings-hook) | 3 | 3 | 0 | CRITICAL, HIGH |
+| [bundled-payload](#bundled-payload) | 3 | 3 | 0 | HIGH |
 | [permission-bypass](#permission-bypass) | 1 | 1 | 0 | MEDIUM |
 | [runtime-hijack](#runtime-hijack) | 2 | 2 | 0 | CRITICAL |
 | [mcp-config](#mcp-config) | 9 | 9 | 0 | CRITICAL, HIGH, MEDIUM |
@@ -156,6 +157,20 @@ _Impact._ Cloning a repo is enough to get code execution — no skill invocation
 | [`AGENT-HOOK-001`](RULES.md#agent-hook-001) | CRITICAL | free | high | Claude Code auto-run settings command downloads and executes remote code |
 | [`AGENT-HOOK-002`](RULES.md#agent-hook-002) | HIGH | free | high | Claude Code auto-run settings command runs an obfuscated / encoded payload |
 | [`AGENT-HOOK-003`](RULES.md#agent-hook-003) | HIGH | free | high | Claude Code auto-run settings command exfiltrates to an out-of-band sink |
+
+### bundled-payload
+
+**The payload in the file the skill tells the agent to run.**
+
+_Threat._ The skill format is progressive disclosure: SKILL.md stays short and points at companion files (`scripts/setup.sh`, `scripts/process.py`). So the prose a reviewer reads can be impeccably clean while the executable the bundle ships — and the prose tells the agent to run — carries the download-and-execute cradle, the encoded payload, or the out-of-band exfil.
+
+_Impact._ Reviewing the SKILL.md proves nothing: the code arrives with the skill, is never separately vetted, and runs with the agent's ambient access to the workspace and environment.
+
+| Rule | Severity | Tier | Confidence | What it catches |
+|------|----------|------|------------|-----------------|
+| [`AGENT-SCRIPT-001`](RULES.md#agent-script-001) | HIGH | free | high | Skill bundle's executable script downloads and executes remote code |
+| [`AGENT-SCRIPT-002`](RULES.md#agent-script-002) | HIGH | free | high | Skill bundle's executable script runs an obfuscated / encoded payload |
+| [`AGENT-SCRIPT-003`](RULES.md#agent-script-003) | HIGH | free | high | Skill bundle's executable script exfiltrates to an out-of-band sink |
 
 ### permission-bypass
 
