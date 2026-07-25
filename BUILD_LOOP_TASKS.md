@@ -1595,16 +1595,48 @@ each is a separate rule family with its own calibration burden. Ranked by severi
 
 ## Open follow-ups (surfaced by the F18 bundled-script pass, not yet worked)
 
-- F19. [ ] **Hardcoded-secret rules can't be wired at the bundled-script site until a
-  documentation-placeholder exclusion exists** — `AGENT-SECRET-001` scored 2 matches in
-  the F18 census and both were `AKIAIOSFODNN7EXAMPLE`, AWS's own canonical docs key,
-  sitting in a security scanner's fixtures. A hardcoded LIVE key in a bundled script is
-  exactly the kind of finding this site should surface, so the rule is worth having
-  here — but only behind a small, shared exclusion for the well-known placeholder
-  credentials vendors publish in their own documentation (`AKIAIOSFODNN7EXAMPLE`,
-  `wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY`, `sk_test_…`, …). That exclusion belongs
-  to the shared rule, not this site, so it would change findings elsewhere and needs its
-  own calibration run.
+- F19. [x] **Credential-family calibration + the bundled-script wiring** — the
+  calibration run this task asked for found a far worse problem than the AWS docs key:
+  **`AGENT-SECRET-001` was wrong on every real artifact it fired on.** Over the full real
+  corpus (`~/.claude` + `G:/skills`, 5,000+ agent artifacts) it produced **31 findings,
+  all 31 false positives**. Thirty were one bug — the `sk-` alternative had no left word
+  boundary and a body class that allows hyphens, so it matched the tail of any hyphenated
+  English word ending in "sk" and swallowed the rest of the kebab phrase:
+  `ta`**`sk-decomposition-expert`**, `ri`**`sk-management-specialist`**,
+  `a`**`sk-questions-if-underspecified`**, `ta`**`sk-coordination-strategies`**, the
+  genuine Alexa `a`**`sk-sdk-core`** package. Most landed on **line 2 of a SKILL.md, the
+  skill's own `name:` field**; a HIGH, high-confidence "hardcoded credential" on a
+  skill's name is the finding that teaches a user to stop reading findings. The 31st was
+  `AKIAIOSFODNN7EXAMPLE` in a skill *teaching IAM hygiene*. Both fixed on the SHARED rule
+  so every artifact class inherits it (`_credential_fires`, applied in `_apply_rules` for
+  any `rule.secret` rule and in `_credential_match` for the n8n structural site): a left
+  word boundary, plus `_is_prose_shaped_sk_credential` for the standalone kebab token the
+  lookbehind can't catch (`sk-learn-preprocessing-pipeline` — a provider-issued key body
+  always carries a digit or an uppercase letter, kebab-case English never does), plus
+  `_is_documentation_placeholder` (EXAMPLE / PLACEHOLDER / REDACTED / CHANGEME / YOUR /
+  DUMMY / FAKE / `X{4,}`). The exclusion **cannot be gamed**: every shape in
+  CREDENTIAL_RULES is a PROVIDER-ISSUED value, so nobody can obtain a live credential
+  whose own bytes spell EXAMPLE — and it tests the credential, never the surrounding
+  prose, so "here is an example key: `<live key>`" still fires (asserted). With the
+  blocker gone the whole credential family is **wired into the bundled-script site** via
+  the shared `_check_credentials` route — the last blind cell in the reach matrix, so a
+  future SECRET-00N lands there automatically. `_is_inert_code_context` is deliberately
+  NOT applied to credentials: a credential literal is always a string literal (the only
+  way any language writes one), so the quote half would suppress every true positive, and
+  a key in a comment is just as leaked as one in an assignment. **Verified against a
+  pre-change baseline of the same corpus: 339 → 308 findings, 0 gained, 31 lost, every
+  one of them one of the false positives above.** Non-vacuity measured on real content,
+  not assumed: 40 real bundled scripts + 40 real SKILL.md files, clean 80/80 as they
+  ship, detected 80/80 with one fabricated key planted. 33 new tests
+  (`tests/test_credential_calibration.py` — the corpus FP shapes as regression guards at
+  both the prose and script sites, per-marker placeholder suppression, the
+  can't-be-gamed framing cases, the new site's positives + comment case + redaction,
+  strict-superset guard on AGENT-SCRIPT-001, and cross-file anti-drift with the reach
+  suite), plus a new `bundled-script` row in the reach matrix and three fixtures updated
+  from placeholder literals to plausible ones (the Discord/AWS/OpenAI fixtures were
+  themselves docs-shaped). Full suite **2682 passed / 1 skipped** (was 2601, +81);
+  `ruff check src` clean; configured `mypy` gate clean; self-scan gate 0 HIGH+ (exit 0).
+  _(commit PENDING)_
 
 - F20. [ ] **A plugin's root-level scripts are not bundle members** — F18 scopes to
   "an ancestor directory holds a SKILL.md", which covers skills and any plugin whose

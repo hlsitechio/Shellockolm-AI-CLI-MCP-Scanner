@@ -35,7 +35,10 @@ SRC = Path(__file__).resolve().parents[1] / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from scanners.agent_supply_chain import AgentSupplyChainScanner  # noqa: E402
+from scanners.agent_supply_chain import (  # noqa: E402
+    _credential_fires,
+    AgentSupplyChainScanner,
+)
 
 # A single free-tier scanner is reused across examples: scan_directory builds a
 # fresh ScanResult per call, so there is no cross-example state to leak. pro=False
@@ -65,10 +68,16 @@ _github_pat = st.builds(lambda b: "ghp_" + b, _seg(_ALNUM, 36))
 _slack_token = st.builds(
     lambda t, b: f"xox{t}-{b}", st.sampled_from("baprs"), _seg_range(_SLACK_BODY, 12, 30)
 )
+# The body carries a guaranteed uppercase-or-digit character. That is not a fixture
+# convenience: `_credential_fires` excludes an all-lowercase kebab `sk-` body as prose
+# (`risk-management-specialist` and 29 siblings were the corpus's entire SECRET-001
+# finding set), so a generated `sk-aaaa…` is by definition not a credential and must
+# not be asserted to produce one. Every real provider-issued key carries one.
 _openai_key = st.builds(
-    lambda mid, b: f"sk-{mid}{b}",
+    lambda mid, head, b: f"sk-{mid}{head}{b}",
     st.sampled_from(["", "ant-", "proj-"]),
-    _seg_range(_B64URL, 24, 40),
+    st.sampled_from(string.ascii_uppercase + string.digits),
+    _seg_range(_B64URL, 23, 39),
 )
 _google_key = st.builds(lambda b: "AIza" + b, _seg(_B64URL, 35))
 
@@ -86,10 +95,19 @@ _discord_token = st.builds(
     _seg_range(_B64URL, 27, 38),
 )
 
+# Generated bodies are random, so a draw can spell a documentation placeholder
+# (`…XXXX…`, `…YOUR…`) by chance, and `_credential_fires` excludes those by design.
+# Filtering keeps the property honest — "for any credential the calibrated family
+# accepts, the raw value never leaks" — instead of flaking on a value the scanner is
+# correct to ignore. Rejection is rare enough not to starve Hypothesis.
+_accepted = _credential_fires
+
 # SECRET_RULE (001) shapes only — the n8n direct-embed path matches against this rule.
-_secret1_family = st.one_of(_aws_key, _github_pat, _slack_token, _openai_key, _google_key)
+_secret1_family = st.one_of(
+    _aws_key, _github_pat, _slack_token, _openai_key, _google_key).filter(_accepted)
 # Every hardcoded-secret shape the prose / MCP paths can flag.
-_any_secret = st.one_of(_secret1_family, _stripe_key, _telegram_token, _discord_token)
+_any_secret = st.one_of(
+    _secret1_family, _stripe_key, _telegram_token, _discord_token).filter(_accepted)
 
 
 @st.composite

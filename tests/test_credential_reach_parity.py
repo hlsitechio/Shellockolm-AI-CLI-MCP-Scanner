@@ -17,6 +17,13 @@ was blind in 10 of 54 cells:
     mcp-config                HIGH                        HIGH                   HIGH
     n8n                       HIGH                        HIGH               -- BLIND --
     settings.json         -- BLIND --                 -- BLIND --            -- BLIND --
+    bundled script        -- BLIND --                 -- BLIND --            -- BLIND --
+
+The bundled-script row was the last one, closed by F19: the family could not be wired
+at that site until a documentation-placeholder exclusion existed, because the only
+credential the real corpus's 1,447 bundled scripts carry is AWS's published
+`AKIAIOSFODNN7EXAMPLE`. The exclusion now lives on the rule
+(`_credential_fires`, tests/test_credential_calibration.py) and the site is wired.
 
 `.claude/settings.json` was the whole-class hole, and it is the worst one to have: its
 documented `env` block is the place Claude Code is *told* to put API keys, and the file
@@ -94,11 +101,17 @@ ANON_JWT = _jwt("anon")
 # no *literal* credential appears in this file: a test corpus for a secret scanner is
 # the one place secret-shaped strings are legitimate, but GitHub push protection reads
 # the source text, not the intent, and blocks the push. Keep them concatenated.
+# Every value must be a PLAUSIBLE provider-issued credential, not a documentation
+# placeholder and not an all-lowercase filler: `_credential_fires` now excludes a
+# published docs literal (AWS's `AKIAIOSFODNN7EXAMPLE`) and a kebab-case `sk-` body
+# with no digit or uppercase, both of which measured as 100% false positives on the
+# real corpus. Those exclusions are tested in tests/test_credential_calibration.py;
+# here the fixtures must clear them so this file tests REACH, not precision.
 CREDENTIALS = {
-    "aws-akia": "AKIAIOSFODNN7EXAMPLE",  # the canonical AWS docs example key
+    "aws-akia": "AKIA" + "3JZQR7B2NPXK5TWD",
     "github-ghp": "ghp_" + "a" * 36,
     "slack-xoxb": "xoxb-" + "1234567890-abcdefghijkl",
-    "openai-sk": "sk-" + "proj-" + "a" * 24,
+    "openai-sk": "sk-" + "proj-" + "T7hQ2m9XbK4rV1sD8nZ0wL6y",
     "google-aiza": "AIza" + "a" * 35,
     "stripe-live": "sk_" + "live_" + "0123456789abcdefghijABCDEFGH",
     "telegram-bot": "123456789:" + "AA" + "b" * 33,
@@ -167,6 +180,29 @@ def _write_settings(tmp_path: Path, cred: str) -> str:
     return str(tmp_path)
 
 
+def _write_bundled_script(tmp_path: Path, cred: str) -> str:
+    """The payload script a skill bundle ships beside its SKILL.md.
+
+    Added when the credential family was wired into this site (F19): a key pasted
+    into `scripts/deploy.sh` is exposed to everyone who installs the skill exactly
+    as it would be in the prose beside it, and this was the last artifact class the
+    family did not reach.
+    """
+    d = tmp_path / "deployer" / "scripts"
+    d.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "deployer" / "SKILL.md").write_text(
+        "---\nname: deployer\ndescription: Deploys the service.\n---\n\n"
+        "Run `scripts/deploy.sh` to ship a build.\n",
+        encoding="utf-8",
+    )
+    (d / "deploy.sh").write_text(
+        f'#!/usr/bin/env bash\nset -euo pipefail\nAPI_KEY="{cred}"\ncurl -H "x-key: $API_KEY" '
+        'https://api.example.com/deploy\n',
+        encoding="utf-8",
+    )
+    return str(tmp_path)
+
+
 SITE_WRITERS = {
     "skill": _write_skill,
     "instructions": _write_instructions,
@@ -174,6 +210,7 @@ SITE_WRITERS = {
     "mcp-config": _write_mcp,
     "n8n": _write_n8n,
     "settings": _write_settings,
+    "bundled-script": _write_bundled_script,
 }
 
 
@@ -365,7 +402,7 @@ def test_settings_credential_and_hook_findings_coexist(scanner, tmp_path):
 # --- redaction at the newly-reached sites -------------------------------------
 
 
-@pytest.mark.parametrize("site", ["settings", "n8n"])
+@pytest.mark.parametrize("site", ["settings", "n8n", "bundled-script"])
 @pytest.mark.parametrize("cred_name", sorted(CREDENTIALS))
 def test_secret_never_echoed_from_newly_reached_sites(scanner, tmp_path, site, cred_name):
     """A finding must never re-emit the live credential -- the report, CI log and

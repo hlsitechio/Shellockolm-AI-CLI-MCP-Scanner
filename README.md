@@ -253,7 +253,10 @@ instructions**, tool poisoning / remote-script execution, **rug-pull (unpinned) 
 invisible-character and **Unicode-Tags ASCII smuggling**, hardcoded credentials, and **auto-running
 hook commands that download-and-execute, run obfuscated payloads, or exfiltrate to out-of-band sinks** —
 the same three payload shapes are also caught in a skill's **bundled scripts**, so a benign-looking
-`SKILL.md` can't hide them in the file it tells the agent to run.
+`SKILL.md` can't hide them in the file it tells the agent to run. The hardcoded-credential rules
+reach **every** artifact class above, bundled scripts included, and skip published documentation
+placeholders (AWS's `AKIAIOSFODNN7EXAMPLE`, `YOUR_API_KEY`, …) — those are provider-issued values
+nobody can mint, so excluding them cannot hide a live key.
 100% offline.
 
 ```bash

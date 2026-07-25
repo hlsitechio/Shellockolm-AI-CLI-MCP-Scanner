@@ -9,7 +9,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`AGENT-SECRET-001` was wrong on every real artifact it fired on.** Measured over the
+  full real corpus on the development machine (`~/.claude` + `G:/skills`, 5,000+ agent
+  artifacts), the hardcoded-credential rule produced **31 findings and all 31 were false
+  positives**. Thirty were one bug: the `sk-` alternative was written with no left word
+  boundary and a body class that allows hyphens, so it matched the tail of any hyphenated
+  English word ending in "sk" and then swallowed the rest of the kebab phrase —
+  `ta`**`sk-decomposition-expert`**, `ri`**`sk-management-specialist`**,
+  `a`**`sk-questions-if-underspecified`**, `ta`**`sk-coordination-strategies`**, and the
+  genuine Alexa `a`**`sk-sdk-core`** package name. Most landed on line 2 of a `SKILL.md`,
+  the skill's own `name:` field: a HIGH, high-confidence "hardcoded credential" on a
+  skill's name is the finding that teaches a user to stop reading findings. The
+  thirty-first was `AKIAIOSFODNN7EXAMPLE` — AWS's published documentation key — inside a
+  skill that is *teaching IAM hygiene*. Both are fixed on the shared rule so every
+  artifact class inherits the fix (`_credential_fires`): a left word boundary plus a body
+  shape test (a provider-issued key body always carries a digit or an uppercase letter,
+  kebab-case English never does), and an exclusion for published documentation
+  placeholders. The exclusion **cannot be gamed** — every shape in the family is a
+  provider-issued value, so nobody can obtain a live credential whose own bytes spell
+  `EXAMPLE` or `YOUR_KEY` — and it tests the credential, never the prose around it, so
+  "here is an example key: `<live key>`" still fires. Verified against a pre-change
+  baseline of the same corpus: **339 → 308 findings, 0 gained, 31 lost, every one of them
+  one of the false positives above**, with non-vacuity asserted (the same real artifact
+  shapes with a fabricated key planted in them are still detected).
+
 ### Added
+
+- **Hardcoded credentials are now detected in a skill bundle's executable scripts.** The
+  bundled-script pass shipped with the credential family deliberately held back: the only
+  credential the corpus's 1,447 bundled scripts carry is AWS's documentation key, so
+  wiring it meant shipping a false positive. With the placeholder exclusion above in
+  place that blocker is gone, and the family reaches the site through the shared
+  `_check_credentials` route every other artifact class uses — so this was the last blind
+  cell in the reach matrix, and a future `AGENT-SECRET-00N` lands here automatically. A
+  key pasted into `scripts/deploy.sh` is exposed to everyone who installs the skill
+  exactly as it would be in the `SKILL.md` beside it. The `_is_inert_code_context` gate
+  that filters the `AGENT-SCRIPT-*` command rules is deliberately **not** applied to
+  credentials: a credential literal is always a string literal (the only way any language
+  writes one), so the quote half would suppress every true positive, and a key in a
+  comment is just as leaked as one in an assignment. Re-measured on the corpus: zero
+  credential findings from bundled scripts, the AWS docs key included. 33 new tests
+  (`tests/test_credential_calibration.py` plus the reach matrix's new `bundled-script`
+  row); full suite **2,681 green** (was 2,601).
 
 - **A skill bundle's executable payload files are now scanned (`AGENT-SCRIPT-001/002/003`).**
   The documented skill format is progressive disclosure: `SKILL.md` stays short and points

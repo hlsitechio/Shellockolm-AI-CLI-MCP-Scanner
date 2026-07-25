@@ -1998,9 +1998,12 @@ def test_benign_command_not_flagged(scanner, tmp_path, label, body):
 # single string literal.
 _STRIPE_LIVE_KEY = "sk_" + "live_" + "0123456789abcdefghijABCDEFGH"            # sk_live_ + 28
 _TELEGRAM_TOKEN = "123456789" + ":" + "AA" + "0123456789abcdefghij0123456789abcd"  # :AA + 34
+# The HMAC segment deliberately spells no placeholder word: a docs placeholder is now
+# excluded by `_credential_fires`, so a fixture containing "example" would assert the
+# opposite of what this test means (see tests/test_credential_calibration.py).
 _DISCORD_TOKEN = ".".join(["M" + "Tk4NjIyNDgzNDcxOTI1MjQ4",                    # M + 23 = 24
                            "Cl2FMP",                                          # 6
-                           "example0hmac0portion0here1234"])                  # 29
+                           "q7Rv2knd4Tzs9WbJ0hLm5gYc31u"])                     # 27
 _OPENAI_KEY = "sk-" + "proj-" + "abcdEFGH1234ijklMNOP5678qrstUVWXyz90ABcd"     # sk-proj- + 40
 
 
@@ -2086,7 +2089,10 @@ def test_supabase_service_role_jwt_detected_in_mcp_env(scanner, tmp_path):
 
 @pytest.mark.parametrize("secret", [
     _STRIPE_LIVE_KEY, _TELEGRAM_TOKEN, _DISCORD_TOKEN, _OPENAI_KEY,
-    "AKIAIOSFODNN7EXAMPLE", "ghp_0123456789abcdefghij0123456789abcdef",
+    # A fabricated AKIA id, NOT AWS's published `AKIAIOSFODNN7EXAMPLE`: the docs
+    # placeholder is excluded by `_credential_fires` (tests/test_credential_calibration.py),
+    # so using it here would test the exclusion, not the redaction.
+    "AKIA" + "3JZQR7B2NPXK5TWD", "ghp_0123456789abcdefghij0123456789abcdef",
 ])
 def test_secret_value_is_redacted_in_findings(scanner, tmp_path, secret):
     # The scanner must never re-emit a live credential in plaintext: a finding

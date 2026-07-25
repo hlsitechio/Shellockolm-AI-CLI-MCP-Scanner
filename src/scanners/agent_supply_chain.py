@@ -1025,10 +1025,33 @@ OBF_RULE = AgentRule(
     "Decodes a blob and pipes it to a shell/eval — classic payload hiding.",
     "Remove. Decoded-then-executed blobs are almost never legitimate in agent artifacts.",
 )
+# The `sk-` alternative carries a LEFT WORD BOUNDARY, and it is the difference between
+# a working rule and a rule that is wrong on every single real artifact.
+#
+# Written without one — `sk-(ant-|proj-)?[A-Za-z0-9_-]{20,}` — it matched the tail of
+# any hyphenated English word ending in "sk", because the body class allows hyphens and
+# so absorbs the rest of a kebab-case phrase:
+#
+#     ta[sk-decomposition-expert]      ri[sk-management-specialist]
+#     a[sk-questions-if-underspecified]  ta[sk-coordination-strategies]
+#     a[sk-sdk-core] (the real Alexa Skills Kit package name)
+#
+# Measured over the machine's full real corpus (~/.claude + G:/skills, 5,000+ agent
+# artifacts): AGENT-SECRET-001 produced 31 findings and ALL 31 were false positives —
+# 30 of this shape (a HIGH "hardcoded credential" on a skill's own `name:` line) and 1
+# on AWS's published documentation key. A rule with a 100% false-positive rate on real
+# input is worse than no rule: it teaches the user to ignore the severity.
+#
+# The lookbehind alone leaves `sk-learn-preprocessing-pipeline` (a standalone kebab
+# token), so `_is_prose_shaped_sk_credential` adds the second half of the test — a real
+# provider-issued key body always carries a digit or an uppercase letter, kebab-case
+# English never does. Both are enforced for every consumer of CREDENTIAL_RULES through
+# `_credential_fires`.
 SECRET_RULE = AgentRule(
     "AGENT-SECRET-001", "Hardcoded credential in agent artifact",
     FindingSeverity.HIGH, 7.5,
-    _c(r"(AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|xox[baprs]-[A-Za-z0-9-]{10,}|sk-(ant-|proj-)?[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_\-]{35})"),
+    _c(r"(AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|xox[baprs]-[A-Za-z0-9-]{10,}"
+       r"|(?<![A-Za-z0-9_])sk-(ant-|proj-)?[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_\-]{35})"),
     "A hardcoded API key/token is embedded in the artifact, exposing it to anyone who installs it.",
     "Move secrets to environment variables or a secret manager, and rotate the exposed credential.",
     secret=True,
@@ -1229,20 +1252,80 @@ WEBHOOK_EXFIL_RULE = AgentRule(
 # A measured 9-shape x 6-site matrix was blind in 10 of 54 cells.
 CREDENTIAL_RULES: List[AgentRule] = [SECRET_RULE, SECRET2_RULE]
 
+# Well-known DOCUMENTATION placeholders. Every vendor publishes a key-shaped literal in
+# its own docs, and those literals are copied verbatim into tutorials, IaC examples,
+# scanner fixtures and skill prose — AWS's `AKIAIOSFODNN7EXAMPLE` alone accounts for a
+# finding in this machine's real corpus, in a skill that is *teaching IAM hygiene*.
+#
+# The exclusion is safe against an attacker precisely because it tests the CREDENTIAL,
+# not its surroundings: every shape in CREDENTIAL_RULES is a PROVIDER-ISSUED value —
+# AWS mints the AKIA id, GitHub the ghp_ token, OpenAI the sk- key, Telegram the bot
+# token. Nobody can obtain a live credential whose own bytes spell EXAMPLE or YOUR_KEY,
+# so a real secret can never be smuggled past this test. Surrounding prose is
+# deliberately NOT consulted: "here is an example key: <live key>" must still fire, and
+# it does.
+#
+# `X{4,}` and `EXAMPLE` are the two that carry real weight (both measured on the corpus:
+# `AIzaXXXX…` and `AKIAIOSFODNN7EXAMPLE`); the rest are the same convention spelled
+# differently. Each is long enough that a random provider-issued body containing it by
+# chance is a ~1e-5 event.
+_PLACEHOLDER_CREDENTIAL_MARKER = re.compile(
+    r"EXAMPLE|PLACEHOLDER|REDACTED|CHANGE[_-]?ME|YOUR|DUMMY|FAKE|X{4,}", re.IGNORECASE
+)
+
+
+def _is_documentation_placeholder(value: str) -> bool:
+    """True when a credential-shaped literal is a published docs placeholder."""
+    return bool(_PLACEHOLDER_CREDENTIAL_MARKER.search(value))
+
+
+def _is_prose_shaped_sk_credential(value: str) -> bool:
+    """True for an `sk-` match that is kebab-case English, not a provider key.
+
+    The second half of the `sk-` boundary fix (see SECRET_RULE). A standalone
+    kebab token — `sk-learn-preprocessing-pipeline` — clears the lookbehind and
+    still is not a credential. Every provider-issued `sk-` key body is random
+    base64url-ish text and so carries a digit or an uppercase letter (the odds a
+    real 48-char key has neither are ~1e-18); kebab-case English prose carries
+    neither by construction. The fixed `ant-`/`proj-` prefixes are stripped first
+    so they cannot vouch for the body they precede.
+    """
+    if not value.startswith("sk-"):
+        return False
+    body = value[3:]
+    for prefix in ("ant-", "proj-"):
+        if body.startswith(prefix):
+            body = body[len(prefix):]
+            break
+    return not any(c.isdigit() or c.isupper() for c in body)
+
+
+def _credential_fires(value: str) -> bool:
+    """The shared qualifier for a CREDENTIAL_RULES match.
+
+    Every consumer of the credential family runs matches through this one gate, so
+    a site cannot quietly keep a laxer copy — the same property `_check_credentials`
+    exists for on the reach axis, applied to precision.
+    """
+    return not (_is_documentation_placeholder(value)
+                or _is_prose_shaped_sk_credential(value))
+
 
 def _credential_match(text: str) -> Optional["re.Match[str]"]:
     """First hardcoded-credential literal in `text`, or None.
 
     For structural sites that need the match object itself (the n8n direct-embed
     pairing) rather than a finding. Derives from CREDENTIAL_RULES so it cannot
-    drift from the rules the prose sites run.
+    drift from the rules the prose sites run, and applies the same
+    `_credential_fires` qualifier so a docs placeholder does not pair a benign
+    node with an external host.
     """
     for rule in CREDENTIAL_RULES:
         if rule.pattern is None:
             continue
-        m = rule.pattern.search(text)
-        if m:
-            return m
+        for m in rule.pattern.finditer(text):
+            if _credential_fires(m.group(0)):
+                return m
     return None
 
 GENERIC_TEXT_RULES: List[AgentRule] = [
@@ -2655,7 +2738,11 @@ HOOK_COMMAND_RULES: List[AgentRule] = [
 #                       is too thin a sample to overturn that. Consistency over a zero.
 #   * AGENT-SECRET-001  2 matches, both `AKIAIOSFODNN7EXAMPLE` — AWS's own canonical
 #                       DOCUMENTATION key, inside a security scanner's fixtures. Wiring
-#                       secrets here needs a placeholder-key exclusion first. NOT WIRED.
+#                       secrets here needed a placeholder-key exclusion first, and now
+#                       has one (`_credential_fires`), so the whole credential family
+#                       IS wired — see `_scan_bundled_script`. Re-measured after the
+#                       exclusion: the corpus's bundled scripts produce ZERO credential
+#                       findings, the AWS docs key included.
 BUNDLED_SCRIPT_EXTENSIONS: Tuple[str, ...] = (
     ".sh", ".bash", ".zsh", ".ps1", ".psm1", ".bat", ".cmd",
     ".py", ".js", ".mjs", ".cjs", ".rb", ".pl",
@@ -4296,6 +4383,19 @@ class AgentSupplyChainScanner(BaseScanner):
             findings.append(
                 self._finding(rule, fp, "bundled-script", self._redact(match.group(0)), line_no)
             )
+        # The hardcoded-credential family, on the reach principle that governs
+        # `_check_credentials`: a real key pasted into a bundled script is exposed to
+        # everyone who installs the skill exactly as it would be in the SKILL.md beside
+        # it, and this was the last artifact class the family did not reach.
+        #
+        # Deliberately NOT filtered by `_is_inert_code_context`: a credential literal is
+        # ALWAYS a string literal (that is the only way any language writes one), so the
+        # quote half would suppress every true positive — the same reasoning that keeps
+        # the URL-shaped rule out of it — and a key sitting in a comment is just as
+        # leaked as one in an assignment. What made this site FP-prone was never the
+        # code context but the docs-placeholder literal, and that is now handled at the
+        # rule itself by `_credential_fires`.
+        findings += self._check_credentials(text, fp, "bundled-script")
         return self._dedupe(findings)
 
     def _scan_text_artifact(self, fp: Path, text: str, quick_mode: bool, artifact: str,
@@ -5114,6 +5214,17 @@ class AgentSupplyChainScanner(BaseScanner):
                 m = next(
                     (mm for mm in rule.pattern.finditer(text)
                      if _destruct_match_fires(text, mm)),
+                    None,
+                )
+            elif rule.secret:
+                # Credential calibration: report the first match that is a real
+                # provider-issued credential — not a published documentation
+                # placeholder and not kebab-case English behind an `sk-` boundary.
+                # Applied here rather than per-site so every artifact class the
+                # credential family reaches gets the identical qualifier.
+                m = next(
+                    (mm for mm in rule.pattern.finditer(text)
+                     if _credential_fires(mm.group(0))),
                     None,
                 )
             else:

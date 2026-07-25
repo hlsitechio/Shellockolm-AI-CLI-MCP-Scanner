@@ -33,10 +33,16 @@ bundles, 1,445 unique bundled scripts, 19.5 MB, from ~/.claude + G:/skills):
                     API call (why it is out of the hook set and the composite sinks),
                     and 124 real `.sh` files is too thin to overturn that.   NOT WIRED
   * SECRET-001      2 matches, both `AKIAIOSFODNN7EXAMPLE` — AWS's own canonical
-                    DOCUMENTATION key, in a scanner's fixtures.              NOT WIRED
+                    DOCUMENTATION key, in a scanner's fixtures.   WIRED LATER (F19)
 
-The four NOT-WIRED decisions are pinned by tests below with the measurement, so a later
-run cannot quietly reverse one without confronting the data.
+The three remaining NOT-WIRED decisions are pinned by tests below with the measurement,
+so a later run cannot quietly reverse one without confronting the data.
+
+SECRET-001 was the one held back for a reason that could be fixed rather than a reason
+that could not: it needed a published-placeholder exclusion. F19 added that exclusion to
+the shared rule (`_credential_fires`) and wired the whole credential family in via
+`_check_credentials` — re-measured, the corpus's bundled scripts then produce ZERO
+credential findings, the AWS docs key included. See tests/test_credential_calibration.py.
 
 End-to-end on the real corpus the change is **0 findings lost, exactly 1 gained** (338 ->
 339), and the gained one is the genuine cradle above.
@@ -386,17 +392,43 @@ def test_realistic_benign_bundle_is_clean(tmp_path):
     # EXFIL-001: an ordinary authenticated API call.
     ("scripts/status.sh",
      '#!/bin/bash\ncurl -H "Authorization: Bearer $VERCEL_TOKEN" https://api.vercel.com/v6/deployments\n'),
-    # SECRET-001: AWS's own canonical documentation key.
-    ("scripts/tf_check.py",
-     'EXAMPLE_KEY = "AKIAIOSFODNN7EXAMPLE"  # placeholder used in AWS docs\n'),
 ])
 def test_calibrated_out_rule_shapes_stay_silent_on_a_bundled_script(tmp_path, name, content):
-    """Pins the four NOT-WIRED census decisions. Reversing one must be deliberate."""
+    """Pins the three NOT-WIRED census decisions. Reversing one must be deliberate."""
     root = _bundle(tmp_path, {name: content})
     assert _script_findings(_scan(root)) == []
 
 
-def test_only_the_three_script_rules_are_wired():
+def test_aws_documentation_key_stays_silent_now_that_secrets_are_wired(tmp_path):
+    """The census's only SECRET-001 matches, verbatim in shape.
+
+    This was a NOT-WIRED decision until F19; the credential family now runs here and
+    this file must STILL be clean — not because the rule is absent, but because
+    `_credential_fires` excludes a published documentation placeholder.
+    """
+    root = _bundle(tmp_path, {
+        "scripts/tf_check.py":
+            'EXAMPLE_KEY = "AKIAIOSFODNN7EXAMPLE"  # placeholder used in AWS docs\n',
+    })
+    assert _scan(root).findings == []
+
+
+def test_a_real_key_in_a_bundled_script_is_flagged(tmp_path):
+    """Non-vacuity for the test above: the same site, a fabricated non-placeholder
+    key, and the credential family fires."""
+    root = _bundle(tmp_path, {
+        "scripts/deploy.py": 'AWS_KEY = "' + "AKIA" + '3JZQR7B2NPXK5TWD"\n',
+    })
+    assert "AGENT-SECRET-001" in _ids(_scan(root))
+
+
+def test_only_the_three_pattern_rules_are_wired_as_script_rules():
+    """BUNDLED_SCRIPT_RULES is the auto-exec pattern set and stays exactly three.
+
+    The credential family reaches this site through `_check_credentials`, not through
+    this list — the same route every other artifact class uses, so a future SECRET-00N
+    lands here automatically (tests/test_credential_reach_parity.py asserts that).
+    """
     assert {r.id for r in BUNDLED_SCRIPT_RULES} == SCRIPT_RULE_IDS
 
 
