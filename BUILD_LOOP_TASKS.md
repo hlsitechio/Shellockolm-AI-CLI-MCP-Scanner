@@ -1591,7 +1591,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   `bundled-payload` class and RULES.md the three rules, both regenerated from the
   single source of truth. Full suite **2601 passed / 1 skipped** (was 2554, +47);
   `ruff check src` clean; strict `mypy` clean; self-scan gate still 0 HIGH+ (exit 0).
-  _(commit PENDING)_
+  _(commit 45b35c0)_
 
 ## Open follow-ups (surfaced by the F18 bundled-script pass, not yet worked)
 
