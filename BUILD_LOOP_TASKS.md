@@ -1735,7 +1735,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   shape as a regression guard, a benign vendored-bundle baseline, 001 staying withheld,
   per-match coverage preservation, and the warning being derived rather than hardcoded).
   Full suite **2731 passed / 1 skipped** (was 2714, +17); `ruff check src` clean;
-  configured `mypy` gate clean; self-scan gate 0 HIGH+ (exit 0). _(commit PENDING)_
+  configured `mypy` gate clean; self-scan gate 0 HIGH+ (exit 0). _(commit 4716d5e)_
 
 ---
 
