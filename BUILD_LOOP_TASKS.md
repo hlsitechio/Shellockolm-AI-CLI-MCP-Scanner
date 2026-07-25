@@ -1466,9 +1466,9 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   self-scan gate still 0 HIGH+ (52 items, exit 0); RULES.md / THREAT_MODEL.md drift
   green (no rule metadata changed). _(commit 22561f6)_
 
-- F17. [ ] **The credential-exfil rule family reaches the MCP launch path but NOT the
+- F17. [x] **The credential-exfil rule family reaches the MCP launch path but NOT the
   settings auto-exec command site** — surfaced by the C21 bug-hunt (a differential
-  running the IDENTICAL command string at both zero-prompt auto-exec sites), NOT worked.
+  running the IDENTICAL command string at both zero-prompt auto-exec sites).
   `HOOK_COMMAND_RULES` is `[AGENT-HOOK-001/002/003, AGENT-DESTRUCT-001]`, so
   `AGENT-EXFIL-001` ("credential value piped to a network sink") and `AGENT-EXFIL-002`
   ("secret referenced in an outbound URL") never see a settings command, while the MCP
@@ -1479,22 +1479,46 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   EXFIL-002 in the launcher and **SILENT** in the hook. This is the same
   "neither site may keep a narrower rule set" principle C11/C12/C13/C14 were built on,
   and the settings hook is the *more* dangerous site (a `SessionStart` hook fires on
-  clone, before the user does anything). **Not done because the calibration evidence is
-  not yet sufficient**, and this must not be wired on assumption: a census of **222 real
-  auto-exec command sites across 53 real files** produced **0** would-be findings from
-  EXFIL-001/002 + SECRET-001/002, but that zero is **low-information** — only 3 of the
-  222 real commands are network-capable at all and **none** carries a
-  `$…KEY/TOKEN/SECRET` reference, so the corpus barely exercises the rules' domain (a
-  planted payload is caught 3/3, which shows reach but not precision). The specific risk
-  to calibrate is `AGENT-EXFIL-001`: its pattern is also the shape of an ordinary
-  AUTHENTICATED API call, which is exactly why it is excluded from the composite
-  severity boost, and a legitimate notification hook (`curl -H "Authorization: Bearer
-  $SLACK_TOKEN" https://slack.com/api/…`) would match it. `AGENT-EXFIL-002` (a secret in
-  a URL QUERY STRING) looks materially safer to wire first — putting a credential in a
-  query string is bad practice regardless of intent. Next step: gather a real corpus of
-  network-capable auto-exec hook commands (the community marketplace `statusLine` /
-  credential-helper corpus C11 used is the obvious source) before deciding whether to
-  wire EXFIL-002 alone or both.
+  clone, before the user does anything). **The blocking calibration was gathered first**
+  — the prior census (222 sites / 53 files, only 3 network-capable, none carrying a
+  `$…KEY/TOKEN/SECRET`) was too thin to decide on, so the corpus was widened to
+  **4,537 JSON files walked → 123 files carrying a genuine auto-exec command → 315 real
+  command sites**, of which **32 are network-capable** and **18 reference a secret** —
+  the rules' actual domain, exercised properly for the first time. The census
+  **answered the open question rather than confirming the guess**:
+
+  * `AGENT-EXFIL-001` would fire **14 times, and all 14 are false positives** — benign
+    community status lines and notification hooks polling Vercel / Neon / Telegram with
+    `curl -H "Authorization: Bearer $VERCEL_TOKEN"`. A status line *is* an authenticated
+    API call, so the rule cannot be wired at this site. **NOT wired**, and an anti-drift
+    test pins that decision with the measurement so a later run cannot quietly reverse it.
+  * `AGENT-EXFIL-002` fires **0 times**, and that zero is **high-information**, unlike
+    the prior one: those real commands carry **19 URLs, 17 of which interpolate a shell
+    variable and 7 of which carry a query string**
+    (`…/deployments?projectId=$VERCEL_PROJECT_ID&limit=1` — the attack shape minus a
+    credential), plus a genuine credential in a URL *path*
+    (`https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage`, the documented Bot
+    API form). The rule requires the credential in the QUERY STRING — bad practice
+    regardless of intent — so it declines all of them. **Wired.**
+
+  So `HOOK_COMMAND_RULES` gains `URL_EXFIL_RULE` only; no new rule ids, no pattern
+  changes, so the rule catalog is unchanged (the catalog de-dupes by id and EXFIL-002
+  was already in `GENERIC_TEXT_RULES`) and RULES.md / THREAT_MODEL.md drift `--check`
+  are green without regeneration. **Zero-FP verified NON-VACUOUSLY on real content:**
+  the live Pro scanner over `~/.claude` + `G:/skills` produces a finding set
+  **byte-identical before and after — 338 findings, 0 new, 0 lost** — and the zero is
+  not a route that never fires: with the payload planted into each real settings file
+  carrying an auto-exec site, the walk catches **121/121**. 35 new tests
+  (`tests/test_settings_exfil_parity.py`: the MCP-vs-settings parity invariant on three
+  payload shapes, EXFIL-002 reaching all 7 documented command keys plus `hooks`, the
+  hooks-vs-statusLine agreement, free-tier parity, precise site naming, multi-site
+  reporting, secret redaction in evidence, malformed-JSON safety, 8 verbatim
+  community-marketplace zero-FP baselines, a reachability counterpart proving each
+  baseline is scanned rather than skipped, and the two EXFIL-001 exclusion guards) —
+  **mutation-verified: 23 of the 35 fail without the wiring**, and the 12 that pass are
+  the regression guards. Full suite **2554 passed / 1 skipped** (was 2519, +35);
+  `ruff check src` clean; `mypy` clean; self-scan gate still 0 HIGH+ (52 items, exit 0).
+  _(commit COMMIT_HASH)_
 
 ---
 
