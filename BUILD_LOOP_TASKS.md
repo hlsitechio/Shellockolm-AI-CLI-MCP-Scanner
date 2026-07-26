@@ -1838,7 +1838,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   suppression with its non-vacuity twin, and the no-op guarantees on reviewable source).
   Full suite **2786 passed / 1 skipped** (was 2756); `ruff check src` clean; configured
   `mypy` gate clean; coverage 35.19% over the 28% floor; self-scan gate 0 HIGH+ (exit 0).
-  _(commit PENDING)_
+  _(commit 0bb3572)_
 
 - F24. [ ] **`_is_inert_code_context` is now a second, diverging definition of the gate**
   — the scanner calls `_first_live_match`, which judges a match in its statement; the
