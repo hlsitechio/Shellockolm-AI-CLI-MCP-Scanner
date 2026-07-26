@@ -73,8 +73,13 @@ jobs:
       # BLOCKS the build on any violation in the enforced rule families. The
       # rule selection + deferred-backlog ignore list is the single source of
       # truth in [tool.ruff.lint] in pyproject.toml (shared with local runs),
-      # so CI and a local `ruff check src` enforce exactly the same gate.
-      run: ruff check src
+      # so CI and a local `ruff check src tests` enforce exactly the same gate.
+      #
+      # The gate covers `tests` as well as `src` (build-loop follow-up F25): the
+      # test tree is where every detection claim is actually pinned, so an
+      # unlinted suite is the place a typo'd assertion hides longest. It was
+      # outside the gate and had already drifted (13 violations when extended).
+      run: ruff check src tests
 
   typecheck:
     name: Type check (mypy)

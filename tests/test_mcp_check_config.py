@@ -85,7 +85,7 @@ def test_windows_user_locations_use_appdata():
     locs = known_mcp_config_locations(
         system="Windows", home=home, env=WIN_ENV, include_project=False
     )
-    by_client = {(l.client, l.scope): l.path for l in locs}
+    by_client = {(loc.client, loc.scope): loc.path for loc in locs}
     assert by_client[("Claude Desktop", "user")] == (
         Path("C:/Users/test/AppData/Roaming") / "Claude" / "claude_desktop_config.json"
     )
@@ -100,7 +100,7 @@ def test_macos_user_locations_use_application_support():
     locs = known_mcp_config_locations(
         system="Darwin", home=home, env={}, include_project=False
     )
-    by_client = {(l.client, l.scope): l.path for l in locs}
+    by_client = {(loc.client, loc.scope): loc.path for loc in locs}
     assert by_client[("Claude Desktop", "user")] == (
         home / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
     )
@@ -114,7 +114,7 @@ def test_linux_user_locations_use_config_dir():
     locs = known_mcp_config_locations(
         system="Linux", home=home, env={}, include_project=False
     )
-    by_client = {(l.client, l.scope): l.path for l in locs}
+    by_client = {(loc.client, loc.scope): loc.path for loc in locs}
     assert by_client[("Claude Desktop", "user")] == (
         home / ".config" / "Claude" / "claude_desktop_config.json"
     )
@@ -129,7 +129,7 @@ def test_windows_appdata_fallback_when_env_missing():
     locs = known_mcp_config_locations(
         system="Windows", home=home, env={}, include_project=False
     )
-    cd = next(l.path for l in locs if l.client == "Claude Desktop")
+    cd = next(loc.path for loc in locs if loc.client == "Claude Desktop")
     assert cd == home / "AppData" / "Roaming" / "Claude" / "claude_desktop_config.json"
 
 
@@ -139,12 +139,12 @@ def test_project_locations_under_root():
         system="Linux", home=Path("/home/test"), env={},
         project_root=root, include_user=False,
     )
-    paths = {l.path for l in locs}
+    paths = {loc.path for loc in locs}
     assert root / ".mcp.json" in paths
     assert root / "mcp.json" in paths
     assert root / ".cursor" / "mcp.json" in paths
     assert root / ".vscode" / "mcp.json" in paths
-    assert all(l.scope == "project" for l in locs)
+    assert all(loc.scope == "project" for loc in locs)
 
 
 def test_include_flags_toggle_scopes():
@@ -156,8 +156,8 @@ def test_include_flags_toggle_scopes():
     proj_only = known_mcp_config_locations(
         system="Linux", home=home, env={}, project_root=root, include_user=False
     )
-    assert user_only and all(l.scope == "user" for l in user_only)
-    assert proj_only and all(l.scope == "project" for l in proj_only)
+    assert user_only and all(loc.scope == "user" for loc in user_only)
+    assert proj_only and all(loc.scope == "project" for loc in proj_only)
 
 
 def test_paths_are_deduped_when_project_root_is_home():
@@ -168,9 +168,9 @@ def test_paths_are_deduped_when_project_root_is_home():
     locs = known_mcp_config_locations(
         system="Linux", home=home, env={}, project_root=home
     )
-    keys = [str(l.path) for l in locs]
+    keys = [str(loc.path) for loc in locs]
     assert len(keys) == len(set(keys)), "duplicate paths leaked"
-    cursor = [l for l in locs if l.path == home / ".cursor" / "mcp.json"]
+    cursor = [loc for loc in locs if loc.path == home / ".cursor" / "mcp.json"]
     assert len(cursor) == 1
     assert cursor[0].scope == "user"
 
@@ -264,7 +264,7 @@ def test_payload_shape_and_counts(tmp_path):
     assert "AGENT-MCP-005" in {f["id"] for f in payload["findings"]}
 
     # One location entry per checked path, with a per-status detail.
-    statuses = {(l["client"], l["status"]) for l in payload["locations"]}
+    statuses = {(loc["client"], loc["status"]) for loc in payload["locations"]}
     assert ("Claude Desktop", "scanned") in statuses
     assert ("Windsurf", "absent") in statuses
 

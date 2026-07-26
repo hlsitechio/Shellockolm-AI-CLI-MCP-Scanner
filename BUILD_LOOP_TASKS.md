@@ -1885,16 +1885,25 @@ each is a separate rule family with its own calibration burden. Ranked by severi
 
 ## Open follow-ups (surfaced by the F24 gate-parity pass, not yet worked)
 
-- F25. [ ] **`tests/` is outside the lint gate, and has drifted** — CI's build-blocking
-  step is `ruff check src` (ci.yml), so the test tree is never linted there. It is not
-  clean: `ruff check tests` reports **13 errors in 2 files** — 11 × `E741` (ambiguous
-  variable name `l`) in `tests/test_mcp_check_config.py` and `tests/test_agent_supply_chain.py`,
-  plus 2 × `E702` (multiple statements on one line). Nothing is broken by this and no
-  finding depends on it, but the test tree is where every detection claim in this file is
-  actually pinned, and an unlinted 2,800-test suite is the place a typo'd assertion hides
-  longest. The fix is mechanical (rename the loop variables, split the two lines) and the
-  point of the task is the second half: extend the CI gate to `ruff check src tests` so it
-  cannot drift again. Verify by making the gate fail first (it currently would), then pass.
+- F25. [x] **`tests/` is outside the lint gate, and has drifted** — CI's build-blocking
+  step was `ruff check src` (ci.yml), so the test tree was never linted there, and it had
+  drifted: `ruff check tests` reported **13 errors in 2 files** — 11 × `E741` (ambiguous
+  variable name `l`) in `tests/test_mcp_check_config.py` and 2 × `E702` (statements joined
+  by a semicolon) in `tests/test_agent_supply_chain.py`. Both fixed mechanically (`l` → `loc`,
+  including one comprehension that rebound `l` over a list named `l`; the two lines split),
+  never ignored — and `E741`/`E702` are now asserted **absent** from the `[tool.ruff.lint]`
+  ignore list, so the cheap "fix" of silencing a future failure re-opens the gate loudly.
+  The point of the task was the second half: the CI gate is now **`ruff check src tests`**.
+  Anti-drift is structural rather than a second hardcoded string — `_ci_ruff_paths()` parses
+  the path arguments back out of `ci.yml` and `test_repo_passes_the_exact_ci_ruff_invocation`
+  re-runs ruff over exactly them, so the tree CI lints and the tree proven clean here cannot
+  diverge, and widening the gate later verifies the new tree automatically.
+  **Verified fail-first**: a planted `E741`+`E702` file in `tests/` makes `ruff check src tests`
+  exit **1** and fails both new mechanism tests (`test_repo_tests_tree_passes_its_own_ruff_gate`,
+  `test_repo_passes_the_exact_ci_ruff_invocation`); removed, the gate exits **0** and all pass.
+  4 new tests (gate-covers-src-and-tests, hygiene-codes-stay-enforced, tests-tree-clean,
+  exact-CI-invocation-clean); full suite **2821 passed / 1 skipped** (was 2817), `ruff check src tests`
+  clean, mypy clean, coverage 35.21% over the 28% floor, self-scan gate 0 HIGH+ (exit 0). _(commit COMMIT_HASH)_
 
 ---
 

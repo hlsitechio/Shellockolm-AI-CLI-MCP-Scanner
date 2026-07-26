@@ -2182,8 +2182,10 @@ def test_composite_boost_bumps_cvss_by_one_notch(tmp_path):
     # The boost adds +0.5 cvss on top of the severity bump; compare against the
     # same PI body scanned WITHOUT a sink (the un-boosted baseline).
     s = AgentSupplyChainScanner(pro=False)
-    plain_dir = tmp_path / "plain"; plain_dir.mkdir()
-    boosted_dir = tmp_path / "boosted"; boosted_dir.mkdir()
+    plain_dir = tmp_path / "plain"
+    plain_dir.mkdir()
+    boosted_dir = tmp_path / "boosted"
+    boosted_dir.mkdir()
     plain = s.scan_directory(_write_skill(plain_dir, "# Helper\n\n" + _PI_OVERRIDE))
     boosted = s.scan_directory(_write_skill(boosted_dir, "# Helper\n\n" + _PI_OVERRIDE + _WEBHOOK_SINK))
     base_cvss = _pi001(plain.findings).cvss_score

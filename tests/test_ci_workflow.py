@@ -5,7 +5,12 @@ Task #42 asks for a CI workflow that runs **lint (ruff)**, tests across
 across two committed files:
 
 * ``.github/workflows/ci.yml`` — the test matrix (OS x Python) and a dedicated,
-  build-blocking ``lint`` job that runs ``ruff check src``.
+  build-blocking ``lint`` job that runs ``ruff check src tests``. The ``tests``
+  path was added by build-loop follow-up F25: the test tree is where every
+  detection claim in the backlog is actually pinned, and while it sat outside
+  the gate it drifted (13 violations the day it was folded in). The gate paths
+  are parsed back out of the workflow here and re-run, so the tree CI lints and
+  the tree these tests prove clean can never diverge.
 * ``pyproject.toml`` — declares ``ruff`` as a dev dependency and the single
   source of truth for the lint rule selection / deferred-backlog ignore list in
   ``[tool.ruff.lint]`` (shared by CI and a local ``ruff check``).
@@ -38,6 +43,15 @@ EXPECTED_OSES = ["ubuntu-latest", "windows-latest"]
 # Crash-class rule codes that surfaced real bugs and must STAY enforced — they
 # may never be added to the deferred-backlog ignore list.
 ENFORCED_BUG_CODES = ["F821", "F823", "F811", "E9"]
+
+# Hygiene codes the F25 cleanup fixed in the test tree. They must stay enforced:
+# silencing them in the ignore list is the cheap way to "fix" a future failure,
+# which would quietly re-open the drift this gate exists to close.
+LINT_HYGIENE_CODES = ["E741", "E702"]
+
+# Trees the CI lint gate must cover. `src` is the shipped package; `tests` is
+# where the detection claims are pinned.
+REQUIRED_LINT_PATHS = ["src", "tests"]
 
 
 def _read(path: Path) -> str:
@@ -78,6 +92,19 @@ def _dev_extras(text: str) -> str:
             break
         body.append(line)
     return "\n".join(body)
+
+
+def _ci_ruff_paths(ci: str) -> list:
+    """Return the path arguments of the workflow's ``ruff check`` invocation.
+
+    Parsed straight out of ci.yml so the paths asserted (and re-linted) here are
+    literally the ones CI runs — a path added to or dropped from the gate shows
+    up in these tests instead of drifting silently.
+    """
+    m = re.search(r"^\s*run:\s*ruff check\s+(.+)$", ci, re.MULTILINE)
+    assert m, "no `run: ruff check ...` step found in ci.yml"
+    # Keep positional paths only; a future flag (e.g. --output-format) is not one.
+    return [tok for tok in m.group(1).split() if not tok.startswith("-")]
 
 
 def _ruff_argv():
@@ -134,6 +161,19 @@ def test_enforced_bug_codes_are_not_ignored():
         )
 
 
+def test_hygiene_codes_cleaned_from_tests_stay_enforced():
+    """E741/E702 were the drift that folding `tests` into the gate exposed. They
+    must not be silenced into the ignore list instead of being fixed."""
+    lint = _toml_table(_read(PYPROJECT), "tool.ruff.lint")
+    m = re.search(r"ignore\s*=\s*\[(.*?)\]", lint, re.DOTALL)
+    ignore_body = m.group(1) if m else ""
+    for code in LINT_HYGIENE_CODES:
+        assert f'"{code}"' not in ignore_body, (
+            f"{code} was fixed in the test tree, not ignored — it may not be "
+            f"added to [tool.ruff.lint] ignore"
+        )
+
+
 def test_requires_python_floor_matches_lowest_matrix_version():
     text = _read(PYPROJECT)
     m = re.search(r'requires-python\s*=\s*">=\s*([0-9]+\.[0-9]+)"', text)
@@ -171,14 +211,25 @@ def test_ci_has_dedicated_blocking_ruff_lint_job():
     assert re.search(r"^\s{2}lint:", ci, re.MULTILINE), (
         "expected a dedicated 'lint' job in ci.yml"
     )
-    assert "ruff check src" in ci, "the lint job must run `ruff check src`"
+    assert "ruff check" in ci, "the lint job must run `ruff check`"
     # The ruff step must be able to fail the build: no continue-on-error may
     # decorate the step that runs the lint invocation.
-    idx = ci.index("ruff check src")
+    idx = ci.index("ruff check")
     step_block = ci[max(0, idx - 500):idx + 100]
     assert "continue-on-error: true" not in step_block, (
         "the ruff lint step must block the build (no continue-on-error)"
     )
+
+
+def test_ci_ruff_gate_covers_src_and_tests():
+    """The gate must lint the test tree as well as the shipped package —
+    `tests` sat outside it and drifted (F25)."""
+    paths = _ci_ruff_paths(_read(CI_WORKFLOW))
+    for required in REQUIRED_LINT_PATHS:
+        assert required in paths, (
+            f"the CI ruff gate must lint `{required}`; it currently covers "
+            f"{paths}"
+        )
 
 
 # --------------------------------------------------------------------------
@@ -198,6 +249,44 @@ def test_repo_source_passes_its_own_ruff_gate():
     )
     assert result.returncode == 0, (
         "the committed src/ tree fails its own ruff gate:\n"
+        f"{result.stdout}\n{result.stderr}"
+    )
+
+
+def test_repo_tests_tree_passes_its_own_ruff_gate():
+    """The committed tests/ tree must pass `ruff check tests` — the half of the
+    gate F25 added, and the half that had drifted."""
+    argv = _ruff_argv()
+    if argv is None:
+        pytest.skip("ruff not installed; gate mechanism is exercised in CI")
+    result = subprocess.run(
+        argv + ["check", "tests"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        "the committed tests/ tree fails its own ruff gate:\n"
+        f"{result.stdout}\n{result.stderr}"
+    )
+
+
+def test_repo_passes_the_exact_ci_ruff_invocation():
+    """Run ruff over the paths parsed out of ci.yml itself. If the gate is later
+    widened to another tree, this test lints that tree too — the CI command and
+    the locally-proven-clean surface cannot drift apart."""
+    argv = _ruff_argv()
+    if argv is None:
+        pytest.skip("ruff not installed; gate mechanism is exercised in CI")
+    paths = _ci_ruff_paths(_read(CI_WORKFLOW))
+    result = subprocess.run(
+        argv + ["check"] + paths,
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"the repo fails the exact CI ruff gate (`ruff check {' '.join(paths)}`):\n"
         f"{result.stdout}\n{result.stderr}"
     )
 

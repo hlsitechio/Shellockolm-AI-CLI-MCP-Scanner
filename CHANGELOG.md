@@ -102,6 +102,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The lint gate now covers the test tree: `ruff check src` → `ruff check src tests`.**
+  CI's build-blocking lint step only ever linted `src`, so the suite that pins every
+  detection claim in the project was never checked by anything. It had drifted: folding
+  `tests` in surfaced **13 violations across 2 files** — 11 × `E741` (the ambiguous
+  variable name `l`, which in `tests/test_mcp_check_config.py` included a comprehension
+  rebinding `l` over a list named `l`) and 2 × `E702` (two statements joined by a
+  semicolon). Nothing was broken by them and no finding depended on them, but an unlinted
+  2,800-test suite is where a typo'd assertion — a name that resolves to the wrong object,
+  a redefined helper — hides longest, which is the class `F`/`E9` catch. The violations are
+  fixed rather than ignored, and `E741`/`E702` are now asserted absent from the deferred
+  ignore list so a future failure can't be silenced back into drift. The gate paths are
+  parsed back out of `ci.yml` and re-run by the contract tests, so the tree CI lints and the
+  tree proven clean locally cannot diverge again — widen the gate and the new tree is
+  verified automatically. Verified fail-first: a planted `E741`/`E702` in `tests/` makes
+  `ruff check src tests` exit 1 and fails the two mechanism tests; removed, both pass.
+  4 new tests; suite **2821 passed / 1 skipped** (was 2817), mypy clean, coverage 35.21%
+  over the 28% floor, self-scan 0 HIGH+.
+
 - **The inert-context gate has one definition again (internal; no behaviour change).**
   The gate that decides whether a bundled-script match is executed code or inert data had
   drifted into two implementations: the scanner judges a match in its **statement**, while
