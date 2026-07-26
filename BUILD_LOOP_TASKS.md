@@ -1788,7 +1788,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   census FP shape as a suppression guard with a non-vacuity counterpart), plus the F21
   and F20 tests that asserted withholding updated to the new behaviour. Full suite
   **2756 passed / 1 skipped** (was 2731); `ruff check src` clean; configured `mypy` gate
-  clean; self-scan gate 0 HIGH+ (exit 0). _(commit PENDING)_
+  clean; self-scan gate 0 HIGH+ (exit 0). _(commit 0eaefa7)_
 
 ---
 
