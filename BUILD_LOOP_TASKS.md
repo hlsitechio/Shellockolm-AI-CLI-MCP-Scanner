@@ -1879,7 +1879,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   findings before, 190 after, an identical finding SET**, timing flat (57.94s → 58.07s).
   31 new tests; full suite **2817 passed / 1 skipped** (was 2786); `ruff check src` clean
   (the new test file too); configured `mypy` gate clean; coverage 35.21% over the 28%
-  floor; self-scan gate 0 HIGH+ (exit 0).
+  floor; self-scan gate 0 HIGH+ (exit 0). _(commit e0a315a)_
 
 ---
 
