@@ -1883,5 +1883,20 @@ each is a separate rule family with its own calibration burden. Ranked by severi
 
 ---
 
+## Open follow-ups (surfaced by the F24 gate-parity pass, not yet worked)
+
+- F25. [ ] **`tests/` is outside the lint gate, and has drifted** — CI's build-blocking
+  step is `ruff check src` (ci.yml), so the test tree is never linted there. It is not
+  clean: `ruff check tests` reports **13 errors in 2 files** — 11 × `E741` (ambiguous
+  variable name `l`) in `tests/test_mcp_check_config.py` and `tests/test_agent_supply_chain.py`,
+  plus 2 × `E702` (multiple statements on one line). Nothing is broken by this and no
+  finding depends on it, but the test tree is where every detection claim in this file is
+  actually pinned, and an unlinted 2,800-test suite is the place a typo'd assertion hides
+  longest. The fix is mechanical (rename the loop variables, split the two lines) and the
+  point of the task is the second half: extend the CI gate to `ruff check src tests` so it
+  cannot drift again. Verify by making the gate fail first (it currently would), then pass.
+
+---
+
 Completed prior to this backlog (context): AGENT-PI-001…010, MCP structured scan,
 webhook/paste exfil, server-authoritative licensing, CLI menu/README agent-scan surfacing.
