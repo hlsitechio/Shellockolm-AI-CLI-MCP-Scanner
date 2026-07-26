@@ -1907,5 +1907,21 @@ each is a separate rule family with its own calibration burden. Ranked by severi
 
 ---
 
+## Open follow-ups (surfaced by the F25 lint-gate pass, not yet worked)
+
+- F26. [ ] **`scripts/` is the last tree outside the lint gate** — F25 closed `tests`;
+  the gate is now `ruff check src tests`, which still leaves `scripts/` unlinted.
+  Verified state: `ruff check scripts` reports **1 error** (`E401`,
+  multiple-imports-on-one-line, ruff-fixable). Small, but `scripts/` is not inert —
+  it holds `action_summary.py`, which the **GitHub Action** runs to produce the
+  findings count (task #21), and `benchmark_scan.py`, whose corpus generator the
+  perf tripwire imports (task #26). A break there is a break in shipped CI surface.
+  The mechanism is already built: add `scripts` to the `run:` line in ci.yml and
+  `REQUIRED_LINT_PATHS` in `tests/test_ci_workflow.py` — `_ci_ruff_paths()` re-runs
+  ruff over whatever CI declares, so the new tree is verified with no further wiring.
+  Verify fail-first as F25 did (plant a violation, watch the gate go red, remove it).
+
+---
+
 Completed prior to this backlog (context): AGENT-PI-001…010, MCP structured scan,
 webhook/paste exfil, server-authoritative licensing, CLI menu/README agent-scan surfacing.
