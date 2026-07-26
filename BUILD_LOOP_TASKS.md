@@ -1741,19 +1741,88 @@ each is a separate rule family with its own calibration burden. Ranked by severi
 
 ## Open follow-ups (surfaced by the F21 generated-content pass, not yet worked)
 
-- F22. [ ] **Fetch-exec and obfuscated-exec are still blind inside generated content** —
-  F21 closed the third of the gap that could be closed on principle; the other two rules
-  are withheld on a measured basis (002) and a mechanical one (001), and the warning now
-  says so precisely. Closing them needs what F21 did NOT need: an actual re-tokenisation
-  of the generated line, because the failure is that `[^\n]{0,N}` means "one statement"
-  in source and "fifteen tokens" in minified code. The tractable version is to split a
-  generated line into statements (`;`/`}` at brace depth 0, respecting string literals)
-  and run the two rules per STATEMENT rather than per line — that restores the windows'
-  intended meaning without inventing a parser. The bar to clear is already measured and
-  specific: the 34 known false positives in this machine's corpus (`atob(`/
-  `fromCharCode(` near a minifier-adjacent `Function`; a `-EncodedCommand` help string)
-  must all stay suppressed, and a payload planted mid-bundle must be caught — F21's
-  0/65→65/65 harness is reusable as-is for the second half.
+- F22. [x] **Fetch-exec and obfuscated-exec are still blind inside generated content** —
+  done as specified, with **two corrections the measurement forced and one the note's
+  own bar could not survive.** The re-tokenisation is `_statement_boundaries`: `;` `{`
+  `}` outside a string literal (escapes and `${…}` interpolation respected), and each
+  match is judged against the statement it starts in — a match running PAST its
+  statement is the window artifact the guard existed for and stays suppressed, a match
+  contained in one is reported exactly as the same payload in source is. **(1) `{` had
+  to join `;`/`}`, and depth-0 had to go.** The note sketched "`;`/`}` at brace depth 0";
+  the census puts every false positive INSIDE a function body and a bundle wrapped in
+  one IIFE has no depth-0 content at all, so depth-0 splitting restores nothing — while
+  two of the three FP shapes (`function el(t){let e=atob(`) are separated from their
+  decoder by exactly one `{`. **(2) Per-statement SCANNING, not per-match filtering.**
+  Filtering afterwards leaves `finditer`'s non-overlapping matches free to swallow a
+  real payload inside a discarded artifact (`function f(){}var X={eval(atob(`), which
+  measured 4 of 65 planted payloads missed; the fix re-scans the statements a withheld
+  artifact covers. **(3) The note's bar — "the 34 known false positives must all stay
+  suppressed" — was wrong about 9 of them, and following it would have been the bug.**
+  25 stay suppressed (every window artifact). The other 9 are one shape in nine copies
+  of one plugin's vendored bundle, recorded by F21 as "a `-EncodedCommand` help string";
+  it is a real ``execSync(`powershell -NoProfile -EncodedCommand ${d}`)``, and the
+  scanner **already reports the identical code when it is not minified** (asserted as
+  behaviour). Keeping it suppressed would have made the same bytes score differently
+  depending on whether someone ran a bundler — the exact evasion this line of work
+  exists to remove — so it fires, and the CHANGELOG says why it is a consistency fix
+  rather than a precision regression. Verified on real content: **0 findings lost**
+  anywhere across 1,814 real bundled/plugin scripts, +9 as above, and a payload planted
+  at a statement boundary inside the genuine generated line of each of the 65 files
+  carrying one caught **65/65 for BOTH rules** (0/65 before) — F21's harness reused,
+  after fixing it (and the shared `_minified` fixture) to plant at a boundary instead of
+  the raw midpoint, which had been splicing payloads into the middle of identifiers and
+  string literals and so testing the splice rather than the scanner. Live CLI proof on a
+  48k-char minified bundle hiding a `curl … | bash`: **0 findings / exit 0 at HEAD, 1
+  HIGH / exit 1 after**. **Perf held flat by design and by measurement**: the first
+  implementation ran `finditer` per statement region and cost **+65 % wall-clock**
+  (59.3s → 97.7s on `~/.claude/plugins`); scanning once and re-tokenising only around a
+  boundary-crossing match gives identical results at **59.5s vs 59.3s**, with the split
+  lazy and per line so a file with no generated content never performs one
+  (`docs/PERFORMANCE.md`). The coverage warning stops claiming those regions were
+  UNSCANNED — F11 doctrine cuts both ways — and now names how each rule ran, keeping
+  only the caveat that survives: a build artifact is not what its author wrote. 25 new
+  tests (`tests/test_statement_reach.py`: splitter units incl. string/escape/template
+  literals and the deliberate non-splitting of `|`, the partition property, statement
+  scope + its cache, detection restored at 2.5k and 70k chars, the minified-vs-source
+  parity property, the swallowing regression, `\b` preservation at a boundary, and every
+  census FP shape as a suppression guard with a non-vacuity counterpart), plus the F21
+  and F20 tests that asserted withholding updated to the new behaviour. Full suite
+  **2756 passed / 1 skipped** (was 2731); `ruff check src` clean; configured `mypy` gate
+  clean; self-scan gate 0 HIGH+ (exit 0). _(commit PENDING)_
+
+---
+
+## Open follow-ups (surfaced by the F22 statement-scoping pass, not yet worked)
+
+- F23. [ ] **A line that CONTINUES a multi-line string literal gets no split at all** —
+  measured, not hypothesised, and larger than it looks: **70 of the 384 generated lines
+  on this machine's corpus produce zero statement boundaries**. Not because they have no
+  `;` `{` `}` — they are full of them — but because `_statement_boundaries` starts its
+  quote state machine fresh at each line, so a line that opens in the middle of a
+  multi-line template literal reads the literal's CLOSING backtick as an opening one and
+  treats the rest of the line as string data. Those lines fall back to whole-line
+  judgement, i.e. exactly the degraded regime F20 described. The same blind spot is
+  older than F22 — the quote-parity half of `_is_inert_code_context` counts quotes from
+  the start of the line and has always had it — which is why this is a gap to close on
+  its own terms rather than a regression. **It costs nothing today, and that was checked
+  rather than assumed:** 9 raw rule matches land on such lines (one viewer bundle's
+  `String.fromCharCode` surrogate-pair helper, nine copies) and **all 9 are suppressed**,
+  so the corpus delta stays exactly the +9 encoded-command findings with nothing lost.
+  The fix is to carry quote state ACROSS lines when splitting a file's generated lines —
+  cheap, since the state is already computed left to right — and the bar is the same as
+  F22's: the 25 suppressed artifacts stay suppressed, the 65/65 plant harness stays at
+  65/65, and the boundary-free count drops from 70 toward 0.
+
+- F24. [ ] **`_is_inert_code_context` is now a second, diverging definition of the gate**
+  — the scanner calls `_first_live_match`, which judges a match in its statement; the
+  position-only `_is_inert_code_context` still withholds a generated line wholesale.
+  They agree exactly on reviewable source and disagree on generated content by design,
+  but nothing enforces that the shared half stays shared: both call `_is_inert_in_span`
+  today, and a future edit to one path has no test telling it about the other. Either
+  fold the position-only form into the match-aware one (it has no in-tree caller left
+  outside tests) or add a parity test asserting they agree on every non-generated line —
+  the same anti-drift treatment `_oob_sink_alternation` and the shared `_FETCH_EXEC`
+  object already get.
 
 ---
 

@@ -65,6 +65,31 @@ constituent character (anti-drift), fast-paths benign ASCII *and* benign
 non-ASCII (emoji, curly quotes, accents, CJK), and still detects every smuggling
 attack while staying clean on benign prose.
 
+## Cost of statement scoping on generated content
+
+Scanning a minified line statement by statement (F22 — so a payload run through a
+bundler is still detected) is **free on everything that is not minified**, which
+is almost everything: the split is lazy and keyed by line, so a file with no line
+of 2,000+ characters never performs one, and a file that has one pays only when a
+rule actually matches on it. Measured on `~/.claude/plugins` (1,144 bundled
+scripts, 65 of them carrying a generated line, best of two runs each):
+
+| Build                        | Wall-clock | Findings |
+|------------------------------|-----------:|---------:|
+| before                       | 59.33 s    | 187      |
+| statement scoping            | 59.48 s    | 196      |
+
+The +9 findings are real detections the length guard had been hiding, not new
+false positives — see the CHANGELOG entry.
+
+The first implementation ran each rule with `finditer` **per statement region**,
+which is the obvious reading of "run the rules per statement" and cost **97.7 s
+(+65 %)**: a 70,000-character line becomes thousands of regions, and the
+per-call overhead dominates. Scanning the text once and re-tokenising only around
+a match that crosses a statement boundary gives the identical results — the same
+25-suppressed / 9-fired split and the same 65/65 planted-payload detection — at
+no measurable cost.
+
 ## Perf-guard test
 
 `tests/test_perf_guard.py::test_scan_throughput_regression_guard` scans a

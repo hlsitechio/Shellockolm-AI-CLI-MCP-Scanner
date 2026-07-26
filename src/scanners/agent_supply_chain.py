@@ -2803,6 +2803,123 @@ _LINE_EXECUTOR = re.compile(
 )
 
 
+# The only characters that can change `_statement_boundaries`' answer: a statement
+# terminator, a quote that opens or closes a literal, or the escape that neutralizes one.
+_STATEMENT_TOKEN_RE = re.compile(r"[;{}'\"`\\]")
+
+
+def _statement_boundaries(line: str) -> List[int]:
+    """Offsets in ``line`` at which a statement begins, string literals respected.
+
+    The re-tokenisation F22 needed. Every mechanism in this module is written for a
+    LINE because in reviewable source a line *is* a statement; minification breaks that
+    identity, and with it the meaning of every `[^\\n]{0,N}` window (see
+    ``_UNREVIEWABLE_LINE_CHARS``). Splitting the generated line back into statements
+    restores the identity rather than working around its loss.
+
+    A boundary is ``;`` ``{`` or ``}`` outside a string literal — the tokens that end a
+    statement or open/close a block in every language ``BUNDLED_SCRIPT_EXTENSIONS``
+    covers. Deliberately NOT ``|`` or ``&&``: ``curl … | bash`` is one statement and one
+    payload, and splitting there would destroy the very match the rules exist for.
+
+    ``{`` earns its place by measurement, not symmetry. F22's note sketched "``;``/``}``
+    at brace depth 0", but the corpus census puts every false positive INSIDE a function
+    body (depth >= 1), and a bundle wrapped in one IIFE has no depth-0 content at all —
+    depth-0 splitting restores nothing. Two of the three false-positive shapes
+    (``function Xu(t){let e=atob(``) are separated from their decoder by exactly one
+    ``{``, so ``{`` is what makes the split bite.
+
+    String tracking is the single-quote/double-quote/backtick state machine with
+    backslash escapes, because a boundary character inside a string literal is the one
+    thing that would split a statement wrongly, and template interpolation (``${d}``) is
+    precisely that case. Comments are not tracked: the content this runs on is minified,
+    and minification strips them.
+
+    KNOWN LIMIT, measured: the state starts fresh at each line, so a line that opens in
+    the middle of a MULTI-LINE literal reads that literal's closing quote as an opening
+    one and yields no boundary at all — 70 of the 384 generated lines on the real corpus.
+    Those fall back to whole-line judgement, which is where F20 started; it currently
+    costs nothing (all 9 rule matches on such lines are suppressed either way), and F23
+    tracks carrying the state across lines. The same blind spot predates this function:
+    the quote-parity half of `_is_inert_code_context` counts from the line start too.
+    """
+    out: List[int] = [0]
+    quote = ""
+    skip_to = -1
+    n = len(line)
+    # Jump between the only characters that can change the answer rather than walking
+    # every one: this runs on lines of up to 70,000 characters, where a per-character
+    # Python loop is the difference between a fast scan and a slow one.
+    for m in _STATEMENT_TOKEN_RE.finditer(line):
+        i = m.start()
+        if i < skip_to:
+            continue
+        ch = line[i]
+        if quote:
+            if ch == "\\":
+                skip_to = i + 2
+            elif ch == quote:
+                quote = ""
+        elif ch in "'\"`":
+            quote = ch
+        elif ch in ";{}" and i + 1 < n:
+            out.append(i + 1)
+    return out
+
+
+def _statement_scope(text: str, pos: int, cache: Dict[int, List[int]]) -> Tuple[int, int]:
+    """The span a match at ``pos`` is judged in: its line, or its STATEMENT (F22).
+
+    On reviewable source a line IS a statement, so this returns the line and every gate
+    downstream behaves exactly as it did before F22 — which is the whole of the cost
+    model, since 1,749 of this machine's 1,814 bundled scripts contain no generated line
+    at all and never reach the split.
+
+    On a generated line the identity breaks, and with it the meaning of every
+    ``[^\\n]{0,80}`` window, so the line is re-tokenised (:func:`_statement_boundaries`)
+    and the statement containing ``pos`` stands in for it.
+
+    ``cache`` is keyed by line start and filled lazily: a file that carries a minified
+    module but no match on it never pays for the split at all.
+    """
+    line_start, line_end = _line_span(text, pos)
+    if line_end - line_start < _UNREVIEWABLE_LINE_CHARS:
+        return line_start, line_end
+    bounds = cache.get(line_start)
+    if bounds is None:
+        bounds = cache[line_start] = _statement_boundaries(text[line_start:line_end])
+    offset = pos - line_start
+    lo, hi = 0, len(bounds)
+    while lo < hi:  # bisect_right, without importing the module for one call site
+        mid = (lo + hi) // 2
+        if bounds[mid] <= offset:
+            lo = mid + 1
+        else:
+            hi = mid
+    start = bounds[lo - 1] if lo else 0
+    end = bounds[lo] if lo < len(bounds) else line_end - line_start
+    return line_start + start, line_start + end
+
+
+def _is_inert_in_span(text: str, pos: int, start: int, end: int,
+                      quoted_is_inert: bool) -> bool:
+    """The three inert-context tests, evaluated over ``text[start:end]``.
+
+    Factored out of :func:`_is_inert_code_context` so the identical logic can run with a
+    STATEMENT standing in for the line on generated content (F22). Nothing about the
+    tests changes; only what counts as "the line the match sits on".
+    """
+    span = text[start:end]
+    if _LINE_EXECUTOR.search(span):
+        return False
+    if _INERT_COMMENT_START.match(span):
+        return True
+    if not quoted_is_inert:
+        return False
+    prefix = text[start:pos]
+    return any(prefix.count(quote) % 2 == 1 for quote in ("'", '"', "`"))
+
+
 def _is_inert_code_context(text: str, pos: int, quoted_is_inert: bool = True,
                            length_guard: bool = True) -> bool:
     """True when the match at ``pos`` is data the script never executes.
@@ -2843,22 +2960,86 @@ def _is_inert_code_context(text: str, pos: int, quoted_is_inert: bool = True,
     ``length_guard=False`` turns that last test off for a rule whose match cannot span a
     line — see ``_SELF_DELIMITING_RULE_IDS`` for which rules qualify and why the guard's
     argument does not reach them.
+
+    This is the POSITION-only form, kept for callers that hold an offset rather than a
+    match. The scanner itself calls :func:`_is_inert_match`, which re-tokenises a
+    generated line into statements instead of withholding it wholesale (F22); the two
+    agree exactly on reviewable source.
     """
-    line_start = text.rfind("\n", 0, pos) + 1
-    line_end = text.find("\n", pos)
-    if line_end == -1:
-        line_end = len(text)
+    line_start, line_end = _line_span(text, pos)
     if length_guard and line_end - line_start >= _UNREVIEWABLE_LINE_CHARS:
         return True
-    line = text[line_start:line_end]
-    if _LINE_EXECUTOR.search(line):
-        return False
-    if _INERT_COMMENT_START.match(line):
-        return True
-    if not quoted_is_inert:
-        return False
-    prefix = text[line_start:pos]
-    return any(prefix.count(quote) % 2 == 1 for quote in ("'", '"', "`"))
+    return _is_inert_in_span(text, pos, line_start, line_end, quoted_is_inert)
+
+
+def _line_span(text: str, pos: int) -> Tuple[int, int]:
+    """The [start, end) of the line containing ``pos``."""
+    line_start = text.rfind("\n", 0, pos) + 1
+    line_end = text.find("\n", pos)
+    return line_start, len(text) if line_end == -1 else line_end
+
+
+def _first_live_match(text: str, pattern: "re.Pattern[str]", quoted_is_inert: bool,
+                      statement_scoped: bool = True) -> Optional["re.Match[str]"]:
+    """The first match of ``pattern`` in ``text`` that is not inert code context.
+
+    The pre-F22 shape — one pass of ``finditer`` over the whole text, first non-inert
+    match wins — with two additions that apply only on a generated line:
+
+      * A match that runs PAST its statement is a window artifact and is withheld.
+        ``[^\\n]{0,80}`` was written to mean "elsewhere in this statement"; in minified
+        code it reaches across a dozen, which is how ``String.fromCharCode(…)`` in a
+        percent-decoder reads as decode-then-eval because an unrelated ``function``
+        keyword follows within 80 characters.
+      * Withholding it must not take a REAL match down with it. ``finditer`` yields
+        non-overlapping matches and resumes past the artifact's end, so the artifact
+        ``function f(){}var x={eval(atob(`` would otherwise swallow the payload inside
+        it. The statements the artifact covers are therefore re-scanned individually.
+        Measured: without this, 4 of 65 planted payloads went unreported.
+
+    The reach is deliberately the reach these rules already have in source and no more:
+    a pattern cannot span a line there (every window is ``[^\\n]``-bounded) and cannot
+    span a statement here.
+
+    ``statement_scoped=False`` judges every match in its line however long that line is,
+    for a rule whose match is one self-delimiting literal
+    (``_SELF_DELIMITING_RULE_IDS``): splitting is not merely unnecessary for it but
+    harmful, since a sink URL may legitimately carry a ``;`` and would be cut in half.
+    """
+    cache: Dict[int, List[int]] = {}
+    for match in pattern.finditer(text):
+        if not statement_scoped:
+            start, end = _line_span(text, match.start())
+        else:
+            start, end = _statement_scope(text, match.start(), cache)
+            if match.end() > end:
+                live = _live_within_statements(text, pattern, match, cache,
+                                               quoted_is_inert)
+                if live is not None:
+                    return live
+                continue
+        if not _is_inert_in_span(text, match.start(), start, end, quoted_is_inert):
+            return match
+    return None
+
+
+def _live_within_statements(text: str, pattern: "re.Pattern[str]",
+                            artifact: "re.Match[str]", cache: Dict[int, List[int]],
+                            quoted_is_inert: bool) -> Optional["re.Match[str]"]:
+    """The first live match inside the statements a withheld artifact match covers.
+
+    Runs the pattern with ``finditer(text, start, end)`` rather than over a slice, so a
+    match starting flush against a statement boundary keeps the ``\\b`` it needs — the
+    real preceding character is still there.
+    """
+    pos = artifact.start()
+    while pos < artifact.end():
+        start, end = _statement_scope(text, pos, cache)
+        for match in pattern.finditer(text, start, end):
+            if not _is_inert_in_span(text, match.start(), start, end, quoted_is_inert):
+                return match
+        pos = max(end, pos + 1)
+    return None
 
 
 def _has_unreviewable_line(text: str) -> int:
@@ -3982,21 +4163,22 @@ class AgentSupplyChainScanner(BaseScanner):
     @classmethod
     def _note_unreviewable_lines(cls, result: ScanResult,
                                  scripts: List[Tuple[Path, int]]) -> None:
-        """Announce the bundled scripts that carry generated content the rules can't read.
+        """Announce the bundled scripts that ship generated content rather than source.
 
-        The bundled-script counterpart of :meth:`_note_unparseable_json`, and the same
-        doctrine (F11): the line-relative AGENT-SCRIPT-* rules and the
-        `_is_inert_code_context` gate they share are defined PER LINE, so a minified
-        module or an embedded blob on one enormous line is a region they cannot analyse
-        — and an unanalysed region must never render as an analysed-and-clean one. The
-        rest of each file is still fully covered (the guard is per match), so this
-        reports a PARTIAL gap, not a skipped file.
+        The bundled-script counterpart of :meth:`_note_unparseable_json`. F20 emitted it
+        as a COVERAGE gap — the AGENT-SCRIPT-* rules are written per LINE, and a minified
+        module on one enormous line was a region they were withheld from. F21 exempted
+        the self-delimiting rule and F22 closed the rest by scanning generated lines
+        statement by statement (`_script_scan_spans`), so there is no longer a rule that
+        does not run there.
 
-        The gap it names shrank at F21 and the text tracks that exactly: the rules still
-        withheld are derived from `_SELF_DELIMITING_RULE_IDS` rather than hardcoded, so
-        exempting another rule cannot leave this warning overstating the gap. Claiming
-        less coverage than you have is a smaller sin than claiming more, but it is still
-        a wrong statement about what was scanned.
+        The note therefore stays, but says something different, and the F11 doctrine it
+        serves cuts BOTH ways: an unscanned region must never render as scanned, and a
+        scanned one must never be reported as unscanned. Overstating a gap sends the
+        reader to audit something that was in fact analysed, and — worse for a security
+        tool — teaches them to discount the warning. What remains true, and worth one
+        line, is that a reviewer looking at a build artifact is not reading what its
+        author wrote.
 
         Emitted as ONE rolled-up warning rather than one per file, which is a coverage
         decision, not a cosmetic one: a single real plugin vendoring its build output
@@ -4014,20 +4196,22 @@ class AgentSupplyChainScanner(BaseScanner):
         more = len(worst) - cls._MAX_LISTED_UNREVIEWABLE
         if more > 0:
             shown += f", and {more} more"
-        withheld = ", ".join(sorted(
+        # Derived, never hardcoded: if a rule is ever withheld from generated content
+        # again, this sentence has to change with it rather than quietly go stale.
+        statement_scoped = ", ".join(sorted(
             rule.id for rule in BUNDLED_SCRIPT_RULES
             if rule.id not in _SELF_DELIMITING_RULE_IDS
         ))
-        reached = ", ".join(sorted(_SELF_DELIMITING_RULE_IDS))
+        whole_text = ", ".join(sorted(_SELF_DELIMITING_RULE_IDS))
         result.warnings.append(
             f"{len(worst)} bundled script(s) carry generated content — a minified bundle "
-            "or an embedded blob on one enormous line, not reviewable source. The "
-            f"line-relative auto-exec checks ({withheld}) were NOT applied on that "
-            "content, so a clean result for it means UNSCANNED, not safe; the rest of "
-            f"each file was scanned normally, and the checks that match a single "
-            f"self-delimiting literal ({reached}, plus the hardcoded-credential checks) "
-            "ran everywhere. Review the generating source rather than the build "
-            f"artifact. Longest: {shown}."
+            "or an embedded blob on one enormous line, not reviewable source. Every "
+            f"auto-exec check still ran there: {statement_scoped} statement by statement "
+            "(a statement in minified code stands in for a line in source, so a match "
+            f"cannot span one), and {whole_text} plus the hardcoded-credential checks "
+            "over the whole text. Coverage is not the caveat; readability is — a "
+            "generated artifact is not what its author wrote, so review the generating "
+            f"source, not this file. Longest: {shown}."
         )
 
     def _note_text_parse_gap(self, result: ScanResult, fp: Path, artifact: str,
@@ -4554,27 +4738,27 @@ class AgentSupplyChainScanner(BaseScanner):
         payload. See the census beside `BUNDLED_SCRIPT_RULES` for what that
         measured on the real corpus and which rules it kept out.
 
-        A generated region (a minified module, an embedded blob) is where that gate
-        stops meaning anything, so `_is_inert_code_context` withholds the LINE-RELATIVE
-        rules there and `_note_unreviewable_lines` announces the gap. Two families are
-        deliberately NOT withheld, on one principle: a match that is a single
-        self-delimiting literal does not depend on line structure, so nothing about it
-        changes when the line is a whole minified module. That covers the credential
-        family below (a key pasted into a build artifact is exactly as leaked as one in
-        the source) and, since F21, `_SELF_DELIMITING_RULE_IDS` — otherwise "minify the
-        payload" is a published way to switch the out-of-band sink check off.
+        A generated region (a minified module, an embedded blob) is where the LINE that
+        every one of those mechanisms is written against stops existing. Nothing is
+        withheld there any more: `_is_inert_match` splits the generated line back into
+        statements and judges each match against the one it starts in (F22), so a
+        payload minified into a bundle is reported exactly as the same payload in
+        source would be — and no further, since a match that runs past its statement is
+        the window artifact the guard was protecting against.
+
+        Two families skip even that, on one principle: a match that is a single
+        self-delimiting literal never depended on line structure at all. That covers the
+        credential family below (a key pasted into a build artifact is exactly as leaked
+        as one in the source) and, since F21, `_SELF_DELIMITING_RULE_IDS`.
         """
         findings: List[ScanFinding] = []
         for rule in BUNDLED_SCRIPT_RULES:
             if rule.pattern is None:
                 continue
-            quoted_is_inert = rule.id not in _SCRIPT_URL_SHAPED_RULE_IDS
-            length_guard = rule.id not in _SELF_DELIMITING_RULE_IDS
-            match = next(
-                (m for m in rule.pattern.finditer(text)
-                 if not _is_inert_code_context(text, m.start(), quoted_is_inert,
-                                               length_guard)),
-                None,
+            match = _first_live_match(
+                text, rule.pattern,
+                quoted_is_inert=rule.id not in _SCRIPT_URL_SHAPED_RULE_IDS,
+                statement_scoped=rule.id not in _SELF_DELIMITING_RULE_IDS,
             )
             if match is None:
                 continue

@@ -11,6 +11,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The fetch-exec and obfuscated-exec checks now reach inside generated content too.**
+  The exemption below closed one third of the evasion; the other two `AGENT-SCRIPT-*`
+  rules stayed off on minified content, so "run it through a bundler" still switched them
+  off. Their patterns really do reason across a line, and the fix is to give them back
+  the line they were written for: a generated line is split into **statements**
+  (`;` `{` `}` outside a string literal, escapes and `${…}` interpolation respected) and
+  each match is judged against the statement it starts in. A match that runs past its
+  statement is the window artifact the guard existed to stop and stays suppressed; a
+  match contained in one is reported exactly as the same payload in ordinary source is.
+  The reach is deliberately the reach these rules already have in source and no more —
+  a pattern cannot span a line there, and cannot span a statement here. Splitting on `{`
+  as well as `;`/`}` is measured, not symmetric: every false positive on the real corpus
+  sits **inside** a function body, so depth-0 splitting would have restored nothing, and
+  two of the three shapes are separated from their decoder by exactly one `{`.
+  Re-measured over 1,814 real bundled/plugin scripts (65 carrying a generated line): of
+  the 34 matches the guard was withholding, **25 stay suppressed** — every window
+  artifact — and **9 now fire**, all one shape in nine copies of one plugin's vendored
+  bundle. Those 9 are not a new false positive: the shape is
+  ``execSync(`powershell -NoProfile -EncodedCommand ${d}`)``, which the scanner already
+  reports when the same code is not minified (the prior census had recorded it as a help
+  string; it is a real `execSync`). **No finding is lost anywhere on the corpus**, and a
+  payload planted at a statement boundary inside the genuine generated line of each of
+  the 65 files is caught **65/65** for both rules (0/65 before). Scanning is unchanged on
+  reviewable source — the split is lazy and per line, so a scan of the real corpus
+  measures **59.5s vs 59.4s**, flat. The coverage warning no longer claims those regions
+  were unscanned, because they no longer are: it names how each rule ran and keeps only
+  the caveat that survives, that a build artifact is not what its author wrote.
+
 - **The out-of-band exfil check now reaches inside generated content.** The
   unanalysable-line guard below is honest, but it left an evasion an attacker can aim
   for: minify the payload and the `AGENT-SCRIPT-*` checks switch themselves off. The

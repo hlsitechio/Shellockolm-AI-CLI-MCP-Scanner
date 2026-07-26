@@ -217,9 +217,14 @@ def test_plugin_membership_does_not_disturb_skill_bundle_membership(tmp_path):
 # --- the generated-content guard: unit level -----------------------------------------
 
 def _minified(payload: str, width: int = _UNREVIEWABLE_LINE_CHARS + 500) -> str:
-    """One generated line of the given width with `payload` embedded in the middle."""
+    """One generated line of the given width with `payload` embedded in the middle.
+
+    The trailing `;` keeps the filler from running into the payload's last token — see
+    the same helper in `tests/test_generated_content_reach.py` for why a fixture without
+    it can pass for a reason unrelated to what it tests.
+    """
     filler = "var a=1;" * (width // 8)
-    return filler + payload + filler + "\n"
+    return filler + payload + ";" + filler + "\n"
 
 
 def test_guard_threshold_is_the_documented_constant():
@@ -294,15 +299,20 @@ def test_minified_bundle_help_string_cradle_is_not_reported(tmp_path):
     assert not _script_findings(_scan(root))
 
 
-def test_generated_content_is_announced_not_silently_skipped(tmp_path):
-    """F11: an unanalysed region must never render as analysed-and-clean."""
+def test_generated_content_is_announced_with_how_it_was_scanned(tmp_path):
+    """F11, both directions. F20 wrote this asserting "UNSCANNED, not safe", which was
+    true while the rules were withheld there. F22 scans generated lines statement by
+    statement, so the same doctrine now forbids that sentence: a region that WAS
+    analysed must not be reported as a gap. The note stays and names how each rule ran.
+    """
     root = _plugin(tmp_path, {"scripts/bundle.cjs": _minified("var x=1;")})
     result = _scan(root)
     hits = [w for w in result.warnings if "bundle.cjs" in w]
     assert len(hits) == 1
     warning = hits[0]
     assert "1 bundled script(s) carry generated content" in warning
-    assert "UNSCANNED, not safe" in warning
+    assert "UNSCANNED" not in warning
+    assert "statement by statement" in warning
     for rule_id in ("AGENT-SCRIPT-001", "AGENT-SCRIPT-002", "AGENT-SCRIPT-003"):
         assert rule_id in warning
 
