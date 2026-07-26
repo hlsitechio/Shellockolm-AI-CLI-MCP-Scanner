@@ -90,6 +90,32 @@ a match that crosses a statement boundary gives the identical results — the sa
 25-suppressed / 9-fired split and the same 65/65 planted-payload detection — at
 no measurable cost.
 
+### Carrying quote state across lines (F23)
+
+Splitting a line that *continues* a multi-line template literal needs the quote
+state the previous line left open, which means the walk to that line has to run.
+It stays free for the same reason the split does — laziness plus a fast path:
+
+* the walk happens only when a rule matches on a generated line, so the 1,749 of
+  1,814 bundled scripts with no generated line never start one;
+* it is forward-only and memoised, so a file is walked at most once per rule
+  rather than once per line; and
+* a line containing **no backtick** can neither open nor close the only delimiter
+  that survives a newline, so its exit state *is* its entry state and the
+  tokenizer is skipped entirely. That is nearly every line of a hand-written
+  script.
+
+Measured on `~/.claude/plugins` (5,231 items scanned):
+
+| Build                        | Wall-clock | Findings |
+|------------------------------|-----------:|---------:|
+| statement scoping (F22)      | 57.66 s    | 190      |
+| + quote carry (F23)          | 57.85 s    | 190      |
+
+The finding **set** is identical, not just the count. What changes is coverage of
+the generated lines themselves: zero-boundary lines fall from **70 of 384 to 19**,
+and a payload planted after a continued literal goes from 32/64 detected to 64/64.
+
 ## Perf-guard test
 
 `tests/test_perf_guard.py::test_scan_throughput_regression_guard` scans a

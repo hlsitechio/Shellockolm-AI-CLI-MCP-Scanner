@@ -1794,24 +1794,51 @@ each is a separate rule family with its own calibration burden. Ranked by severi
 
 ## Open follow-ups (surfaced by the F22 statement-scoping pass, not yet worked)
 
-- F23. [ ] **A line that CONTINUES a multi-line string literal gets no split at all** —
-  measured, not hypothesised, and larger than it looks: **70 of the 384 generated lines
-  on this machine's corpus produce zero statement boundaries**. Not because they have no
-  `;` `{` `}` — they are full of them — but because `_statement_boundaries` starts its
-  quote state machine fresh at each line, so a line that opens in the middle of a
-  multi-line template literal reads the literal's CLOSING backtick as an opening one and
-  treats the rest of the line as string data. Those lines fall back to whole-line
-  judgement, i.e. exactly the degraded regime F20 described. The same blind spot is
-  older than F22 — the quote-parity half of `_is_inert_code_context` counts quotes from
-  the start of the line and has always had it — which is why this is a gap to close on
-  its own terms rather than a regression. **It costs nothing today, and that was checked
-  rather than assumed:** 9 raw rule matches land on such lines (one viewer bundle's
-  `String.fromCharCode` surrogate-pair helper, nine copies) and **all 9 are suppressed**,
-  so the corpus delta stays exactly the +9 encoded-command findings with nothing lost.
-  The fix is to carry quote state ACROSS lines when splitting a file's generated lines —
-  cheap, since the state is already computed left to right — and the bar is the same as
-  F22's: the 25 suppressed artifacts stay suppressed, the 65/65 plant harness stays at
-  65/65, and the boundary-free count drops from 70 toward 0.
+- F23. [x] **A line that CONTINUES a multi-line string literal gets no split at all** —
+  the splitter now carries quote state across lines, and the count the task was opened on
+  was confirmed before anything was changed: **70 of the 384 generated lines** produced
+  zero statement boundaries, not for want of `;` `{` `}` but because
+  `_statement_boundaries` started its state machine fresh at each line and so read a
+  continued literal's CLOSING backtick as an OPENING one, inverting string and code for
+  the rest of the line. **Only the backtick is carried**, and the corpus is what decided
+  that rather than symmetry: threading all three delimiters — the obvious reading of
+  "carry the state" — costs **103 of 384** generated lines their split (one drops from
+  2,070 statements to 1), because in JavaScript and Python a `'`/`"` literal is
+  terminated BY the newline, so an apostrophe in a comment (`// don't`) or a quote inside
+  a regex literal (`/["']/`) opens a literal nothing ever closes. A run-scoped carry
+  (contiguous generated lines only) was measured too and fixes **nothing** — the literals
+  in question open on an ordinary short line above. Backtick-only: zero-boundary lines
+  **70 → 19**, 215 lines gain a split, and the 23 that split *less* are lines that
+  genuinely begin inside a literal, where the skipped delimiters are string data.
+  **The carry also had to reach the gate, not just the splitter**: the quote-parity half
+  of `_is_inert_in_span` counts from the span start, so an opener on an earlier line was
+  invisible to it and a payload sitting in the literal as STRING DATA — a bundle's own
+  ``usage: run curl … | bash`` help text — was reported. It fires at HEAD and is now
+  suppressed, seeded by the same carried state (only the FIRST statement of a line can
+  inherit it: a boundary is only ever emitted outside a literal). Detection restored,
+  measured both ways on the F21/F22 plant harness re-shaped for a continued literal:
+  **AGENT-SCRIPT-001 0/32 → 32/32**, total **32/64 → 64/64**. Corpus verdict via the live
+  Pro scanner over `~/.claude/plugins` (5,231 items): **190 findings before, 190 after,
+  an identical finding SET** — no suppressed artifact lost its suppression and nothing
+  was dropped. Perf flat by construction and by measurement (**57.66s → 57.85s**): the
+  walk is lazy (1,749 of 1,814 bundled scripts have no generated line and never start
+  one), forward-only and memoised, and skipped entirely for a line with no backtick,
+  since such a line can neither open nor close the only carried delimiter.
+  `_statement_boundaries` keeps its one-argument form (delegating to a new
+  `_statement_split` that also returns the exit state), so nothing outside the carry
+  changed. Residual limit, stated rather than papered over: exact recovery needs a JS
+  tokenizer (a quote in a regex literal is indistinguishable from an opener without
+  knowing regex from division), which desynchronises the carry inside one
+  133,000-character React bundle line — after which its lines enter at `""`, exactly what
+  they did before. 30 new tests (`tests/test_statement_carry.py`: exit-state units, the
+  carried-vs-not inversion as non-vacuity, the per-delimiter carry policy incl. an
+  anti-drift check against `_NEWLINE_SPANNING_QUOTES`, the upstream-apostrophe guard,
+  cache memoisation / out-of-order restart / backtick fast-path parity, `span_quote`
+  seeding only the first statement, the 64-slot plant harness, the string-data
+  suppression with its non-vacuity twin, and the no-op guarantees on reviewable source).
+  Full suite **2786 passed / 1 skipped** (was 2756); `ruff check src` clean; configured
+  `mypy` gate clean; coverage 35.19% over the 28% floor; self-scan gate 0 HIGH+ (exit 0).
+  _(commit PENDING)_
 
 - F24. [ ] **`_is_inert_code_context` is now a second, diverging definition of the gate**
   — the scanner calls `_first_live_match`, which judges a match in its statement; the
@@ -1823,6 +1850,14 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   outside tests) or add a parity test asserting they agree on every non-generated line —
   the same anti-drift treatment `_oob_sink_alternation` and the shared `_FETCH_EXEC`
   object already get.
+  **Updated by F23**, which widened the divergence by one axis and narrowed it by
+  another. Widened: `_is_inert_in_span` grew an `entry_quote` parameter that only the
+  match-aware path ever supplies, so the position-only form is now also the form that
+  cannot see a carried literal. Narrowed: `test_the_position_only_gate_is_untouched_on_reviewable_source`
+  asserts the two agree on a three-probe reviewable fixture (comment / executed / quoted,
+  and checks the three verdicts differ so it cannot pass vacuously). That is a spot check,
+  not the property — the task as written still stands, and folding the two forms together
+  is now the cheaper half of it.
 
 ---
 

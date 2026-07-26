@@ -11,6 +11,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The statement splitter now carries quote state across lines, so a line that
+  *continues* a multi-line template literal is split correctly.** The splitter added
+  below started its state machine fresh at every line. That is right for a line
+  beginning in ordinary code and wrong for one beginning inside a multi-line template
+  literal: it reads the literal's **closing** backtick as an **opening** one and inverts
+  string and code for the rest of the line. On the real corpus that left **70 of 384
+  generated lines with no boundary at all** — whole-line judgement, the degraded regime
+  the split exists to escape — and a `curl … | bash` minified after such a literal went
+  unreported. Only the **backtick** is carried, and that is a language fact rather than
+  caution: in JavaScript and Python a `'` or `"` literal is terminated *by* the newline,
+  so carrying it is an error the corpus prices exactly — threading all three states costs
+  **103 of 384** generated lines their split (one drops from 2,070 statements to 1)
+  because an apostrophe in a comment or a quote inside a regex literal opens a literal
+  nothing ever closes. Carrying the backtick alone takes zero-boundary lines **70 → 19**
+  and a payload planted at every statement slot after a continued literal from **32/64
+  to 64/64** detected. The same carried state also reaches the inert-context gate, whose
+  quote-parity test counts from the span start and therefore could not see an opener on
+  an earlier line: a payload sitting inside the literal as **string data** — a bundle's
+  own ``usage: run curl … | bash`` help text — fired before and is now correctly
+  suppressed. **The finding set on the real corpus is identical** (190 findings over
+  5,231 items, same rules, same locations), and the walk is free by construction: lazy
+  (a file with no generated line never starts one), forward-only and memoised (a file is
+  walked at most once per rule), and skipped entirely for any line without a backtick,
+  measuring **57.9s vs 57.7s**. Recovering the state exactly would need a JS tokenizer —
+  a quote inside a regex literal is indistinguishable from an opener without knowing
+  regex from division — so on one 133,000-character bundle line the carry desynchronises
+  and later lines fall back to entering in ordinary code, which is precisely what they
+  did before.
+
 - **The fetch-exec and obfuscated-exec checks now reach inside generated content too.**
   The exemption below closed one third of the evasion; the other two `AGENT-SCRIPT-*`
   rules stayed off on minified content, so "run it through a bundler" still switched them

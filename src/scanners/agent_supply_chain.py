@@ -2807,8 +2807,58 @@ _LINE_EXECUTOR = re.compile(
 # terminator, a quote that opens or closes a literal, or the escape that neutralizes one.
 _STATEMENT_TOKEN_RE = re.compile(r"[;{}'\"`\\]")
 
+# The only quote that survives a newline, and the whole of what `_StatementCache` carries
+# from one line to the next (F23).
+#
+# This is a language fact, not conservatism: in JavaScript — the language that produces
+# every bundle in `BUNDLED_SCRIPT_EXTENSIONS`' generated content — a `'` or `"` literal is
+# TERMINATED by the line break, and a template literal is the one form that spans lines.
+# Python agrees for its single-delimiter forms.
+#
+# Carrying the other two is therefore not a safer approximation but a wrong one, and the
+# corpus measures the cost precisely. Threading all three states across lines costs 103 of
+# this machine's 384 generated lines their split — one drops from 2,070 statements to 1 —
+# because an apostrophe in a comment (`// don't`) or a quote inside a regex literal
+# (`/["']/`) opens a literal that nothing ever closes. Carrying the backtick alone turns
+# the same corpus the other way: 215 lines GAIN a split, 19 zero-boundary lines remain of
+# the 70 there were, and the 23 lines that split less are lines that genuinely open inside
+# a template literal, where the boundary characters being skipped are string data.
+_NEWLINE_SPANNING_QUOTES = "`"
 
-def _statement_boundaries(line: str) -> List[int]:
+
+def _statement_split(line: str, quote: str = "") -> Tuple[List[int], str]:
+    """The statement splitter proper: ``(boundaries, quote state at end of line)``.
+
+    ``quote`` is the delimiter ``line`` is entered inside, ``""`` for ordinary code. The
+    exit state is returned RAW — deciding which delimiters survive a newline belongs to
+    the caller that carries it (``_NEWLINE_SPANNING_QUOTES``), not to the tokenizer.
+
+    See :func:`_statement_boundaries` for what a boundary is and why.
+    """
+    out: List[int] = [0]
+    skip_to = -1
+    n = len(line)
+    # Jump between the only characters that can change the answer rather than walking
+    # every one: this runs on lines of up to 70,000 characters, where a per-character
+    # Python loop is the difference between a fast scan and a slow one.
+    for m in _STATEMENT_TOKEN_RE.finditer(line):
+        i = m.start()
+        if i < skip_to:
+            continue
+        ch = line[i]
+        if quote:
+            if ch == "\\":
+                skip_to = i + 2
+            elif ch == quote:
+                quote = ""
+        elif ch in "'\"`":
+            quote = ch
+        elif ch in ";{}" and i + 1 < n:
+            out.append(i + 1)
+    return out, quote
+
+
+def _statement_boundaries(line: str, quote: str = "") -> List[int]:
     """Offsets in ``line`` at which a statement begins, string literals respected.
 
     The re-tokenisation F22 needed. Every mechanism in this module is written for a
@@ -2835,39 +2885,109 @@ def _statement_boundaries(line: str) -> List[int]:
     precisely that case. Comments are not tracked: the content this runs on is minified,
     and minification strips them.
 
-    KNOWN LIMIT, measured: the state starts fresh at each line, so a line that opens in
-    the middle of a MULTI-LINE literal reads that literal's closing quote as an opening
-    one and yields no boundary at all — 70 of the 384 generated lines on the real corpus.
-    Those fall back to whole-line judgement, which is where F20 started; it currently
-    costs nothing (all 9 rule matches on such lines are suppressed either way), and F23
-    tracks carrying the state across lines. The same blind spot predates this function:
-    the quote-parity half of `_is_inert_code_context` counts from the line start too.
+    ``quote`` is the delimiter the line is entered inside — ``""`` for a line that starts
+    in ordinary code, which is every line in reviewable source and the default here.
+    :class:`_StatementCache` supplies it for a line that continues a MULTI-LINE template
+    literal (F23); without it such a line reads the literal's CLOSING backtick as an
+    opening one, inverts string and code for the rest of the line, and typically yields no
+    boundary at all — 70 of the 384 generated lines on the real corpus, now 19.
+
+    RESIDUAL LIMIT, measured: recovering the state exactly would need a JS tokenizer, since
+    a quote inside a regex literal is indistinguishable from an opening one without knowing
+    regex from division. On the corpus that desynchronises the carry inside one 133,000-
+    character React bundle line, and every line after it in that file falls back to
+    entering at ``""`` — which is what it did before F23, so the failure mode is the old
+    behaviour rather than a new one. The same blind spot still applies to the quote-parity
+    half of `_is_inert_code_context`, which counts from the span start (F24).
     """
-    out: List[int] = [0]
-    quote = ""
-    skip_to = -1
-    n = len(line)
-    # Jump between the only characters that can change the answer rather than walking
-    # every one: this runs on lines of up to 70,000 characters, where a per-character
-    # Python loop is the difference between a fast scan and a slow one.
-    for m in _STATEMENT_TOKEN_RE.finditer(line):
-        i = m.start()
-        if i < skip_to:
-            continue
-        ch = line[i]
-        if quote:
-            if ch == "\\":
-                skip_to = i + 2
-            elif ch == quote:
-                quote = ""
-        elif ch in "'\"`":
-            quote = ch
-        elif ch in ";{}" and i + 1 < n:
-            out.append(i + 1)
-    return out
+    return _statement_split(line, quote)[0]
 
 
-def _statement_scope(text: str, pos: int, cache: Dict[int, List[int]]) -> Tuple[int, int]:
+class _StatementCache:
+    """Per-text memo behind :func:`_statement_scope`: statement splits, and the quote
+    state each line is entered in.
+
+    F22 introduced the split and cached it per line, keyed by line start, so a bundle that
+    puts a whole module on one 70,000-character line is tokenized once rather than once per
+    match. F23 adds the second map this needed all along: a line does not necessarily begin
+    in ordinary code, and a line that continues a template literal cannot be split correctly
+    without knowing that.
+
+    Both maps stay LAZY, because that is the cost model. 1,749 of this machine's 1,814
+    bundled scripts contain no generated line at all; they never ask for a split and so
+    never pay for one. When a split IS asked for, the walk to that line runs once and every
+    line it passes is memoized, so the whole file is tokenized at most once per rule — and
+    only the lines that can change the carried state are tokenized at all (see
+    :meth:`entry_quote`).
+    """
+
+    __slots__ = ("_text", "bounds", "entry", "_cursor")
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+        # line start -> statement boundaries, filled only for generated lines
+        self.bounds: Dict[int, List[int]] = {}
+        # line start -> the quote delimiter the line is entered inside
+        self.entry: Dict[int, str] = {0: ""}
+        self._cursor = 0  # the furthest line start whose entry state is known
+
+    def entry_quote(self, line_start: int) -> str:
+        """The quote state ``line_start`` is entered inside, ``""`` for ordinary code.
+
+        Walks forward from the furthest line already resolved, so a scan that visits lines
+        in order (which ``finditer`` guarantees) tokenizes each line at most once. An
+        out-of-order ask restarts from the top rather than guessing.
+
+        The walk skips the tokenizer entirely for a line that contains no backtick: with
+        only ``_NEWLINE_SPANNING_QUOTES`` carried, a line without one can neither open nor
+        close the literal that survives its newline, so its exit state IS its entry state.
+        That is the overwhelming majority of lines in a hand-written script, and it is why
+        carrying the state costs no measurable time.
+        """
+        known = self.entry.get(line_start)
+        if known is not None:
+            return known
+        text = self._text
+        pos = self._cursor if self._cursor <= line_start else 0
+        quote = self.entry[pos]
+        while pos < line_start:
+            newline = text.find("\n", pos, line_start)
+            end = line_start - 1 if newline == -1 else newline
+            if end - pos >= _UNREVIEWABLE_LINE_CHARS:
+                bounds, exit_quote = _statement_split(text[pos:end], quote)
+                self.bounds.setdefault(pos, bounds)
+            elif text.find("`", pos, end) == -1:
+                exit_quote = quote
+            else:
+                exit_quote = _statement_split(text[pos:end], quote)[1]
+            quote = exit_quote if exit_quote in _NEWLINE_SPANNING_QUOTES else ""
+            pos = end + 1
+            self.entry[pos] = quote
+        self._cursor = max(self._cursor, line_start)
+        return quote
+
+    def boundaries(self, line_start: int, line_end: int) -> List[int]:
+        """The statement starts of the generated line at ``line_start``, memoized."""
+        bounds = self.bounds.get(line_start)
+        if bounds is None:
+            bounds = self.bounds[line_start] = _statement_boundaries(
+                self._text[line_start:line_end], self.entry_quote(line_start)
+            )
+        return bounds
+
+    def span_quote(self, line_start: int, span_start: int) -> str:
+        """The quote state the STATEMENT beginning at ``span_start`` is entered inside.
+
+        A boundary is only ever emitted with the state empty — that is what makes it a
+        boundary rather than a character inside a literal — so every statement but the
+        first begins in ordinary code, and only the first inherits what its LINE was
+        entered in. That single case is the one the parity gate cannot see for itself.
+        """
+        return self.entry_quote(line_start) if span_start == line_start else ""
+
+
+def _statement_scope(text: str, pos: int,
+                     cache: "_StatementCache") -> Tuple[int, int, str]:
     """The span a match at ``pos`` is judged in: its line, or its STATEMENT (F22).
 
     On reviewable source a line IS a statement, so this returns the line and every gate
@@ -2876,18 +2996,23 @@ def _statement_scope(text: str, pos: int, cache: Dict[int, List[int]]) -> Tuple[
     at all and never reach the split.
 
     On a generated line the identity breaks, and with it the meaning of every
-    ``[^\\n]{0,80}`` window, so the line is re-tokenised (:func:`_statement_boundaries`)
-    and the statement containing ``pos`` stands in for it.
+    ``[^\\n]{0,80}`` window, so the line is re-tokenised (:func:`_statement_boundaries`,
+    entered in the quote state :class:`_StatementCache` carried to it) and the statement
+    containing ``pos`` stands in for it.
 
-    ``cache`` is keyed by line start and filled lazily: a file that carries a minified
-    module but no match on it never pays for the split at all.
+    ``cache`` is filled lazily: a file that carries a minified module but no match on it
+    never pays for the split at all.
+
+    Returns the span AND the quote state it is entered inside, because the second is not
+    recoverable from the first: a statement that continues a template literal looks
+    exactly like one that does not, and the parity gate in :func:`_is_inert_in_span`
+    reads it wrong without being told (F23). It is ``""`` for everything but the first
+    statement of a generated line that continues a literal.
     """
     line_start, line_end = _line_span(text, pos)
     if line_end - line_start < _UNREVIEWABLE_LINE_CHARS:
-        return line_start, line_end
-    bounds = cache.get(line_start)
-    if bounds is None:
-        bounds = cache[line_start] = _statement_boundaries(text[line_start:line_end])
+        return line_start, line_end, ""
+    bounds = cache.boundaries(line_start, line_end)
     offset = pos - line_start
     lo, hi = 0, len(bounds)
     while lo < hi:  # bisect_right, without importing the module for one call site
@@ -2898,16 +3023,26 @@ def _statement_scope(text: str, pos: int, cache: Dict[int, List[int]]) -> Tuple[
             hi = mid
     start = bounds[lo - 1] if lo else 0
     end = bounds[lo] if lo < len(bounds) else line_end - line_start
-    return line_start + start, line_start + end
+    return line_start + start, line_start + end, cache.span_quote(line_start,
+                                                                  line_start + start)
 
 
 def _is_inert_in_span(text: str, pos: int, start: int, end: int,
-                      quoted_is_inert: bool) -> bool:
+                      quoted_is_inert: bool, entry_quote: str = "") -> bool:
     """The three inert-context tests, evaluated over ``text[start:end]``.
 
     Factored out of :func:`_is_inert_code_context` so the identical logic can run with a
     STATEMENT standing in for the line on generated content (F22). Nothing about the
     tests changes; only what counts as "the line the match sits on".
+
+    ``entry_quote`` is the delimiter the span is already inside when it begins — the
+    state :class:`_StatementCache` carries across a newline (F23). The parity test counts
+    quotes from the span start, so an opener on an EARLIER line is invisible to it and a
+    payload sitting in a multi-line template literal reads as live code: the corpus shape
+    is a bundle's own help text, and the fixture is ``usage: run curl … | bash``. Counting
+    the unseen opener is the whole fix. It defaults to ``""``, so every caller that does
+    not carry state — :func:`_is_inert_code_context`, and every span on reviewable source
+    — behaves exactly as before.
     """
     span = text[start:end]
     if _LINE_EXECUTOR.search(span):
@@ -2917,7 +3052,8 @@ def _is_inert_in_span(text: str, pos: int, start: int, end: int,
     if not quoted_is_inert:
         return False
     prefix = text[start:pos]
-    return any(prefix.count(quote) % 2 == 1 for quote in ("'", '"', "`"))
+    return any((prefix.count(quote) + (quote == entry_quote)) % 2 == 1
+               for quote in ("'", '"', "`"))
 
 
 def _is_inert_code_context(text: str, pos: int, quoted_is_inert: bool = True,
@@ -3006,25 +3142,26 @@ def _first_live_match(text: str, pattern: "re.Pattern[str]", quoted_is_inert: bo
     (``_SELF_DELIMITING_RULE_IDS``): splitting is not merely unnecessary for it but
     harmful, since a sink URL may legitimately carry a ``;`` and would be cut in half.
     """
-    cache: Dict[int, List[int]] = {}
+    cache = _StatementCache(text)
     for match in pattern.finditer(text):
         if not statement_scoped:
-            start, end = _line_span(text, match.start())
+            (start, end), entry_quote = _line_span(text, match.start()), ""
         else:
-            start, end = _statement_scope(text, match.start(), cache)
+            start, end, entry_quote = _statement_scope(text, match.start(), cache)
             if match.end() > end:
                 live = _live_within_statements(text, pattern, match, cache,
                                                quoted_is_inert)
                 if live is not None:
                     return live
                 continue
-        if not _is_inert_in_span(text, match.start(), start, end, quoted_is_inert):
+        if not _is_inert_in_span(text, match.start(), start, end, quoted_is_inert,
+                                 entry_quote):
             return match
     return None
 
 
 def _live_within_statements(text: str, pattern: "re.Pattern[str]",
-                            artifact: "re.Match[str]", cache: Dict[int, List[int]],
+                            artifact: "re.Match[str]", cache: "_StatementCache",
                             quoted_is_inert: bool) -> Optional["re.Match[str]"]:
     """The first live match inside the statements a withheld artifact match covers.
 
@@ -3034,9 +3171,10 @@ def _live_within_statements(text: str, pattern: "re.Pattern[str]",
     """
     pos = artifact.start()
     while pos < artifact.end():
-        start, end = _statement_scope(text, pos, cache)
+        start, end, entry_quote = _statement_scope(text, pos, cache)
         for match in pattern.finditer(text, start, end):
-            if not _is_inert_in_span(text, match.start(), start, end, quoted_is_inert):
+            if not _is_inert_in_span(text, match.start(), start, end, quoted_is_inert,
+                                     entry_quote):
                 return match
         pos = max(end, pos + 1)
     return None
