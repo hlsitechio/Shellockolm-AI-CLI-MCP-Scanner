@@ -1903,7 +1903,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   `test_repo_passes_the_exact_ci_ruff_invocation`); removed, the gate exits **0** and all pass.
   4 new tests (gate-covers-src-and-tests, hygiene-codes-stay-enforced, tests-tree-clean,
   exact-CI-invocation-clean); full suite **2821 passed / 1 skipped** (was 2817), `ruff check src tests`
-  clean, mypy clean, coverage 35.21% over the 28% floor, self-scan gate 0 HIGH+ (exit 0). _(commit COMMIT_HASH)_
+  clean, mypy clean, coverage 35.21% over the 28% floor, self-scan gate 0 HIGH+ (exit 0). _(commit 1c02ba5)_
 
 ---
 
