@@ -100,6 +100,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carrying 368 scripts** (under the size cap) that no `SKILL.md` ancestor claimed;
   `bundled_scripts_scanned` goes from 1,437 to 1,804 on that corpus.
 
+### Changed
+
+- **The inert-context gate has one definition again (internal; no behaviour change).**
+  The gate that decides whether a bundled-script match is executed code or inert data had
+  drifted into two implementations: the scanner judges a match in its **statement**, while
+  the older position-only form withholds a generated line **wholesale**. They agree on
+  reviewable source and diverge on generated content by design — but nothing enforced that
+  the agreeing half stayed shared, and each addition to one path (most recently the carried
+  quote state) widened the gap a little further. Both forms now resolve their span through
+  one `_gate_span` resolver and reach their verdict through one `_is_inert_in_span`, so the
+  shared half has a single implementation and the whole of the intended difference is two
+  lines: the length guard, and the line-scope policy it hands the resolver once the guard
+  has had its say. A new `tests/test_gate_parity.py` turns the agreement from an assumption
+  into a property — the two forms are asserted equal on every reviewable shape (each comment
+  dialect, each quote, the executor cancel, the quote-parity edges, a literal left open on
+  an earlier line, the last line without a newline, one character below the guard) and
+  end-to-end through every bundled-script rule with its own production flags, while the
+  generated-content divergence is pinned so that closing it has to be deliberate. Verified
+  a strict no-op on the real corpus: **190 findings over 5,231 items, an identical finding
+  set**, and flat timing (57.9s → 58.1s). Both halves were mutation-checked — reintroducing
+  a second span calculation fails the structural test, and drifting the shared span fails
+  the parity property in 11 places.
+
 ### Fixed
 
 - **Generated content is no longer read as if it were source.** Every gate in the

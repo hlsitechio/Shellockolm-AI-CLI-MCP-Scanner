@@ -1840,24 +1840,46 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   `mypy` gate clean; coverage 35.19% over the 28% floor; self-scan gate 0 HIGH+ (exit 0).
   _(commit 0bb3572)_
 
-- F24. [ ] **`_is_inert_code_context` is now a second, diverging definition of the gate**
-  — the scanner calls `_first_live_match`, which judges a match in its statement; the
-  position-only `_is_inert_code_context` still withholds a generated line wholesale.
-  They agree exactly on reviewable source and disagree on generated content by design,
-  but nothing enforces that the shared half stays shared: both call `_is_inert_in_span`
-  today, and a future edit to one path has no test telling it about the other. Either
-  fold the position-only form into the match-aware one (it has no in-tree caller left
-  outside tests) or add a parity test asserting they agree on every non-generated line —
-  the same anti-drift treatment `_oob_sink_alternation` and the shared `_FETCH_EXEC`
-  object already get.
-  **Updated by F23**, which widened the divergence by one axis and narrowed it by
-  another. Widened: `_is_inert_in_span` grew an `entry_quote` parameter that only the
-  match-aware path ever supplies, so the position-only form is now also the form that
-  cannot see a carried literal. Narrowed: `test_the_position_only_gate_is_untouched_on_reviewable_source`
-  asserts the two agree on a three-probe reviewable fixture (comment / executed / quoted,
-  and checks the three verdicts differ so it cannot pass vacuously). That is a spot check,
-  not the property — the task as written still stands, and folding the two forms together
-  is now the cheaper half of it.
+- F24. [x] **`_is_inert_code_context` is now a second, diverging definition of the gate**
+  — resolved by doing BOTH halves the task offered, because they answer different
+  questions: folding removes the duplicated code, and only the parity property stops the
+  duplication coming back as behaviour. **The fold**: a new `_gate_span` is the one span
+  resolver, and all three call sites of the verdict function now come through it —
+  `_first_live_match` (which lost its inline line-vs-statement branch),
+  `_live_within_statements`, and `_is_inert_code_context`. The position-only form is
+  therefore no longer a second DEFINITION but a second POLICY over the shared one, and the
+  whole of the intended difference is now two lines in it: the length guard, and the
+  `statement_scoped=False` policy it hands the resolver once the guard has had its say —
+  which turned out to be the same policy `_SELF_DELIMITING_RULE_IDS` already asks for, so
+  the fold named a correspondence rather than inventing one. **The property**, in
+  `tests/test_gate_parity.py`: the two forms are asserted equal on every reviewable shape
+  — each comment dialect (`#` `//` `--` `/*` ` *` `::` `REM` `rem`), each quote, the
+  executor cancel, a comment the executor cancel beats, both quote-parity edges, a literal
+  left open on an EARLIER line (F23's carry, shown to be a generated-content mechanism
+  only), the last line without a trailing newline, one character below the guard — under
+  BOTH settings of the quote half, with each probe's two expectations written out rather
+  than derived so a wrong verdict fails instead of being computed into agreement, and with
+  a non-vacuity test asserting the corpus answers both ways under both halves. Parity is
+  then asserted END TO END through the real rule patterns: for every rule in
+  `BUNDLED_SCRIPT_RULES`, with its own production flags, `_first_live_match` returns the
+  exact span the position-only gate would have picked on a reviewable fixture where the
+  rule matches three times and the first two are suppressed (asserted, so the parity is
+  not between two trivial `None`s). The DIVERGENCE is pinned rather than left implicit:
+  on a generated line the position-only form withholds (`True`) while the scanner path
+  reports the payload minified into a statement (`False`), and a second fixture shows the
+  three-way answer that justifies the design — guard on → withheld, guard off → the
+  false positive the guard exists to stop (an `execSync` elsewhere on the line cancelling
+  the quote suppression for the bundle's own help text), statement-scoped → correctly
+  suppressed. Also fixed two stale `:func:`_is_inert_match`` references to a function that
+  never existed. **Mutation-checked, both halves**: reintroducing a second span
+  calculation in the position-only form fails the structural monkeypatch test, and
+  drifting the shared span by one character fails the parity property in 11 places
+  (including the end-to-end rule parity) — so neither test can pass vacuously. Verified a
+  strict no-op on the live Pro scanner over `~/.claude/plugins` (5,231 items): **190
+  findings before, 190 after, an identical finding SET**, timing flat (57.94s → 58.07s).
+  31 new tests; full suite **2817 passed / 1 skipped** (was 2786); `ruff check src` clean
+  (the new test file too); configured `mypy` gate clean; coverage 35.21% over the 28%
+  floor; self-scan gate 0 HIGH+ (exit 0).
 
 ---
 

@@ -2898,7 +2898,7 @@ def _statement_boundaries(line: str, quote: str = "") -> List[int]:
     character React bundle line, and every line after it in that file falls back to
     entering at ``""`` — which is what it did before F23, so the failure mode is the old
     behaviour rather than a new one. The same blind spot still applies to the quote-parity
-    half of `_is_inert_code_context`, which counts from the span start (F24).
+    half of :func:`_is_inert_in_span`, which counts from the span start (F24).
     """
     return _statement_split(line, quote)[0]
 
@@ -3098,14 +3098,23 @@ def _is_inert_code_context(text: str, pos: int, quoted_is_inert: bool = True,
     argument does not reach them.
 
     This is the POSITION-only form, kept for callers that hold an offset rather than a
-    match. The scanner itself calls :func:`_is_inert_match`, which re-tokenises a
-    generated line into statements instead of withholding it wholesale (F22); the two
-    agree exactly on reviewable source.
+    match. The scanner itself calls :func:`_first_live_match`, which re-tokenises a
+    generated line into statements instead of withholding it wholesale (F22).
+
+    The two are no longer two DEFINITIONS of the gate (F24). Both resolve their span
+    through :func:`_gate_span` and reach their verdict through :func:`_is_inert_in_span`,
+    so the half they share has exactly one implementation and the difference between them
+    is the two lines below: the length guard, and the ``statement_scoped=False`` policy
+    it hands to the shared resolver once the guard has had its say. On reviewable source
+    that leaves them identical — ``tests/test_gate_parity.py`` asserts it as a property
+    rather than trusting it, and asserts the generated-content divergence is still there.
     """
     line_start, line_end = _line_span(text, pos)
     if length_guard and line_end - line_start >= _UNREVIEWABLE_LINE_CHARS:
         return True
-    return _is_inert_in_span(text, pos, line_start, line_end, quoted_is_inert)
+    start, end, entry_quote = _gate_span(text, pos, _StatementCache(text),
+                                         statement_scoped=False)
+    return _is_inert_in_span(text, pos, start, end, quoted_is_inert, entry_quote)
 
 
 def _line_span(text: str, pos: int) -> Tuple[int, int]:
@@ -3113,6 +3122,34 @@ def _line_span(text: str, pos: int) -> Tuple[int, int]:
     line_start = text.rfind("\n", 0, pos) + 1
     line_end = text.find("\n", pos)
     return line_start, len(text) if line_end == -1 else line_end
+
+
+def _gate_span(text: str, pos: int, cache: "_StatementCache",
+               statement_scoped: bool) -> Tuple[int, int, str]:
+    """The span a match at ``pos`` is judged in, and the quote state it enters inside.
+
+    The ONE span resolver behind every form of the inert-context gate (F24). Both the
+    match-aware path (:func:`_first_live_match`, :func:`_live_within_statements`) and the
+    position-only :func:`_is_inert_code_context` route through here, so "what counts as
+    the line the match sits on" cannot come to mean two different things in two places —
+    the drift the shared ``_FETCH_EXEC`` object and ``_oob_sink_alternation`` are already
+    protected against.
+
+    ``statement_scoped=True`` is the F22 policy: a reviewable line is returned whole (a
+    line IS a statement there), a GENERATED line is re-tokenised and the statement
+    containing ``pos`` stands in for it, carrying the entry quote state F23 added.
+
+    ``statement_scoped=False`` judges the match in its line however long that line is —
+    what a rule whose match is one self-delimiting literal needs
+    (``_SELF_DELIMITING_RULE_IDS``: splitting could cut a sink URL at a ``;``), and what
+    the position-only form does with the length guard off. There is no carried state to
+    report in that case: the carry exists to make a STATEMENT split correct, and a line
+    is entered from a newline, which is where the parity gate already starts counting.
+    """
+    if not statement_scoped:
+        line_start, line_end = _line_span(text, pos)
+        return line_start, line_end, ""
+    return _statement_scope(text, pos, cache)
 
 
 def _first_live_match(text: str, pattern: "re.Pattern[str]", quoted_is_inert: bool,
@@ -3144,16 +3181,14 @@ def _first_live_match(text: str, pattern: "re.Pattern[str]", quoted_is_inert: bo
     """
     cache = _StatementCache(text)
     for match in pattern.finditer(text):
-        if not statement_scoped:
-            (start, end), entry_quote = _line_span(text, match.start()), ""
-        else:
-            start, end, entry_quote = _statement_scope(text, match.start(), cache)
-            if match.end() > end:
-                live = _live_within_statements(text, pattern, match, cache,
-                                               quoted_is_inert)
-                if live is not None:
-                    return live
-                continue
+        start, end, entry_quote = _gate_span(text, match.start(), cache,
+                                             statement_scoped)
+        if statement_scoped and match.end() > end:
+            live = _live_within_statements(text, pattern, match, cache,
+                                           quoted_is_inert)
+            if live is not None:
+                return live
+            continue
         if not _is_inert_in_span(text, match.start(), start, end, quoted_is_inert,
                                  entry_quote):
             return match
@@ -3171,7 +3206,7 @@ def _live_within_statements(text: str, pattern: "re.Pattern[str]",
     """
     pos = artifact.start()
     while pos < artifact.end():
-        start, end, entry_quote = _statement_scope(text, pos, cache)
+        start, end, entry_quote = _gate_span(text, pos, cache, statement_scoped=True)
         for match in pattern.finditer(text, start, end):
             if not _is_inert_in_span(text, match.start(), start, end, quoted_is_inert,
                                      entry_quote):
@@ -4878,7 +4913,7 @@ class AgentSupplyChainScanner(BaseScanner):
 
         A generated region (a minified module, an embedded blob) is where the LINE that
         every one of those mechanisms is written against stops existing. Nothing is
-        withheld there any more: `_is_inert_match` splits the generated line back into
+        withheld there any more: `_first_live_match` splits the generated line back into
         statements and judges each match against the one it starts in (F22), so a
         payload minified into a bundle is reported exactly as the same payload in
         source would be — and no further, since a match that runs past its statement is
