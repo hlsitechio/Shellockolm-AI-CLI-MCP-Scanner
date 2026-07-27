@@ -1979,7 +1979,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   new/modified/deleted, snapshot objects accepted, AST guard + its own fail-first check)
   + 1 smoke-import param; full suite **2841 passed / 1 skipped** (was 2822),
   `ruff check src tests scripts` clean, mypy clean, coverage 35.59% over the 28% floor,
-  self-scan gate 0 HIGH+ (exit 0). _(commit PENDING)_
+  self-scan gate 0 HIGH+ (exit 0). _(commit 7168c85)_
 
 ---
 
