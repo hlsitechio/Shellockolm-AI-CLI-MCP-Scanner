@@ -2180,7 +2180,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   pre-change module 4 of 8 benign excerpts are wrongly DANGER and 5 of 6 unit checks
   fail. Full suite **3059 passed / 1 skipped** (was 3007), `ruff check src tests scripts`
   clean, coverage **42.08%** over the 28% floor, CI self-scan gate
-  (`scan -s agent --fail-on high .`) exit 0. _(commit PENDING)_
+  (`scan -s agent --fail-on high .`) exit 0. _(commit fbc0ae8)_
 
 ## Open follow-ups (surfaced by the F30 dependency-tree pass, not yet worked)
 
