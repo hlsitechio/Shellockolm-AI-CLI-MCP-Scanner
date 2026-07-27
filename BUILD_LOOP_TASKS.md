@@ -2040,7 +2040,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   case, both malware-scanner paths, SARIF tag + byte-identical default, mechanism guard).
   Full suite **2876 passed / 1 skipped** (was 2841), `ruff check src tests scripts`
   clean, mypy clean, coverage 39.61% over the 28% floor, self-scan gate 0 HIGH+
-  (exit 0). _(commit PENDING)_
+  (exit 0). _(commit fc488b6)_
 - F29. [ ] **The `sandbox <pkg>` command is ~350 lines inline in `interactive_shell()`
   and only its snapshot half is tested** — F27 extracted the snapshot/diff into
   `sandbox_snapshot.py` and unit-tested it, but the phase logic that consumes it (the
