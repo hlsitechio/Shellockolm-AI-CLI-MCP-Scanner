@@ -23,6 +23,13 @@ Design rules, all of which the tests pin:
   ``is_safe`` flag and a ``dangers`` list and had to keep them in sync by hand;
   one site already appended a danger without clearing the flag. The verdict now
   derives from ``dangers`` alone, so they cannot diverge.
+* **A capability is not a verdict.** The malware-pattern table is calibrated
+  the way the ``AGENT-*`` rules are (F31): a pattern that also describes
+  ordinary library code — running a subprocess, building a function at runtime —
+  is a warning, and becomes a danger only when the same file carries an attacker
+  context signal. The uncalibrated table condemned lodash, chalk, axios,
+  typescript, webpack, eslint, commander and bluebird; the current one produces
+  zero dangers across a real install of 480 packages.
 * **The expected-location filter is anchored.** The inline filter asked
   ``any(pattern in path for pattern in expected)``, an unanchored substring test:
   a payload written to ``evil-package.json`` matched ``package.json`` and a
@@ -307,60 +314,244 @@ def count_paths_under(paths: Iterable[str], directory: str) -> int:
 # Phase 5 — malware patterns in installed code
 # ---------------------------------------------------------------------------
 
-#: (regex, human description) pairs applied to each installed ``.js`` file.
-MALWARE_PATTERNS: Tuple[Tuple[str, str], ...] = (
-    (r"eval\s*\(", "eval() - dynamic code execution"),
-    (r"Function\s*\(", "Function constructor - dynamic code"),
-    (r"child_process", "child_process - command execution"),
-    (r"\.exec\s*\(", "exec() - command execution"),
-    (r"\.spawn\s*\(", "spawn() - process spawning"),
-    (r"require\s*\(\s*['\"]fs['\"]\s*\)", "filesystem access"),
-    (r"require\s*\(\s*['\"]net['\"]\s*\)", "network access"),
-    (r"require\s*\(\s*['\"]http['\"]\s*\)", "HTTP client"),
-    (r"require\s*\(\s*['\"]https['\"]\s*\)", "HTTPS client"),
-    (r"process\.env", "environment variable access"),
-    (r"Buffer\.from\([^)]+,\s*['\"]base64['\"]", "base64 decoding"),
-    (r"atob\s*\(", "base64 decoding (atob)"),
-    (r"\\x[0-9a-fA-F]{2}", "hex-encoded strings"),
-    (r"\\u[0-9a-fA-F]{4}", "unicode-encoded strings"),
-    (r"cryptocurrency|bitcoin|monero|wallet", "cryptocurrency references"),
-    (r"keylog|keystroke", "keylogger indicators"),
-    (r"screenshot|screen.capture", "screen capture"),
-    (r"credential|password.*steal", "credential theft"),
-    (r"reverse.shell|bind.shell", "shell backdoor"),
+#: How many consecutive escape sequences make an encoded *blob*. A single
+#: ``'\\xc0'`` in a character table is ordinary library code (lodash ships
+#: several); a run is the shape of an obfuscated payload string.
+ENCODED_RUN_LENGTH = 6
+
+
+@dataclass(frozen=True)
+class MalwarePattern:
+    """One calibrated malware-pattern rule.
+
+    ``ignore_case`` exists because JavaScript is case-sensitive and the original
+    table compiled everything with ``re.IGNORECASE``: ``Function\\s*\\(`` then
+    matched every anonymous ``function(a, b)`` in the language (193 hits on
+    lodash alone). ``requires`` names a co-occurrence gate that must also be
+    present in the same file — the discipline the ``AGENT-*`` rules already use.
+    """
+
+    regex: str
+    description: str
+    ignore_case: bool = True
+    requires: str = ""
+
+
+#: A file only gets credit for a command-execution hit when it actually binds
+#: ``child_process``. Without this gate ``\.exec\s*\(`` matched JavaScript's
+#: ``RegExp.prototype.exec`` (``reTrimStart.exec(string)``), which is why a plain
+#: ``npm install lodash`` produced a **DO NOT INSTALL** verdict. Module names are
+#: lowercase, so the gate is deliberately case-sensitive.
+_CO_OCCURRENCE_GATES: Dict[str, Any] = {
+    "child_process": re.compile(
+        r"""require\s*\(\s*['"](?:node:)?child_process['"]\s*\)"""
+        r"""|from\s+['"](?:node:)?child_process['"]"""
+        r"""|import\s*\(?\s*['"](?:node:)?child_process['"]"""
+        r"""|process\.binding\s*\(\s*['"]spawn_sync['"]"""
+    ),
+}
+
+#: The calibrated pattern table applied to each installed ``.js`` file.
+#:
+#: Calibration rules (build-loop follow-up F31), each pinned by a test over real
+#: mainstream-package code:
+#:
+#: * command execution is **gated** on a ``child_process`` binding — and, being
+#:   gated, is then free to match the destructured form (``const {exec} =
+#:   require('child_process'); exec(cmd)``) that the dot-anchored pattern missed;
+#: * ``eval`` / ``Function`` are case-sensitive and shape-anchored, so
+#:   ``retrieval(x)`` and ``function (a, b)`` no longer count as dynamic code;
+#: * an encoding escape only counts as a **run** of consecutive escapes (the
+#:   obfuscated-payload shape), not a lone ``\\xc0`` in a string table;
+#: * "credential theft" requires a theft verb, not the word ``credentials``
+#:   (which alone made axios a DO-NOT-INSTALL).
+MALWARE_PATTERN_TABLE: Tuple[MalwarePattern, ...] = (
+    MalwarePattern(r"\beval\s*\(", "eval() - dynamic code execution", ignore_case=False),
+    MalwarePattern(
+        r"\bnew\s+Function\s*\(|\bFunction\s*\(\s*['\"`]",
+        "Function constructor - dynamic code",
+        ignore_case=False,
+    ),
+    MalwarePattern(r"child_process", "child_process - command execution"),
+    MalwarePattern(
+        r"(?:\.|\b)(?:exec|execSync|execFile|execFileSync)\s*\(",
+        "exec() - command execution",
+        requires="child_process",
+    ),
+    MalwarePattern(
+        r"(?:\.|\b)(?:spawn|spawnSync)\s*\(",
+        "spawn() - process spawning",
+        requires="child_process",
+    ),
+    MalwarePattern(r"require\s*\(\s*['\"]fs['\"]\s*\)", "filesystem access"),
+    MalwarePattern(r"require\s*\(\s*['\"]net['\"]\s*\)", "network access"),
+    MalwarePattern(r"require\s*\(\s*['\"]http['\"]\s*\)", "HTTP client"),
+    MalwarePattern(r"require\s*\(\s*['\"]https['\"]\s*\)", "HTTPS client"),
+    MalwarePattern(r"process\.env", "environment variable access"),
+    MalwarePattern(
+        r"Buffer\.from\([^)]+,\s*['\"]base64['\"]", "base64 decoding"
+    ),
+    MalwarePattern(r"\batob\s*\(", "base64 decoding (atob)"),
+    MalwarePattern(
+        r"(?:\\x[0-9a-fA-F]{2}){%d,}" % ENCODED_RUN_LENGTH,
+        "hex-encoded string blob (possible obfuscation)",
+    ),
+    MalwarePattern(
+        r"(?:\\u[0-9a-fA-F]{4}){%d,}" % ENCODED_RUN_LENGTH,
+        "unicode-encoded string blob (possible obfuscation)",
+    ),
+    MalwarePattern(
+        r"\b(?:cryptocurrency|bitcoin|monero|wallet)\b",
+        "cryptocurrency references",
+    ),
+    MalwarePattern(
+        r"\bkey(?:logger|logging)\b|\bkeylog\b"
+        r"|\bkeystrokes?\b[^\n]{0,40}\b(?:captur|logg|record|steal)",
+        "keylogger indicators",
+    ),
+    MalwarePattern(
+        r"\bscreenshot\b|\bscreen[\s._-]?captur\w*", "screen capture"
+    ),
+    MalwarePattern(
+        r"\b(?:steal|exfiltrat|harvest|siphon|dump)\w*[^\n]{0,40}"
+        r"\b(?:credential|password|secret)s?\b"
+        r"|\b(?:credential|password)s?\b[^\n]{0,40}"
+        r"\b(?:steal|exfiltrat|harvest|siphon)\w*",
+        "credential theft",
+    ),
+    MalwarePattern(
+        r"reverse[\s._-]?shell|bind[\s._-]?shell", "shell backdoor"
+    ),
+    # Spawning a raw shell binary, as opposed to spawning `git` or `node`.
+    # Measured at zero hits across 480 installed real packages, which is why
+    # this one is trusted on its own where bare `spawn()` is not.
+    MalwarePattern(
+        r"(?:\.|\b)(?:exec|execSync|execFile|execFileSync|spawn|spawnSync)\s*\(\s*"
+        r"['\"`][^'\"`\n]*(?:/bin/(?:sh|bash|zsh)|cmd\.exe|powershell)",
+        "shell process spawned",
+    ),
+    # A command string that fetches and immediately executes. The install-script
+    # phase already flags this shape in a lifecycle hook; installed code can run
+    # it too (a destructured `exec('curl … | sh')` carries no other signal).
+    # Also measured at zero hits across the 480-package corpus.
+    MalwarePattern(
+        r"(?:curl|wget)\b[^\n'\"`]{0,120}\|\s*(?:sudo\s+)?(?:ba)?sh\b"
+        r"|(?:Invoke-WebRequest|Net\.WebClient|DownloadString)[^\n]{0,120}"
+        r"(?:iex|Invoke-Expression)",
+        "download piped to shell",
+    ),
+    # The classic npm dropper cradle. Decoding base64 is ordinary data handling
+    # (typescript decodes an IPC response that way), so plain "base64 decoding"
+    # is not corroboration on its own — but *executing* what was decoded, in the
+    # call itself, has no benign reading.
+    MalwarePattern(
+        r"\b(?:eval|new\s+Function|Function|execSync|exec|spawnSync|spawn)\s*\(\s*"
+        r"[^;\n]{0,80}?(?:Buffer\.from\s*\([^)\n]*['\"]base64['\"]|\batob\s*\()",
+        "decoded payload executed (base64 -> eval/exec)",
+        ignore_case=False,
+    ),
 )
 
-#: A hit description containing one of these is a danger; the rest are
-#: warnings, because `fs`/`http`/`process.env` are also ordinary library code.
-#: Matched against the pattern DESCRIPTION, so every keyword must correspond to
-#: one (``test_every_dangerous_keyword_maps_to_at_least_one_pattern`` enforces
-#: it). The inline list also carried ``"reverse"``, which matched no description
-#: at all — the reverse-shell pattern is described as "shell backdoor" and is
-#: already caught by ``backdoor``, so dropping the dead entry changes nothing.
-DANGEROUS_HIT_KEYWORDS: Tuple[str, ...] = (
-    "eval",
-    "child_process",
-    "exec",
-    "spawn",
-    "backdoor",
-    "keylog",
-    "credential",
+#: Backwards-compatible ``(regex, description)`` view of the table.
+MALWARE_PATTERNS: Tuple[Tuple[str, str], ...] = tuple(
+    (pattern.regex, pattern.description) for pattern in MALWARE_PATTERN_TABLE
 )
 
-_COMPILED_MALWARE_PATTERNS: Tuple[Tuple[Any, str], ...] = tuple(
-    (re.compile(pattern, re.IGNORECASE), description)
-    for pattern, description in MALWARE_PATTERNS
+#: Descriptions that are malicious on their own — no benign reading, so they
+#: are dangers wherever they appear.
+ALWAYS_DANGEROUS_DESCRIPTIONS: frozenset = frozenset(
+    {
+        "keylogger indicators",
+        "credential theft",
+        "shell backdoor",
+        "shell process spawned",
+        "download piped to shell",
+        "decoded payload executed (base64 -> eval/exec)",
+    }
 )
+
+#: Descriptions that are a *capability*, not evidence of malice. Running a
+#: subprocess or building a function at runtime is what build tooling does:
+#: typescript, webpack, eslint, commander and bluebird all do it, and the
+#: keyword classifier called every one of them DO NOT INSTALL. A capability is
+#: escalated to a danger only when the SAME file also carries an attacker
+#: context signal — the composite discipline the ``AGENT-*`` rules already use.
+CAPABILITY_DESCRIPTIONS: frozenset = frozenset(
+    {
+        "child_process - command execution",
+        "exec() - command execution",
+        "spawn() - process spawning",
+        "eval() - dynamic code execution",
+        "Function constructor - dynamic code",
+    }
+)
+
+#: Attacker context: egress channels, obfuscation and shell spawning. Each
+#: member was measured against a real install of 480 packages (the top-N plus
+#: their transitive tree) and pairs with a capability in **zero** files there.
+#:
+#: The exclusions are the calibration, and each one is a package this set would
+#: otherwise have condemned:
+#:
+#: * ``filesystem access`` / ``environment variable access`` — ordinary in any
+#:   package that also shells out;
+#: * ``base64 decoding`` — typescript decodes an IPC response that way; the
+#:   decode-and-*execute* cradle has its own always-dangerous pattern instead;
+#: * ``network access`` (``require('net')``) — a local-daemon socket client
+#:   (fb-watchman, a jest dependency) spawns its daemon and talks to it over a
+#:   socket; the reverse-shell shape it was meant to catch is covered by
+#:   ``shell process spawned`` and ``shell backdoor``;
+#: * ``unicode-encoded string blob`` — json5, terser and @vue all embed Unicode
+#:   identifier range tables as long ``\\uXXXX`` runs. The hex form has no such
+#:   benign twin and stays.
+CONTEXT_DESCRIPTIONS: frozenset = frozenset(
+    {
+        "HTTP client",
+        "HTTPS client",
+        "hex-encoded string blob (possible obfuscation)",
+        "cryptocurrency references",
+        "screen capture",
+        "shell process spawned",
+    }
+)
+
+_COMPILED_MALWARE_PATTERNS: Tuple[Tuple[Any, MalwarePattern], ...] = tuple(
+    (
+        re.compile(pattern.regex, re.IGNORECASE if pattern.ignore_case else 0),
+        pattern,
+    )
+    for pattern in MALWARE_PATTERN_TABLE
+)
+
+
+def _gate_is_open(name: str, content: str, cache: Dict[str, bool]) -> bool:
+    """Whether co-occurrence gate ``name`` is satisfied by ``content``.
+
+    Cached per file: a gate is checked at most once no matter how many patterns
+    depend on it.
+    """
+    if name not in cache:
+        gate = _CO_OCCURRENCE_GATES.get(name)
+        # An unknown gate name would silently disable its patterns, so treat it
+        # as closed only when it is genuinely absent from the registry — the
+        # anti-drift test asserts every `requires` resolves.
+        cache[name] = bool(gate.search(content)) if gate is not None else False
+    return cache[name]
 
 
 def scan_text_for_malware_patterns(content: str) -> List[str]:
-    """Descriptions of every malware pattern present in ``content``."""
+    """Descriptions of every malware pattern present in ``content``.
+
+    Order follows :data:`MALWARE_PATTERN_TABLE` so a report is deterministic.
+    """
     if not content:
         return []
+    gates: Dict[str, bool] = {}
     return [
-        description
-        for compiled, description in _COMPILED_MALWARE_PATTERNS
-        if compiled.search(content)
+        pattern.description
+        for compiled, pattern in _COMPILED_MALWARE_PATTERNS
+        if (not pattern.requires or _gate_is_open(pattern.requires, content, gates))
+        and compiled.search(content)
     ]
 
 
@@ -371,6 +562,10 @@ class MalwareClassification:
     counts: Dict[str, int] = field(default_factory=dict)
     dangers: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
+    #: Capability descriptions escalated to dangers because some file carried
+    #: them alongside an attacker context signal. Surfaced so the report can say
+    #: WHY a capability became a danger instead of asserting it.
+    corroborated: List[str] = field(default_factory=list)
 
     @property
     def total_hits(self) -> int:
@@ -378,8 +573,30 @@ class MalwareClassification:
 
 
 def is_dangerous_hit(description: str) -> bool:
-    lowered = description.lower()
-    return any(keyword in lowered for keyword in DANGEROUS_HIT_KEYWORDS)
+    """Whether ``description`` is malicious on its own, ignoring context.
+
+    Capability descriptions deliberately return ``False`` here: they only
+    become dangers through :func:`corroborated_capabilities`.
+    """
+    return description in ALWAYS_DANGEROUS_DESCRIPTIONS
+
+
+def corroborated_capabilities(hits: Sequence[Tuple[str, str]]) -> List[str]:
+    """Capability descriptions that share a FILE with an attacker context signal.
+
+    Grouping is per file, never per package: "some file runs subprocesses and
+    some other file speaks HTTP" describes most build tools, and treating that
+    as corroboration is how the keyword classifier ended up condemning them.
+    """
+    per_file: Dict[str, set] = {}
+    for path, description in hits:
+        per_file.setdefault(path, set()).add(description)
+
+    escalated: set = set()
+    for descriptions in per_file.values():
+        if descriptions & CONTEXT_DESCRIPTIONS:
+            escalated |= descriptions & CAPABILITY_DESCRIPTIONS
+    return sorted(escalated)
 
 
 def classify_malware_hits(
@@ -394,10 +611,17 @@ def classify_malware_hits(
     for _path, description in hits:
         result.counts[description] = result.counts.get(description, 0) + 1
 
+    escalated = set(corroborated_capabilities(hits))
+    result.corroborated = sorted(escalated)
+
     for description, count in result.counts.items():
         line = f"{description}: {count} occurrences"
         if is_dangerous_hit(description):
             result.dangers.append(f"🚨 {line}")
+        elif description in escalated:
+            result.dangers.append(
+                f"🚨 {line} (in a file that also shows network/obfuscation indicators)"
+            )
         else:
             result.warnings.append(f"⚠️ {line}")
     return result

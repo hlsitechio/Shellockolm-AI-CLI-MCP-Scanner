@@ -2139,24 +2139,48 @@ each is a separate rule family with its own calibration burden. Ranked by severi
 
 ## Open follow-ups (surfaced by the F29 sandbox-extraction pass, not yet worked)
 
-- F31. [ ] **The sandbox malware-pattern phase calls mainstream packages malicious** —
-  now that the phase logic is testable, running it over a real `npm install lodash`
-  shows the verdict is **DO NOT INSTALL**. The sole danger is
-  `exec() - command execution: 5 occurrences`, from the pattern `\.exec\s*\(` matching
-  JavaScript's `RegExp.prototype.exec()` (`reTrimStart.exec(string)`) — not
-  `child_process.exec`. The warning set is the same story: `Function constructor` fires
-  193 times on lodash's own `Function(...)` usage, plus hex/unicode escape sequences in
-  string tables. This is pre-existing (the pattern table was carried over unchanged by
-  F29, which only moved and tested it), but it means the flagship "check before you
-  install" command tells users not to install one of the most-downloaded packages on
-  npm — a credibility problem for the paid product. Closing it means giving the
-  patterns the same calibration discipline as the `AGENT-*` rules: require a
-  `child_process`/`require('child_process')` binding near an `.exec(`/`.spawn(` (the
-  scanner already does this class of co-occurrence gating), drop or downgrade the
-  encoding-escape patterns, and pin a benign baseline over a real install of the top-N
-  packages asserting **zero** dangers, alongside the existing malicious fixtures.
-  `sandbox_check.scan_text_for_malware_patterns` / `classify_malware_hits` are now pure,
-  so the whole calibration can be driven from tests.
+- F31. [x] **The sandbox malware-pattern phase calls mainstream packages malicious** —
+  calibrated the phase-5 table with the same discipline as the `AGENT-*` rules. Measured
+  first: a real `npm install` of the top-N packages had **lodash, chalk and axios all
+  DO NOT INSTALL** (`.exec\s*\(` matching `RegExp.prototype.exec`; and axios condemned
+  for the bare word `credentials`, worse than the follow-up recorded). **Pattern fixes:**
+  command execution is **gated** on a real `child_process` binding in the same file
+  (`require`/`node:`/`import` forms) and, being gated, is safely broadened to the
+  destructured `const {exec} = require('child_process')` form the dot-anchored pattern
+  could never see; `eval`/`Function` are compiled **case-sensitively** (the whole table
+  used `IGNORECASE`, so `Function\s*\(` matched every anonymous `function (a, b)` — 193
+  hits on lodash) and shape-anchored (`new Function(` / `Function('…'`, `\beval`, so
+  `retrieval(x)` is not eval); an encoding escape counts only as a **run** of
+  `ENCODED_RUN_LENGTH` consecutive escapes (an obfuscated blob, not a lone `\xc0` in a
+  character table); `credential theft` requires a theft verb; `keystroke` requires a
+  capture/log verb. **Classification fix — a capability is not a verdict:** the
+  keyword classifier (`"exec" in description`) also condemned typescript, webpack,
+  eslint, commander and bluebird, which legitimately shell out or build functions at
+  runtime. Descriptions are now three explicit sets — `ALWAYS_DANGEROUS` (malicious with
+  no benign reading), `CAPABILITY` (danger only when corroborated) and `CONTEXT` — and a
+  capability escalates only when the **same file** also carries a context signal
+  (per-file, never per-package: "some file shells out, another speaks HTTP" describes
+  most build tools). Each `CONTEXT` member was chosen from a measured
+  capability×context matrix over the 480 installed packages and pairs with a capability
+  in **zero** files there; the exclusions are the calibration and each names the package
+  it would otherwise have condemned (`base64 decoding` → typescript's IPC decode,
+  `network access` → fb-watchman's daemon socket, `unicode blob` → json5/terser/@vue
+  Unicode identifier tables). Three new **always-dangerous** patterns keep detection
+  intact where corroboration is not needed, each measured at **zero hits** across the
+  corpus: `shell process spawned` (`/bin/sh`, `cmd.exe`), `download piped to shell`
+  (`curl … | sh`, PowerShell `DownloadString`+`iex`) and `decoded payload executed`
+  (`eval(atob(…))` / `exec(Buffer.from(…,'base64'))`). **Verified both directions:**
+  a real `npm install` of 480 packages (top-N + full transitive tree, ~9k JS files) now
+  yields **zero dangers** (was 8 mainstream packages condemned), while all **11** pinned
+  real-malware shapes are still dangers (11/11, including the destructured-exec dropper
+  the old table missed entirely). 52 new tests (benign excerpts from the real packages
+  incl. every shape that regressed, all 11 malware shapes, per-fix regex units, gate
+  binding forms, same-file vs different-file corroboration, and anti-drift tests binding
+  all three sets and every `requires` gate to the table). **Verified fail-first:** on the
+  pre-change module 4 of 8 benign excerpts are wrongly DANGER and 5 of 6 unit checks
+  fail. Full suite **3059 passed / 1 skipped** (was 3007), `ruff check src tests scripts`
+  clean, coverage **42.08%** over the 28% floor, CI self-scan gate
+  (`scan -s agent --fail-on high .`) exit 0. _(commit PENDING)_
 
 ## Open follow-ups (surfaced by the F30 dependency-tree pass, not yet worked)
 
@@ -2175,6 +2199,19 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   BFS machinery so the dedupe, cycle and budget guards apply unchanged. Verify the same
   way F30 did: against `yarn list --json` ground truth on a real yarn project, asserting
   no fabricated edges.
+
+## Open follow-ups (surfaced by the F31 pattern-calibration pass, not yet worked)
+
+- F33. [ ] **Phase 5 only reads `*.js`, so a payload in any other extension is
+  invisible** — the deep-code-analysis walk is `node_modules/<pkg>.rglob("*.js")`.
+  A package whose entry point is `.cjs` / `.mjs` (increasingly the default for
+  ESM-only packages), or that ships `.ts`, `.json` or a `bin/` script with no
+  extension, gets **zero** files scanned by the malware pass — and unlike an
+  unreadable file, that is not counted or marked blind, so "✓ No obvious malware
+  patterns" is printed over a phase that read nothing. Closing it means widening the
+  glob to the executable-source extensions, and treating "the package directory
+  exists but no scannable file was found" as a blind phase (`mark_blind`) rather
+  than a pass — the rule F29 established everywhere else in this command.
 
 ---
 

