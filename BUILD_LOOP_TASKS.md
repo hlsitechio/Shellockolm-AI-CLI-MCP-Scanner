@@ -1932,7 +1932,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   removed, the gate exits **0** and all 14 pass. 1 new test; full suite
   **2822 passed / 1 skipped** (was 2821); `ruff check src tests scripts` clean, mypy
   clean, coverage 35.21% over the 28% floor, self-scan gate 0 HIGH+ (exit 0).
-  _(commit PENDING)_
+  _(commit d89119f)_
 
 ---
 
