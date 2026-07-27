@@ -2092,7 +2092,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   mechanism guards — pattern tables defined once, the CLI consumes the module, the module
   stays I/O-free). Full suite **2973 passed / 1 skipped** (was 2876), `ruff check src
   tests scripts` clean, mypy clean, coverage **40.59%** over the 28% floor, self-scan
-  gate 0 HIGH+ (exit 0).
+  gate 0 HIGH+ (exit 0). _(commit 951d59c)_
 - F30. [ ] **`dependency_tree` under-reports hoisted edges (surfaced by the F28 pass)** —
   `_build_node_v2` walks only an entry's NESTED `dependencies` and ignores its `requires`
   map, whose entries npm hoists to the lockfile's top level. The dangling comment
