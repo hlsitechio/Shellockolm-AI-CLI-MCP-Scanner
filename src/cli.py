@@ -3240,6 +3240,23 @@ def show_next_steps(cmd_type: str, context: dict = None):
             ("[61]", "Start watch mode again"),
             ("[58]", "Generate CI/CD workflow"),
         ],
+        # Sandbox deep-install check. INCONCLUSIVE gets its own entry: a blind
+        # run must not be offered the same "go install it" path as a clean one.
+        "sandbox_safe": [
+            ("[1]", "Scan the project you'll install it into"),
+            ("[40]", "Check GitHub Advisory for the package"),
+            ("[51]", "View the dependency tree after installing"),
+        ],
+        "sandbox_inconclusive": [
+            ("[1b]", "Re-run the sandbox check"),
+            ("[40]", "Check GitHub Advisory for the package"),
+            ("[14]", "Look up a specific CVE"),
+        ],
+        "sandbox_danger": [
+            ("[1b]", "Sandbox-check an alternative package"),
+            ("[40]", "Check GitHub Advisory for the package"),
+            ("[11]", "Browse tracked CVEs"),
+        ],
         "clawdbot": [
             ("[70]", "Run full Clawdbot scan"),
             ("[71]", "Audit home credentials"),
@@ -4670,55 +4687,65 @@ def interactive_shell():
                 elif cmd_name == "sandbox-check":
                     # ENHANCED Sandbox pre-download npm package checker
                     # Actually INSTALLS the package to detect post-install malware
-                    pkg_name = cmd_args[0] if cmd_args else cmd.get("input_value", "")
-                    if not pkg_name:
+                    raw_pkg_name = cmd_args[0] if cmd_args else cmd.get("input_value", "")
+                    if not raw_pkg_name:
                         console.print("[danger]Package name is required.[/danger]")
                         continue
 
                     import tempfile
                     import shutil
                     import subprocess
-                    import tarfile
                     import json
-                    import difflib
 
                     from sandbox_snapshot import compare_snapshots, snapshot_directory
+                    from sandbox_check import (
+                        SandboxFindings,
+                        analyze_install_scripts,
+                        build_verdict_summary,
+                        classify_cve_findings,
+                        classify_malware_hits,
+                        count_paths_under,
+                        filter_suspicious_new_files,
+                        installed_package_dirname,
+                        normalize_package_spec,
+                        scan_text_for_malware_patterns,
+                        typosquat_matches,
+                    )
+
+                    # The menu accepts "name or URL"; normalize before anything
+                    # is handed to npm (a registry URL never resolved before).
+                    pkg_name = normalize_package_spec(raw_pkg_name)
 
                     console.print(f"[title]🛡️ SANDBOX DEEP INSTALL CHECK[/title]")
                     console.print(f"[info]Package: {pkg_name}[/info]")
                     console.print(f"[dim]This will INSTALL the package in isolation to detect post-install malware[/dim]\n")
 
                     sandbox_dir = None
-                    is_safe = True
-                    # Tracks whether any phase was BLIND (a path it could not
-                    # read, a scanner that crashed). A phase that saw nothing
-                    # because it failed must never render as a clean pass.
-                    analysis_incomplete = False
-                    warnings = []
-                    dangers = []
-                    info_items = []
+                    # Single accumulator: dangers/warnings/info plus the blind
+                    # phases that downgrade a finding-free run to INCONCLUSIVE.
+                    findings = SandboxFindings()
 
-                    def note_snapshot_errors(label: str, snap) -> bool:
-                        """Surface an incomplete snapshot; True when it was blind.
+                    def note_snapshot_errors(label: str, snap) -> None:
+                        """Surface an incomplete snapshot and mark the phase blind.
 
                         A snapshot that could not read part of the sandbox cannot
-                        prove a file was NOT dropped there, so the caller must
-                        downgrade its verdict rather than report "no suspicious
-                        files created".
+                        prove a file was NOT dropped there, so the verdict must be
+                        downgraded rather than report "no suspicious files
+                        created".
                         """
                         if snap.is_complete:
-                            return False
+                            return
                         console.print(
                             f"  [warning]⚠️ {label} snapshot incomplete: "
                             f"{snap.error_summary()}[/warning]"
                         )
                         for detail in snap.errors[:3]:
                             console.print(f"    [dim]{detail}[/dim]")
-                        warnings.append(
-                            f"{label} snapshot incomplete ({snap.error_count} path(s) "
-                            f"unreadable) - dropped-file detection is partial"
+                        findings.mark_blind(
+                            f"{label} snapshot",
+                            f"{snap.error_count} path(s) unreadable - dropped-file "
+                            f"detection is partial",
                         )
-                        return True
 
                     try:
                         # Create isolated sandbox project
@@ -4762,62 +4789,38 @@ def interactive_shell():
                                 console.print(f"  [bright_white]Maintainers:[/bright_white] {len(maintainers) if isinstance(maintainers, list) else 'unknown'}")
 
                                 # Check for install scripts in metadata
-                                scripts = pkg_data.get('scripts', {})
-                                install_scripts = []
-                                for script_name in ['preinstall', 'install', 'postinstall', 'prepare']:
-                                    if script_name in scripts:
-                                        install_scripts.append(script_name)
-                                        script_content = scripts[script_name]
+                                script_report = analyze_install_scripts(pkg_data.get('scripts', {}))
+                                findings.extend(dangers=script_report.dangers)
 
-                                        # Analyze script content
-                                        danger_patterns = [
-                                            ('curl', 'Downloads external content'),
-                                            ('wget', 'Downloads external content'),
-                                            ('eval', 'Dynamic code execution'),
-                                            ('exec', 'Command execution'),
-                                            ('child_process', 'Spawns processes'),
-                                            ('rm -rf', 'Destructive file operation'),
-                                            ('base64', 'Encoded payload'),
-                                            ('/dev/tcp', 'Network backdoor'),
-                                            ('powershell', 'PowerShell execution'),
-                                            ('cmd.exe', 'Windows command execution'),
-                                            ('.bat', 'Batch script execution'),
-                                            ('nc ', 'Netcat - reverse shell'),
-                                            ('netcat', 'Netcat - reverse shell'),
-                                            ('/bin/sh', 'Shell execution'),
-                                            ('/bin/bash', 'Bash execution'),
-                                            ('socket', 'Network socket'),
-                                            ('XMLHttpRequest', 'HTTP request'),
-                                            ('fetch(', 'HTTP fetch'),
-                                            ('https://', 'External URL'),
-                                            ('http://', 'External URL (insecure)'),
-                                        ]
-
-                                        for pattern, desc in danger_patterns:
-                                            if pattern.lower() in script_content.lower():
-                                                dangers.append(f"🚨 {script_name} script: {desc} ({pattern})")
-                                                is_safe = False
-
-                                if install_scripts:
-                                    console.print(f"  [bright_yellow]⚠️ Has install scripts:[/bright_yellow] {', '.join(install_scripts)}")
-                                    for sn in install_scripts:
-                                        sc = scripts.get(sn, '')[:100]
-                                        console.print(f"    [dim]{sn}: {sc}...[/dim]")
+                                if script_report.has_hooks:
+                                    console.print(f"  [bright_yellow]⚠️ Has install scripts:[/bright_yellow] {', '.join(script_report.hooks)}")
+                                    for hook in script_report.hooks:
+                                        body = script_report.bodies.get(hook, '')[:100]
+                                        console.print(f"    [dim]{hook}: {body}...[/dim]")
                                 else:
                                     console.print(f"  [bright_green]✓ No install scripts[/bright_green]")
-                                    info_items.append("No install scripts detected")
+                                    findings.add_info("No install scripts detected")
 
                             except json.JSONDecodeError:
-                                warnings.append("Could not parse package metadata")
+                                # Unparseable metadata means the install-script
+                                # phase never ran — not a clean pass.
+                                findings.mark_blind(
+                                    "Metadata analysis",
+                                    "package metadata could not be parsed - install "
+                                    "scripts were NOT inspected",
+                                )
                         else:
-                            warnings.append(f"Could not fetch package info: {npm_view.stderr[:100]}")
+                            findings.mark_blind(
+                                "Metadata analysis",
+                                f"could not fetch package info ({npm_view.stderr[:100].strip()}) "
+                                f"- install scripts were NOT inspected",
+                            )
 
                         # PHASE 2: Take BEFORE snapshot
                         console.print(f"[bright_cyan]━━━ PHASE 2: Pre-Install Snapshot ━━━[/bright_cyan]")
                         before_snapshot = snapshot_directory(Path(sandbox_dir))
                         console.print(f"[success]✓ Captured baseline ({len(before_snapshot)} files)[/success]")
-                        if note_snapshot_errors("Baseline", before_snapshot):
-                            analysis_incomplete = True
+                        note_snapshot_errors("Baseline", before_snapshot)
 
                         # PHASE 3: INSTALL the package (this runs install scripts!)
                         console.print(f"[bright_cyan]━━━ PHASE 3: Installing Package (DANGEROUS ZONE) ━━━[/bright_cyan]")
@@ -4835,13 +4838,20 @@ def interactive_shell():
                             timeout=120, env=install_env
                         )
 
-                        if install_result.returncode != 0:
+                        install_failed = install_result.returncode != 0
+                        if install_failed:
                             console.print(f"[danger]❌ Install failed: {install_result.stderr[:200]}[/danger]")
                             # Check if failure was due to malicious script
                             if 'ELIFECYCLE' in install_result.stderr:
-                                dangers.append("Install script failed - possibly malicious or broken")
+                                findings.add_danger("Install script failed - possibly malicious or broken")
                             else:
-                                warnings.append(f"Install failed: {install_result.stderr[:100]}")
+                                # Nothing was installed, so every later phase is
+                                # looking at an empty tree.
+                                findings.mark_blind(
+                                    "Install",
+                                    f"npm install failed ({install_result.stderr[:100].strip()}) "
+                                    f"- the package code was NOT analyzed",
+                                )
                         else:
                             console.print(f"[success]✓ Package installed[/success]")
 
@@ -4849,35 +4859,23 @@ def interactive_shell():
                         console.print(f"[bright_cyan]━━━ PHASE 4: Post-Install Analysis ━━━[/bright_cyan]")
                         after_snapshot = snapshot_directory(Path(sandbox_dir))
                         console.print(f"[info]Captured post-install state ({len(after_snapshot)} files)[/info]")
-                        if note_snapshot_errors("Post-install", after_snapshot):
-                            analysis_incomplete = True
+                        note_snapshot_errors("Post-install", after_snapshot)
 
                         new_files, modified_files, deleted_files = compare_snapshots(before_snapshot, after_snapshot)
 
-                        # Expected file patterns (not suspicious)
-                        expected_patterns = [
-                            'node_modules/',      # Package files
-                            '.npm-cache/',        # npm cache (we set NPM_CONFIG_CACHE)
-                            'package-lock.json',  # Lock file created by npm
-                            'package.json',       # May be modified by npm
-                        ]
-
-                        # Filter for truly suspicious files
-                        suspicious_new = []
-                        for f in new_files:
-                            # Skip expected files
-                            is_expected = any(pattern in f for pattern in expected_patterns)
-                            if is_expected:
-                                continue
-                            # Flag files created in unexpected locations
-                            suspicious_new.append(f)
+                        # Anything npm itself did not create (segment-anchored,
+                        # so `evil-package.json` is not mistaken for `package.json`)
+                        suspicious_new = filter_suspicious_new_files(new_files)
 
                         if suspicious_new:
                             console.print(f"[danger]🚨 Suspicious files created OUTSIDE expected locations:[/danger]")
                             for sf in suspicious_new[:10]:
                                 console.print(f"  [danger]+ {sf}[/danger]")
-                                dangers.append(f"Suspicious file created: {sf}")
-                                is_safe = False
+                                findings.add_danger(f"Suspicious file created: {sf}")
+                            if len(suspicious_new) > 10:
+                                console.print(f"  [dim]... and {len(suspicious_new) - 10} more[/dim]")
+                                for sf in suspicious_new[10:]:
+                                    findings.add_danger(f"Suspicious file created: {sf}")
                         elif before_snapshot.is_complete and after_snapshot.is_complete:
                             console.print(f"  [bright_green]✓ No suspicious files created outside node_modules[/bright_green]")
                         else:
@@ -4886,40 +4884,21 @@ def interactive_shell():
                             console.print(f"  [warning]⚠️ No suspicious files seen - but the snapshots were incomplete (inconclusive)[/warning]")
 
                         # Count installed files
-                        node_modules_files = [f for f in new_files if 'node_modules/' in f]
-                        npm_cache_files = [f for f in new_files if '.npm-cache/' in f]
-                        console.print(f"  [dim]Installed {len(node_modules_files)} package files, {len(npm_cache_files)} cache files[/dim]")
+                        node_modules_count = count_paths_under(new_files, "node_modules")
+                        npm_cache_count = count_paths_under(new_files, ".npm-cache")
+                        console.print(f"  [dim]Installed {node_modules_count} package files, {npm_cache_count} cache files[/dim]")
 
                         # PHASE 5: Deep scan installed code
                         console.print(f"[bright_cyan]━━━ PHASE 5: Deep Code Analysis ━━━[/bright_cyan]")
 
-                        node_modules = Path(sandbox_dir) / "node_modules" / pkg_name.split('/')[0] if '/' in pkg_name else Path(sandbox_dir) / "node_modules" / pkg_name
+                        # Resolve the package's own directory: strips a version
+                        # spec and keeps the full scoped path, so `lodash@4.17.21`
+                        # and `@scope/pkg` both land on a directory that exists.
+                        node_modules = Path(sandbox_dir) / "node_modules" / installed_package_dirname(pkg_name)
 
                         if node_modules.exists():
                             # Scan for malicious patterns in installed code
                             console.print(f"[info]🔍 Scanning installed code for malware patterns...[/info]")
-
-                            malware_patterns = [
-                                (r'eval\s*\(', 'eval() - dynamic code execution'),
-                                (r'Function\s*\(', 'Function constructor - dynamic code'),
-                                (r'child_process', 'child_process - command execution'),
-                                (r'\.exec\s*\(', 'exec() - command execution'),
-                                (r'\.spawn\s*\(', 'spawn() - process spawning'),
-                                (r'require\s*\(\s*[\'"]fs[\'"]\s*\)', 'filesystem access'),
-                                (r'require\s*\(\s*[\'"]net[\'"]\s*\)', 'network access'),
-                                (r'require\s*\(\s*[\'"]http[\'"]\s*\)', 'HTTP client'),
-                                (r'require\s*\(\s*[\'"]https[\'"]\s*\)', 'HTTPS client'),
-                                (r'process\.env', 'environment variable access'),
-                                (r'Buffer\.from\([^)]+,\s*[\'"]base64[\'"]', 'base64 decoding'),
-                                (r'atob\s*\(', 'base64 decoding (atob)'),
-                                (r'\\x[0-9a-fA-F]{2}', 'hex-encoded strings'),
-                                (r'\\u[0-9a-fA-F]{4}', 'unicode-encoded strings'),
-                                (r'cryptocurrency|bitcoin|monero|wallet', 'cryptocurrency references'),
-                                (r'keylog|keystroke', 'keylogger indicators'),
-                                (r'screenshot|screen.capture', 'screen capture'),
-                                (r'credential|password.*steal', 'credential theft'),
-                                (r'reverse.shell|bind.shell', 'shell backdoor'),
-                            ]
 
                             files_scanned = 0
                             files_unreadable = 0
@@ -4937,43 +4916,41 @@ def interactive_shell():
                                         console.print(f"  [dim]Unreadable: {js_file.name} ({read_err})[/dim]")
                                     continue
                                 files_scanned += 1
-                                for pattern, desc in malware_patterns:
-                                    if re.search(pattern, content, re.IGNORECASE):
-                                        rel_path = str(js_file.relative_to(node_modules))
-                                        malware_hits.append((rel_path, desc))
+                                rel_path = str(js_file.relative_to(node_modules))
+                                for desc in scan_text_for_malware_patterns(content):
+                                    malware_hits.append((rel_path, desc))
 
                             console.print(f"  [dim]Scanned {files_scanned} JavaScript files[/dim]")
                             if files_unreadable:
                                 console.print(f"  [warning]⚠️ {files_unreadable} JavaScript file(s) could not be read - NOT scanned[/warning]")
-                                warnings.append(
+                                findings.mark_blind(
+                                    "Code analysis",
                                     f"{files_unreadable} installed file(s) unreadable - "
-                                    f"code analysis is partial"
+                                    f"code analysis is partial",
                                 )
-                                analysis_incomplete = True
 
                             # Group and report malware hits
                             if malware_hits:
-                                # Count by type
-                                hit_types = {}
-                                for _, desc in malware_hits:
-                                    hit_types[desc] = hit_types.get(desc, 0) + 1
-
-                                # Dangerous patterns
-                                dangerous_types = ['eval', 'child_process', 'exec', 'spawn', 'reverse', 'backdoor', 'keylog', 'credential']
-                                for hit_type, count in hit_types.items():
-                                    is_dangerous = any(d in hit_type.lower() for d in dangerous_types)
-                                    if is_dangerous:
-                                        dangers.append(f"🚨 {hit_type}: {count} occurrences")
-                                        is_safe = False
-                                    else:
-                                        # Common patterns like fs/http are warnings not dangers
-                                        warnings.append(f"⚠️ {hit_type}: {count} occurrences")
-
+                                malware_report = classify_malware_hits(malware_hits)
+                                findings.extend(
+                                    dangers=malware_report.dangers,
+                                    warnings=malware_report.warnings,
+                                )
                             elif files_unreadable:
                                 console.print(f"  [warning]⚠️ No malware patterns in the files that could be read (partial)[/warning]")
                             else:
                                 console.print(f"  [bright_green]✓ No obvious malware patterns[/bright_green]")
-                                info_items.append("No malware patterns detected in code")
+                                findings.add_info("No malware patterns detected in code")
+                        else:
+                            # The phase did not run at all. Silently skipping it
+                            # let a package reach "APPEARS SAFE" with zero code
+                            # analysis behind the verdict.
+                            console.print(f"  [warning]⚠️ Installed package directory not found - code analysis did NOT run[/warning]")
+                            findings.mark_blind(
+                                "Code analysis",
+                                f"node_modules/{installed_package_dirname(pkg_name)} not found "
+                                f"- the package code was NOT analyzed",
+                            )
 
                         # PHASE 6: Check for known CVEs
                         console.print(f"[bright_cyan]━━━ PHASE 6: CVE Database Check ━━━[/bright_cyan]")
@@ -4993,60 +4970,51 @@ def interactive_shell():
                                     continue
                                 if scan_result and scan_result.findings:
                                     cve_found = True
-                                    for finding in scan_result.findings:
-                                        sev = finding.severity.value if hasattr(finding.severity, 'value') else str(finding.severity)
-                                        if sev.upper() in ["CRITICAL", "HIGH"]:
-                                            is_safe = False
-                                            dangers.append(f"🔴 {finding.cve_id}: {finding.title}")
-                                        else:
-                                            warnings.append(f"🟡 {finding.cve_id}: {finding.title}")
+                                    cve_report = classify_cve_findings(scan_result.findings)
+                                    findings.extend(
+                                        dangers=cve_report.dangers,
+                                        warnings=cve_report.warnings,
+                                    )
                             if failed_scanners:
                                 console.print(f"  [warning]⚠️ {len(failed_scanners)} CVE scanner(s) failed - coverage is partial[/warning]")
                                 for detail in failed_scanners[:3]:
                                     console.print(f"    [dim]{detail}[/dim]")
-                                warnings.append(
+                                findings.mark_blind(
+                                    "CVE check",
                                     f"{len(failed_scanners)} CVE scanner(s) failed - "
-                                    f"CVE coverage is partial"
+                                    f"CVE coverage is partial",
                                 )
-                                analysis_incomplete = True
                             if not cve_found and not failed_scanners:
                                 console.print(f"  [bright_green]✓ No known CVEs found[/bright_green]")
-                                info_items.append("No known CVEs")
+                                findings.add_info("No known CVEs")
                             elif not cve_found:
                                 console.print(f"  [warning]⚠️ No CVEs from the scanners that completed (partial)[/warning]")
                         except Exception as e:
-                            console.print(f"  [dim]CVE check skipped: {e}[/dim]")
+                            # The whole phase failed to start; "skipped" is not
+                            # the same as "no CVEs".
+                            console.print(f"  [warning]⚠️ CVE check could not run: {e}[/warning]")
+                            findings.mark_blind(
+                                "CVE check",
+                                f"the CVE phase could not run ({e}) - the package was "
+                                f"NOT checked against the vulnerability database",
+                            )
 
                         # PHASE 7: Typosquatting check
                         console.print(f"[bright_cyan]━━━ PHASE 7: Typosquatting Analysis ━━━[/bright_cyan]")
-                        popular_packages = [
-                            "react", "lodash", "express", "axios", "moment", "jquery",
-                            "vue", "angular", "webpack", "babel", "typescript", "eslint",
-                            "prettier", "jest", "mocha", "chai", "underscore", "async",
-                            "request", "bluebird", "chalk", "commander", "inquirer",
-                            "debug", "uuid", "dotenv", "cors", "body-parser", "mongoose",
-                            "sequelize", "redux", "next", "gatsby", "nuxt", "svelte"
-                        ]
+                        squat_matches = typosquat_matches(pkg_name)
+                        for popular, similarity in squat_matches:
+                            findings.add_warning(f"⚠️ Similar to '{popular}' ({similarity:.0%}) - typosquat risk?")
+                            console.print(f"  [warning]Name is {similarity:.0%} similar to '{popular}'[/warning]")
 
-                        pkg_lower = pkg_name.lower().split('/')[-1]  # Handle scoped packages
-                        for popular in popular_packages:
-                            if pkg_lower != popular:
-                                similarity = difflib.SequenceMatcher(None, popular, pkg_lower).ratio()
-                                if similarity > 0.75 and similarity < 1.0:
-                                    warnings.append(f"⚠️ Similar to '{popular}' ({similarity:.0%}) - typosquat risk?")
-                                    console.print(f"  [warning]Name '{pkg_lower}' is {similarity:.0%} similar to '{popular}'[/warning]")
-
-                        if not any('typosquat' in w.lower() for w in warnings):
+                        if not squat_matches:
                             console.print(f"  [bright_green]✓ No typosquatting detected[/bright_green]")
 
                     except subprocess.TimeoutExpired:
                         console.print("[danger]❌ Install timed out (>120s)[/danger]")
-                        dangers.append("Install timed out - suspicious long-running scripts")
-                        is_safe = False
+                        findings.add_danger("Install timed out - suspicious long-running scripts")
                     except Exception as e:
                         console.print(f"[danger]❌ Error: {e}[/danger]")
-                        dangers.append(f"Analysis error: {str(e)}")
-                        is_safe = False
+                        findings.add_danger(f"Analysis error: {str(e)}")
                     finally:
                         # ALWAYS destroy sandbox completely
                         if sandbox_dir and Path(sandbox_dir).exists():
@@ -5063,62 +5031,39 @@ def interactive_shell():
                     console.print(f"[title]📊 ANALYSIS SUMMARY[/title]")
                     console.print(f"{'═' * 60}")
 
-                    if dangers:
-                        console.print(f"[danger]🚫 DANGERS ({len(dangers)}):[/danger]")
-                        for d in dangers[:10]:  # Limit display
+                    if findings.dangers:
+                        console.print(f"[danger]🚫 DANGERS ({len(findings.dangers)}):[/danger]")
+                        for d in findings.dangers[:10]:  # Limit display
                             console.print(f"  [danger]{d}[/danger]")
-                        if len(dangers) > 10:
-                            console.print(f"  [dim]... and {len(dangers) - 10} more[/dim]")
+                        if len(findings.dangers) > 10:
+                            console.print(f"  [dim]... and {len(findings.dangers) - 10} more[/dim]")
 
-                    if warnings:
-                        console.print(f"[warning]⚠️  WARNINGS ({len(warnings)}):[/warning]")
-                        for w in warnings[:10]:
+                    if findings.warnings:
+                        console.print(f"[warning]⚠️  WARNINGS ({len(findings.warnings)}):[/warning]")
+                        for w in findings.warnings[:10]:
                             console.print(f"  [warning]{w}[/warning]")
-                        if len(warnings) > 10:
-                            console.print(f"  [dim]... and {len(warnings) - 10} more[/dim]")
+                        if len(findings.warnings) > 10:
+                            console.print(f"  [dim]... and {len(findings.warnings) - 10} more[/dim]")
 
-                    if info_items and not dangers:
+                    if findings.info and not findings.dangers:
                         console.print(f"[success]✓ PASSED CHECKS:[/success]")
-                        for item in info_items:
+                        for item in findings.info:
                             console.print(f"  [success]✓ {item}[/success]")
 
                     console.print(f"\n{'═' * 60}")
 
-                    if is_safe and not dangers and not analysis_incomplete:
-                        console.print(Panel(
-                            f"[success]✅ APPEARS SAFE TO DOWNLOAD[/success]\n\n"
-                            f"Package '{pkg_name}' passed security analysis.\n"
-                            f"[dim]Note: No automated scan is 100% - review code if handling sensitive data[/dim]\n\n"
-                            f"Install with: [bright_white]npm install {pkg_name}[/bright_white]",
-                            title="🛡️ VERDICT",
-                            border_style="bright_green"
-                        ))
-                        next_step_type = "sandbox_safe"
-                    elif is_safe and not dangers:
-                        # No danger found, but part of the analysis was blind —
-                        # report INCONCLUSIVE rather than a pass.
-                        console.print(Panel(
-                            f"[warning]⚠️ INCONCLUSIVE - ANALYSIS WAS INCOMPLETE[/warning]\n\n"
-                            f"No security issue was found in package '{pkg_name}', but parts of\n"
-                            f"the sandbox could not be read or scanned (see WARNINGS above).\n"
-                            f"[dim]Absence of findings here is NOT a clean bill of health.[/dim]\n\n"
-                            f"Re-run the check, or review the package manually before installing.",
-                            title="🛡️ VERDICT",
-                            border_style="bright_yellow"
-                        ))
-                        next_step_type = "sandbox_safe"
-                    else:
-                        console.print(Panel(
-                            f"[danger]🚫 DO NOT INSTALL[/danger]\n\n"
-                            f"Package '{pkg_name}' has [bright_red]{len(dangers)}[/bright_red] security issue(s)!\n\n"
-                            f"[bright_yellow]Recommendations:[/bright_yellow]\n"
-                            f"• Search for alternative packages\n"
-                            f"• Report to npm if malicious\n"
-                            f"• Check package on snyk.io or socket.dev",
-                            title="🛡️ VERDICT",
-                            border_style="bright_red"
-                        ))
-                        next_step_type = "sandbox_danger"
+                    # Verdict table lives in sandbox_check so it is testable:
+                    # dangers -> DO NOT INSTALL, blind phase -> INCONCLUSIVE,
+                    # everything ran and found nothing -> APPEARS SAFE.
+                    verdict_summary = build_verdict_summary(
+                        findings.verdict, pkg_name, len(findings.dangers)
+                    )
+                    console.print(Panel(
+                        verdict_summary.body,
+                        title=verdict_summary.title,
+                        border_style=verdict_summary.border_style,
+                    ))
+                    next_step_type = verdict_summary.next_step_type
 
                 elif cmd_name == "live":
                     url = cmd_args[-1] if cmd_args else ""

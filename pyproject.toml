@@ -143,6 +143,7 @@ py-modules = [
     "config_file",
     "mcp_config_locations",
     "sandbox_snapshot",
+    "sandbox_check",
 ]
 
 [tool.setuptools.packages.find]

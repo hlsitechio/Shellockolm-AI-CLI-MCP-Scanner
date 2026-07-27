@@ -2041,16 +2041,58 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   Full suite **2876 passed / 1 skipped** (was 2841), `ruff check src tests scripts`
   clean, mypy clean, coverage 39.61% over the 28% floor, self-scan gate 0 HIGH+
   (exit 0). _(commit fc488b6)_
-- F29. [ ] **The `sandbox <pkg>` command is ~350 lines inline in `interactive_shell()`
-  and only its snapshot half is tested** — F27 extracted the snapshot/diff into
-  `sandbox_snapshot.py` and unit-tested it, but the phase logic that consumes it (the
-  expected-location filter, the malware-pattern pass, the CVE phase, and the
-  three-way verdict incl. the new INCONCLUSIVE branch) is still unreachable from a test:
-  it lives inside a giant REPL function that needs a TTY. Its correctness is currently
-  held by ruff's `F821` + review only. Extract the phases into a pure
-  `sandbox_check.py` (input: snapshots + scan results; output: dangers/warnings/verdict)
-  and pin the verdict table with tests — most importantly that "no dangers + blind
-  phase" renders INCONCLUSIVE and never "APPEARS SAFE".
+- F29. [x] **The `sandbox <pkg>` phase logic is now a pure, tested module** — the
+  ~450-line inline block in `interactive_shell()` shrank to orchestration + I/O; every
+  decision it made moved into a new pure `src/sandbox_check.py` (no filesystem, no
+  subprocess, no console — guarded by a test), mirroring `sandbox_snapshot` /
+  `diff_scan` / `baseline` / `doctor`. The **verdict table is one function**
+  (`decide_verdict`) and all four cells are pinned: dangers → DANGER (a danger outranks
+  an incomplete analysis), no dangers + a blind phase → **INCONCLUSIVE**, everything ran
+  and found nothing → SAFE. The panel text is built by `build_verdict_summary`, so the
+  tests assert what the user is actually told — that an INCONCLUSIVE run never renders
+  the "APPEARS SAFE" language, in any of the seven ways a phase can go blind. **Four
+  real defects surfaced and were fixed en route.** (1) The expected-location filter was
+  an unanchored substring test (`any(pattern in path …)`): a payload named
+  `evil-package.json` matched the `package.json` allowance and one at
+  `.ssh/node_modules/authorized_keys` matched the `node_modules/` allowance, so a
+  security filter silently dropped both — now segment-anchored
+  (`is_expected_install_path`). (2) Blind phases were **under-counted**: a failed `npm
+  install`, an absent installed-package directory (the `if node_modules.exists():` with
+  no `else`), unparseable/unfetchable metadata, and a CVE phase that failed to start were
+  all skipped silently, so a package could reach "APPEARS SAFE TO DOWNLOAD" with **zero**
+  code analysis behind the verdict; each now calls `mark_blind(phase, reason)` and the
+  reason is surfaced as a warning. (3) The verdict depended on a hand-synced `is_safe`
+  flag *and* the `dangers` list — one site already appended a danger without clearing the
+  flag — now `dangers` is the single source of truth and cannot diverge; likewise only
+  the first 10 suspicious files were recorded as dangers (the display cap leaked into the
+  count), so a 15-file drop under-reported. (4) `installed_package_dirname` resolves the
+  scan target properly: a version spec (`lodash@4.17.21`) pointed the code phase at a
+  directory that never exists, and a scoped package scanned `node_modules/@scope` (the
+  whole scope) instead of the package. Also closed an advertised-but-broken input — the
+  prompt offers "name or URL" but the raw value went to `npm view`, which cannot resolve
+  a registry URL (`normalize_package_spec`) — and gave INCONCLUSIVE its own
+  `next_step_type` (labelling a blind run `sandbox_safe` was the same overclaim in a
+  different field), with real next-step entries for all three verdicts. One dead
+  classifier keyword was deleted with the reason recorded: `"reverse"` matched no pattern
+  description (the reverse-shell pattern is described "shell backdoor" and is already
+  caught by `backdoor`), and a new test forbids the class of dead entry. **Verified
+  against a real `npm install`**: `https://www.npmjs.com/package/lodash` now normalizes
+  and installs, 1,058 new files produce **0** suspicious hits (1,052 in `node_modules`,
+  6 in `.npm-cache` — the dot-directory a `lstrip("./")` character-set bug found during
+  testing would have reported as 6 dropped payloads), while all three planted payload
+  shapes (`.ssh/authorized_keys`, `evil-package.json`, `.ssh/node_modules/beacon.js`)
+  are flagged → DO NOT INSTALL, and a blind-phase run renders INCONCLUSIVE with no
+  "APPEARS SAFE" text. **Verified fail-first**: neutering the INCONCLUSIVE branch of
+  `decide_verdict` fails 9 tests. 96 new tests (`tests/test_sandbox_check.py`: the 2×2
+  verdict table, all seven blind-phase paths, panel-text + markup-escaping assertions,
+  spec normalization / install-dirname, install-script analysis incl. malformed metadata,
+  the anchored path filter with both evasion regressions, malware grouping + severity
+  split, CVE classification across severity shapes and a fields-missing finding,
+  typosquat ordering, end-to-end clean/malicious compositions, and three anti-drift
+  mechanism guards — pattern tables defined once, the CLI consumes the module, the module
+  stays I/O-free). Full suite **2973 passed / 1 skipped** (was 2876), `ruff check src
+  tests scripts` clean, mypy clean, coverage **40.59%** over the 28% floor, self-scan
+  gate 0 HIGH+ (exit 0).
 - F30. [ ] **`dependency_tree` under-reports hoisted edges (surfaced by the F28 pass)** —
   `_build_node_v2` walks only an entry's NESTED `dependencies` and ignores its `requires`
   map, whose entries npm hoists to the lockfile's top level. The dangling comment
@@ -2063,6 +2105,27 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   extending the existing `seen` cycle guard to the new edges (a hoisted graph is far more
   cyclic than the nested tree). Behaviour-changing: pin the new counts with fixtures
   covering a hoisted-only dep, a nested override of a hoisted dep, and a requires-cycle.
+
+## Open follow-ups (surfaced by the F29 sandbox-extraction pass, not yet worked)
+
+- F31. [ ] **The sandbox malware-pattern phase calls mainstream packages malicious** —
+  now that the phase logic is testable, running it over a real `npm install lodash`
+  shows the verdict is **DO NOT INSTALL**. The sole danger is
+  `exec() - command execution: 5 occurrences`, from the pattern `\.exec\s*\(` matching
+  JavaScript's `RegExp.prototype.exec()` (`reTrimStart.exec(string)`) — not
+  `child_process.exec`. The warning set is the same story: `Function constructor` fires
+  193 times on lodash's own `Function(...)` usage, plus hex/unicode escape sequences in
+  string tables. This is pre-existing (the pattern table was carried over unchanged by
+  F29, which only moved and tested it), but it means the flagship "check before you
+  install" command tells users not to install one of the most-downloaded packages on
+  npm — a credibility problem for the paid product. Closing it means giving the
+  patterns the same calibration discipline as the `AGENT-*` rules: require a
+  `child_process`/`require('child_process')` binding near an `.exec(`/`.spawn(` (the
+  scanner already does this class of co-occurrence gating), drop or downgrade the
+  encoding-escape patterns, and pin a benign baseline over a real install of the top-N
+  packages asserting **zero** dangers, alongside the existing malicious fixtures.
+  `sandbox_check.scan_text_for_malware_patterns` / `classify_malware_hits` are now pure,
+  so the whole calibration can be driven from tests.
 
 ---
 

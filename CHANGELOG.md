@@ -11,6 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The `sandbox <pkg>` expected-location filter no longer hides a dropped
+  payload.** Deciding whether an install wrote a file it should not have was an
+  unanchored substring test, so a payload named `evil-package.json` matched the
+  allowance for `package.json`, and one written to
+  `.ssh/node_modules/authorized_keys` matched the allowance for `node_modules/`
+  — both were dropped before the verdict. Matching is now by path segment.
+  Verified against a real `npm install lodash`: 0 of 1,058 installed files are
+  reported as suspicious, while all three planted payload shapes are flagged.
+- **A sandbox phase that never ran is no longer reported as a pass.** Only some
+  blind phases downgraded the verdict; a failed `npm install`, an absent
+  installed-package directory, unparseable/unfetchable package metadata and a
+  CVE phase that failed to start were all silently skipped, so a package could
+  reach "APPEARS SAFE TO DOWNLOAD" with no code analysis behind it. Every phase
+  that cannot run now records why and renders `INCONCLUSIVE`, and an
+  inconclusive run gets its own next-step path instead of the "safe" one.
+- **The sandbox check accepts the package URL it advertises.** The prompt offers
+  "npm package name or URL", but the raw value went straight to `npm view`,
+  which cannot resolve a registry URL. A version spec (`lodash@4.17.21`) and a
+  scoped name also pointed the code-analysis phase at a directory that does not
+  exist, skipping it entirely; both now resolve to the real install directory.
+
 - **The MCP `exclude_node_modules` option no longer silently narrows a scan.**
   Both the `quick_scan` and `scan_directory` tools read the documented input and
   discarded it. Every scanner excludes `node_modules` unconditionally, so a
