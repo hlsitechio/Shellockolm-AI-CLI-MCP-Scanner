@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The interactive `sandbox <pkg>` deep-install check can no longer report a
+  package clean because a check crashed.** All five bare `except:` handlers in
+  that command swallowed their failure: a snapshot walk that died on one
+  unreadable path returned a *partial* file map the caller could not tell from a
+  complete one and reported "✓ No suspicious files created outside
+  node_modules", a file the install could not read still counted toward
+  "Scanned N JavaScript files" behind "✓ No obvious malware patterns", and a
+  crashing CVE scanner produced "✓ No known CVEs found". Every failure is now
+  caught by its real type and **recorded**: an incomplete snapshot, unreadable
+  installed files and failed CVE scanners each raise a warning, the affected
+  phase reports *partial* instead of clean, and the final verdict becomes
+  **⚠️ INCONCLUSIVE — ANALYSIS WAS INCOMPLETE** rather than "✅ APPEARS SAFE TO
+  DOWNLOAD". `KeyboardInterrupt` is no longer swallowed either, so Ctrl-C during
+  a multi-thousand-file walk actually interrupts it. The snapshot/diff logic
+  moved out of the command closure into the new, unit-tested `sandbox_snapshot`
+  module, and `E722` (bare-except) is now enforced by the CI ruff gate with an
+  AST guard over all of `src/` so it cannot come back.
+- **Windows: a benign npm package is no longer reported as dangerous by the
+  sandbox check.** Snapshot keys used native separators while the
+  expected-location filter tests `'node_modules/' in path`, so on Windows every
+  installed file looked like it had been created *outside* `node_modules` and
+  was flagged as a suspicious dropped file. Keys are now forward-slashed on
+  every platform. Snapshot content hashing also moved from MD5 to SHA-256 — it
+  is a tamper check in a security verdict path, and MD5 collisions are cheap
+  enough to hide a modified file behind its pre-install hash.
+
 ### Added
 
 - **The statement splitter now carries quote state across lines, so a line that

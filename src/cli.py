@@ -4681,8 +4681,9 @@ def interactive_shell():
                     import subprocess
                     import tarfile
                     import json
-                    import hashlib
                     import difflib
+
+                    from sandbox_snapshot import compare_snapshots, snapshot_directory
 
                     console.print(f"[title]🛡️ SANDBOX DEEP INSTALL CHECK[/title]")
                     console.print(f"[info]Package: {pkg_name}[/info]")
@@ -4690,46 +4691,35 @@ def interactive_shell():
 
                     sandbox_dir = None
                     is_safe = True
+                    # Tracks whether any phase was BLIND (a path it could not
+                    # read, a scanner that crashed). A phase that saw nothing
+                    # because it failed must never render as a clean pass.
+                    analysis_incomplete = False
                     warnings = []
                     dangers = []
                     info_items = []
 
-                    def get_dir_snapshot(path: Path) -> dict:
-                        """Get snapshot of all files with hashes"""
-                        snapshot = {}
-                        try:
-                            for f in path.rglob("*"):
-                                if f.is_file():
-                                    rel = str(f.relative_to(path))
-                                    try:
-                                        with open(f, 'rb') as fh:
-                                            snapshot[rel] = {
-                                                'hash': hashlib.md5(fh.read()).hexdigest(),
-                                                'size': f.stat().st_size
-                                            }
-                                    except:
-                                        snapshot[rel] = {'hash': 'unreadable', 'size': 0}
-                        except:
-                            pass
-                        return snapshot
+                    def note_snapshot_errors(label: str, snap) -> bool:
+                        """Surface an incomplete snapshot; True when it was blind.
 
-                    def compare_snapshots(before: dict, after: dict) -> tuple:
-                        """Compare before/after snapshots"""
-                        new_files = []
-                        modified_files = []
-                        deleted_files = []
-
-                        for f, info in after.items():
-                            if f not in before:
-                                new_files.append(f)
-                            elif before[f]['hash'] != info['hash']:
-                                modified_files.append(f)
-
-                        for f in before:
-                            if f not in after:
-                                deleted_files.append(f)
-
-                        return new_files, modified_files, deleted_files
+                        A snapshot that could not read part of the sandbox cannot
+                        prove a file was NOT dropped there, so the caller must
+                        downgrade its verdict rather than report "no suspicious
+                        files created".
+                        """
+                        if snap.is_complete:
+                            return False
+                        console.print(
+                            f"  [warning]⚠️ {label} snapshot incomplete: "
+                            f"{snap.error_summary()}[/warning]"
+                        )
+                        for detail in snap.errors[:3]:
+                            console.print(f"    [dim]{detail}[/dim]")
+                        warnings.append(
+                            f"{label} snapshot incomplete ({snap.error_count} path(s) "
+                            f"unreadable) - dropped-file detection is partial"
+                        )
+                        return True
 
                     try:
                         # Create isolated sandbox project
@@ -4822,8 +4812,10 @@ def interactive_shell():
 
                         # PHASE 2: Take BEFORE snapshot
                         console.print(f"[bright_cyan]━━━ PHASE 2: Pre-Install Snapshot ━━━[/bright_cyan]")
-                        before_snapshot = get_dir_snapshot(Path(sandbox_dir))
+                        before_snapshot = snapshot_directory(Path(sandbox_dir))
                         console.print(f"[success]✓ Captured baseline ({len(before_snapshot)} files)[/success]")
+                        if note_snapshot_errors("Baseline", before_snapshot):
+                            analysis_incomplete = True
 
                         # PHASE 3: INSTALL the package (this runs install scripts!)
                         console.print(f"[bright_cyan]━━━ PHASE 3: Installing Package (DANGEROUS ZONE) ━━━[/bright_cyan]")
@@ -4853,8 +4845,10 @@ def interactive_shell():
 
                         # PHASE 4: Take AFTER snapshot and compare
                         console.print(f"[bright_cyan]━━━ PHASE 4: Post-Install Analysis ━━━[/bright_cyan]")
-                        after_snapshot = get_dir_snapshot(Path(sandbox_dir))
+                        after_snapshot = snapshot_directory(Path(sandbox_dir))
                         console.print(f"[info]Captured post-install state ({len(after_snapshot)} files)[/info]")
+                        if note_snapshot_errors("Post-install", after_snapshot):
+                            analysis_incomplete = True
 
                         new_files, modified_files, deleted_files = compare_snapshots(before_snapshot, after_snapshot)
 
@@ -4882,8 +4876,12 @@ def interactive_shell():
                                 console.print(f"  [danger]+ {sf}[/danger]")
                                 dangers.append(f"Suspicious file created: {sf}")
                                 is_safe = False
-                        else:
+                        elif before_snapshot.is_complete and after_snapshot.is_complete:
                             console.print(f"  [bright_green]✓ No suspicious files created outside node_modules[/bright_green]")
+                        else:
+                            # Both snapshots were partial, so "no new files" is
+                            # the absence of evidence, not evidence of absence.
+                            console.print(f"  [warning]⚠️ No suspicious files seen - but the snapshots were incomplete (inconclusive)[/warning]")
 
                         # Count installed files
                         node_modules_files = [f for f in new_files if 'node_modules/' in f]
@@ -4922,20 +4920,34 @@ def interactive_shell():
                             ]
 
                             files_scanned = 0
+                            files_unreadable = 0
                             malware_hits = []
 
                             for js_file in node_modules.rglob("*.js"):
-                                files_scanned += 1
                                 try:
                                     content = js_file.read_text(errors='ignore')
-                                    for pattern, desc in malware_patterns:
-                                        if re.search(pattern, content, re.IGNORECASE):
-                                            rel_path = str(js_file.relative_to(node_modules))
-                                            malware_hits.append((rel_path, desc))
-                                except:
-                                    pass
+                                except OSError as read_err:
+                                    # An unreadable file is NOT a scanned file:
+                                    # counting it would inflate the coverage
+                                    # number behind a "no malware" claim.
+                                    files_unreadable += 1
+                                    if files_unreadable <= 3:
+                                        console.print(f"  [dim]Unreadable: {js_file.name} ({read_err})[/dim]")
+                                    continue
+                                files_scanned += 1
+                                for pattern, desc in malware_patterns:
+                                    if re.search(pattern, content, re.IGNORECASE):
+                                        rel_path = str(js_file.relative_to(node_modules))
+                                        malware_hits.append((rel_path, desc))
 
                             console.print(f"  [dim]Scanned {files_scanned} JavaScript files[/dim]")
+                            if files_unreadable:
+                                console.print(f"  [warning]⚠️ {files_unreadable} JavaScript file(s) could not be read - NOT scanned[/warning]")
+                                warnings.append(
+                                    f"{files_unreadable} installed file(s) unreadable - "
+                                    f"code analysis is partial"
+                                )
+                                analysis_incomplete = True
 
                             # Group and report malware hits
                             if malware_hits:
@@ -4955,6 +4967,8 @@ def interactive_shell():
                                         # Common patterns like fs/http are warnings not dangers
                                         warnings.append(f"⚠️ {hit_type}: {count} occurrences")
 
+                            elif files_unreadable:
+                                console.print(f"  [warning]⚠️ No malware patterns in the files that could be read (partial)[/warning]")
                             else:
                                 console.print(f"  [bright_green]✓ No obvious malware patterns[/bright_green]")
                                 info_items.append("No malware patterns detected in code")
@@ -4964,23 +4978,40 @@ def interactive_shell():
                         try:
                             from scanners import get_all_scanners
                             cve_found = False
+                            failed_scanners = []
                             for scanner_obj in get_all_scanners():
                                 try:
                                     scan_result = scanner_obj.scan_directory(str(Path(sandbox_dir) / "node_modules"), recursive=True, max_depth=3)
-                                    if scan_result and scan_result.findings:
-                                        cve_found = True
-                                        for finding in scan_result.findings:
-                                            sev = finding.severity.value if hasattr(finding.severity, 'value') else str(finding.severity)
-                                            if sev.upper() in ["CRITICAL", "HIGH"]:
-                                                is_safe = False
-                                                dangers.append(f"🔴 {finding.cve_id}: {finding.title}")
-                                            else:
-                                                warnings.append(f"🟡 {finding.cve_id}: {finding.title}")
-                                except:
-                                    pass
-                            if not cve_found:
+                                except Exception as scan_err:
+                                    # One scanner crashing must not silently
+                                    # become "no CVEs" for the whole phase.
+                                    failed_scanners.append(
+                                        f"{type(scanner_obj).__name__}: {scan_err}"
+                                    )
+                                    continue
+                                if scan_result and scan_result.findings:
+                                    cve_found = True
+                                    for finding in scan_result.findings:
+                                        sev = finding.severity.value if hasattr(finding.severity, 'value') else str(finding.severity)
+                                        if sev.upper() in ["CRITICAL", "HIGH"]:
+                                            is_safe = False
+                                            dangers.append(f"🔴 {finding.cve_id}: {finding.title}")
+                                        else:
+                                            warnings.append(f"🟡 {finding.cve_id}: {finding.title}")
+                            if failed_scanners:
+                                console.print(f"  [warning]⚠️ {len(failed_scanners)} CVE scanner(s) failed - coverage is partial[/warning]")
+                                for detail in failed_scanners[:3]:
+                                    console.print(f"    [dim]{detail}[/dim]")
+                                warnings.append(
+                                    f"{len(failed_scanners)} CVE scanner(s) failed - "
+                                    f"CVE coverage is partial"
+                                )
+                                analysis_incomplete = True
+                            if not cve_found and not failed_scanners:
                                 console.print(f"  [bright_green]✓ No known CVEs found[/bright_green]")
                                 info_items.append("No known CVEs")
+                            elif not cve_found:
+                                console.print(f"  [warning]⚠️ No CVEs from the scanners that completed (partial)[/warning]")
                         except Exception as e:
                             console.print(f"  [dim]CVE check skipped: {e}[/dim]")
 
@@ -5022,8 +5053,8 @@ def interactive_shell():
                             try:
                                 shutil.rmtree(sandbox_dir, ignore_errors=True)
                                 console.print(f"[success]✓ Sandbox destroyed - no traces remain[/success]")
-                            except:
-                                console.print(f"[warning]Cleanup may be incomplete - manually remove: {sandbox_dir}[/warning]")
+                            except OSError as cleanup_err:
+                                console.print(f"[warning]Cleanup may be incomplete ({cleanup_err}) - manually remove: {sandbox_dir}[/warning]")
 
                     # FINAL VERDICT
                     console.print(f"\n{'═' * 60}")
@@ -5051,7 +5082,7 @@ def interactive_shell():
 
                     console.print(f"\n{'═' * 60}")
 
-                    if is_safe and not dangers:
+                    if is_safe and not dangers and not analysis_incomplete:
                         console.print(Panel(
                             f"[success]✅ APPEARS SAFE TO DOWNLOAD[/success]\n\n"
                             f"Package '{pkg_name}' passed security analysis.\n"
@@ -5059,6 +5090,19 @@ def interactive_shell():
                             f"Install with: [bright_white]npm install {pkg_name}[/bright_white]",
                             title="🛡️ VERDICT",
                             border_style="bright_green"
+                        ))
+                        next_step_type = "sandbox_safe"
+                    elif is_safe and not dangers:
+                        # No danger found, but part of the analysis was blind —
+                        # report INCONCLUSIVE rather than a pass.
+                        console.print(Panel(
+                            f"[warning]⚠️ INCONCLUSIVE - ANALYSIS WAS INCOMPLETE[/warning]\n\n"
+                            f"No security issue was found in package '{pkg_name}', but parts of\n"
+                            f"the sandbox could not be read or scanned (see WARNINGS above).\n"
+                            f"[dim]Absence of findings here is NOT a clean bill of health.[/dim]\n\n"
+                            f"Re-run the check, or review the package manually before installing.",
+                            title="🛡️ VERDICT",
+                            border_style="bright_yellow"
                         ))
                         next_step_type = "sandbox_safe"
                     else:

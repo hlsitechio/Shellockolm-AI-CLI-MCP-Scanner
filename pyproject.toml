@@ -142,6 +142,7 @@ py-modules = [
     "doctor",
     "config_file",
     "mcp_config_locations",
+    "sandbox_snapshot",
 ]
 
 [tool.setuptools.packages.find]
@@ -167,10 +168,12 @@ include = '\.pyi?$'
 # `E`/`W`). The genuine-bug codes — undefined names (F821/F823), redefinitions
 # (F811), syntax errors (E9), format/comparison bugs — are NOT ignored and must
 # stay clean (the four F821/F823 crashes this gate first surfaced are now
-# fixed). A pre-existing *cosmetic* backlog (line length, trailing/blank
-# whitespace, placeholder-less f-strings, unused imports/vars, the CLI's
-# intentional deferred imports, a handful of bare excepts) is explicitly
-# deferred via `ignore` below and is ratcheted DOWN over time — never up.
+# fixed). `E722` (bare-except) joined them in follow-up F27: in a security
+# scanner a swallowed read/scan exception silently becomes "no findings" — a
+# scan that reports clean because it crashed. A pre-existing *cosmetic* backlog
+# (line length, trailing/blank whitespace, placeholder-less f-strings, unused
+# imports/vars, the CLI's intentional deferred imports) is explicitly deferred
+# via `ignore` below and is ratcheted DOWN over time — never up.
 # ---------------------------------------------------------------------------
 [tool.ruff]
 line-length = 88
@@ -187,7 +190,6 @@ ignore = [
     "F401",  # unused-import — import-hygiene backlog
     "F541",  # f-string-missing-placeholders — cosmetic backlog
     "F841",  # unused-variable — backlog
-    "E722",  # bare-except — broad-catch audit tracked separately
     "E712",  # true-false-comparison — cosmetic backlog
 ]
 

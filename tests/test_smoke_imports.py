@@ -24,6 +24,7 @@ SRC_MODULES = [
     "doctor",
     "config_file",
     "mcp_config_locations",
+    "sandbox_snapshot",
     "scan",
     "scan_simple",
     "auto_fix",

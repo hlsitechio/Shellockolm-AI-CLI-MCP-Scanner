@@ -1938,24 +1938,74 @@ each is a separate rule family with its own calibration burden. Ranked by severi
 
 ## Open follow-ups (surfaced by the F26 lint-gate pass, not yet worked)
 
-- F27. [ ] **The gate now covers every tree but silences 9 rule families** — F26 closed
-  the last path gap, so the drift surface moves from *which trees* to *which rules*.
-  Measured state (`ruff check src tests scripts --isolated --select <the ignore list>`):
-  **2,858 violations** are currently deferred — E501 line-too-long **2346**, F541
-  f-string-missing-placeholders **185**, W293 blank-line-with-whitespace **166**, F401
-  unused-import **102**, E402 module-import-not-at-top **30**, F841 unused-variable
-  **20**, E722 bare-except **5**, W291 trailing-whitespace **3**, E712
-  true-false-comparison **1**. Most are cosmetic width/whitespace backlog that a
-  formatter owns. **Close `E722` (5 sites) first** — it is the only genuine-bug family
-  in the list small enough for one run, and in a *security scanner* a bare `except:`
-  is the exact failure mode task #27(B) fixed by hand for read errors: a swallowed
-  parse/read exception silently becomes "no findings", i.e. a scan that reports clean
-  because it crashed. Review each of the 5 individually (narrow to the real exception,
-  or catch `Exception` and record it in `result.errors` where a scan must continue) —
-  do **not** blanket-rewrite; then drop `"E722"` from the `[tool.ruff.lint]` ignore
-  list and add it to `LINT_HYGIENE_CODES` in `tests/test_ci_workflow.py` so it can
-  never be re-silenced. `F841` (20) is the natural next one after it. Verify
-  fail-first as F25/F26 did.
+- F27. [x] **The gate now covers every tree but silences 9 rule families** — closed for
+  `E722`, the only genuine-bug family that was still deferred; the ratchet moves from
+  *which trees* to *which rules*. All **5** bare excepts turned out to sit in ONE place:
+  the interactive shell's `sandbox <pkg>` deep-install check, which installs an npm
+  package into a throwaway dir **with install scripts enabled** and then renders
+  "✅ APPEARS SAFE TO DOWNLOAD". Each was exactly the predicted failure mode (a swallowed
+  exception becomes "no findings"), reviewed individually and never blanket-rewritten:
+  **(1+2)** the pre/post-install snapshot **aborted its entire walk on the first error**
+  and silently returned a PARTIAL file map the caller could not tell from a complete one
+  — an install that dropped a payload could be reported as "✓ No suspicious files created
+  outside node_modules"; **(3)** an unreadable installed file still counted toward
+  "Scanned N JavaScript files" behind "✓ No obvious malware patterns"; **(4)** a crashing
+  CVE scanner produced "✓ No known CVEs found"; **(5)** cleanup swallowed
+  `KeyboardInterrupt` along with the `OSError` it meant. Every failure is now caught by
+  its real type and **recorded**: an incomplete snapshot, unreadable files and failed
+  scanners each append a warning, the phase reports *partial* instead of clean, and a new
+  `analysis_incomplete` flag turns the verdict into **⚠️ INCONCLUSIVE — ANALYSIS WAS
+  INCOMPLETE** rather than a pass. `os.walk(onerror=…)` replaces the abort-on-first-error
+  walk so one bad directory no longer truncates the tree, and Ctrl-C during a
+  multi-thousand-file walk actually interrupts again. The two snapshot closures were
+  untestable inside `interactive_shell()`, so they moved to a new pure module
+  `src/sandbox_snapshot.py` (mirrors `diff_scan`/`baseline`/`doctor`; added to
+  `py-modules` **and** the smoke-import net, per the packaging bug task #29 found).
+  Two real bugs fell out of the extraction: snapshot keys used **native separators**
+  while the caller classifies with `'node_modules/' in path`, so on **Windows every
+  installed file looked like it was created OUTSIDE node_modules** and a benign package
+  was reported dangerous (keys are now forward-slashed); and content hashing moved
+  **MD5 → SHA-256**, since it is a tamper check in a security verdict path and MD5
+  collisions are cheap enough to hide a modified file behind its pre-install hash.
+  `"E722"` dropped from the `[tool.ruff.lint]` ignore list and added to
+  `LINT_HYGIENE_CODES`, plus an **AST guard** (`test_src_tree_has_no_bare_except`) that
+  states the reason and keeps holding even if the lint config is edited.
+  **Verified fail-first**: a planted `try/except:` file in `src/` makes
+  `ruff check src tests scripts` exit **1** and fails both the AST guard and
+  `test_repo_passes_the_exact_ci_ruff_invocation`; removed, the gate exits **0** and all
+  pass. 18 new tests (`tests/test_sandbox_snapshot.py`: capture/hash/size, forward-slash
+  keys, SHA-256, change detection, read-error recorded + walk continues,
+  KeyboardInterrupt propagates, missing/file root, capped-but-counted errors, diff
+  new/modified/deleted, snapshot objects accepted, AST guard + its own fail-first check)
+  + 1 smoke-import param; full suite **2841 passed / 1 skipped** (was 2822),
+  `ruff check src tests scripts` clean, mypy clean, coverage 35.59% over the 28% floor,
+  self-scan gate 0 HIGH+ (exit 0). _(commit PENDING)_
+
+---
+
+## Open follow-ups (surfaced by the F27 bare-except pass, not yet worked)
+
+- F28. [ ] **`F841` (unused-variable, 20 sites) is the next genuine-bug family** —
+  with `E722` closed, the ignore list holds only cosmetic width/whitespace backlog
+  (E501/W291/W293/F541/E402/F401/E712) **plus `F841`**, which is the last family that
+  can hide a real defect: an assigned-but-unused variable is often a dropped result
+  (a computed finding list that never reaches the report, an exception bound and
+  discarded, a `_ =`-shaped typo). Re-measure with
+  `ruff check src tests scripts --isolated --select F841`, then review each site
+  individually — some are genuinely inert (loop bookkeeping) and want deletion, but any
+  site where the value *should* have been used is a bug to fix, not to delete. Then drop
+  `"F841"` from the ignore list and add it to `LINT_HYGIENE_CODES`. Verify fail-first as
+  F25/F26/F27 did.
+- F29. [ ] **The `sandbox <pkg>` command is ~350 lines inline in `interactive_shell()`
+  and only its snapshot half is tested** — F27 extracted the snapshot/diff into
+  `sandbox_snapshot.py` and unit-tested it, but the phase logic that consumes it (the
+  expected-location filter, the malware-pattern pass, the CVE phase, and the
+  three-way verdict incl. the new INCONCLUSIVE branch) is still unreachable from a test:
+  it lives inside a giant REPL function that needs a TTY. Its correctness is currently
+  held by ruff's `F821` + review only. Extract the phases into a pure
+  `sandbox_check.py` (input: snapshots + scan results; output: dangers/warnings/verdict)
+  and pin the verdict table with tests — most importantly that "no dangers + blind
+  phase" renders INCONCLUSIVE and never "APPEARS SAFE".
 
 ---
 

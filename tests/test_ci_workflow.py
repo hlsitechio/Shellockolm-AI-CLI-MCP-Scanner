@@ -47,11 +47,14 @@ EXPECTED_OSES = ["ubuntu-latest", "windows-latest"]
 # may never be added to the deferred-backlog ignore list.
 ENFORCED_BUG_CODES = ["F821", "F823", "F811", "E9"]
 
-# Hygiene codes the tree-widening cleanups fixed rather than silenced: E741/E702
-# in the test tree (F25) and E401 in the scripts tree (F26). They must stay
-# enforced — silencing them in the ignore list is the cheap way to "fix" a future
-# failure, which would quietly re-open the drift this gate exists to close.
-LINT_HYGIENE_CODES = ["E741", "E702", "E401"]
+# Hygiene codes the cleanups fixed rather than silenced: E741/E702 in the test
+# tree (F25), E401 in the scripts tree (F26), and E722 (bare-except) in the CLI's
+# sandbox deep-install check (F27) — the rule-family half of the ratchet, where a
+# swallowed exception in a security scanner silently becomes "no findings". They
+# must stay enforced — silencing them in the ignore list is the cheap way to
+# "fix" a future failure, which would quietly re-open the drift this gate exists
+# to close.
+LINT_HYGIENE_CODES = ["E741", "E702", "E401", "E722"]
 
 # Trees the CI lint gate must cover. `src` is the shipped package; `tests` is
 # where the detection claims are pinned; `scripts` holds tooling that runs in
