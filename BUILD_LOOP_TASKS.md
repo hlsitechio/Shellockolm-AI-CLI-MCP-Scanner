@@ -2135,7 +2135,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   property). **Verified fail-first**: 30 of the 34 fail against the pre-change module.
   Full suite **3007 passed / 1 skipped** (was 2973), `ruff check src tests scripts` clean,
   coverage **41.95%** over the 28% floor, CI self-scan gate
-  (`scan -s agent --fail-on high .`) exit 0. _(commit 6cd3a52)_
+  (`scan -s agent --fail-on high .`) exit 0. _(commit 9c65d9f)_
 
 ## Open follow-ups (surfaced by the F29 sandbox-extraction pass, not yet worked)
 
