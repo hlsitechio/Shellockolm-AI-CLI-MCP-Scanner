@@ -2093,18 +2093,49 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   stays I/O-free). Full suite **2973 passed / 1 skipped** (was 2876), `ruff check src
   tests scripts` clean, mypy clean, coverage **40.59%** over the 28% floor, self-scan
   gate 0 HIGH+ (exit 0). _(commit 951d59c)_
-- F30. [ ] **`dependency_tree` under-reports hoisted edges (surfaced by the F28 pass)** —
-  `_build_node_v2` walks only an entry's NESTED `dependencies` and ignores its `requires`
-  map, whose entries npm hoists to the lockfile's top level. The dangling comment
-  ("First check nested dependencies") shows a second pass was intended and never written,
-  so for a modern npm v7+ lockfile — where nearly everything is hoisted — the rendered
-  tree omits most real edges and `total_packages` / `max_depth` / `duplicate_count`
-  under-report accordingly. F28 deleted the dead `requires` local and documented the gap
-  in place rather than silently dropping it. Closing it means threading the top-level
-  package map into `_build_node_v2`, resolving each `requires` name against it, and
-  extending the existing `seen` cycle guard to the new edges (a hoisted graph is far more
-  cyclic than the nested tree). Behaviour-changing: pin the new counts with fixtures
-  covering a hoisted-only dep, a nested override of a hoisted dep, and a requires-cycle.
+- F30. [x] **`dependency_tree` under-reports hoisted edges (surfaced by the F28 pass)** —
+  on inspection the gap is not an under-report but a **total failure on every modern npm
+  project**: the builder read its edges from the lockfile's legacy `dependencies` mirror,
+  and **lockfileVersion 3 has no such mirror**, so `parse_package_lock` returned an EMPTY
+  tree — measured on this repo's own `website/package-lock.json` (v3): 0 root deps,
+  `total_packages` 0, `max_depth` 0, an empty rendered string. On lockfileVersion 2 the
+  mirror exists but each entry's real edges live in its `requires` map pointing at a
+  hoisted top-level sibling, so only the handful of conflict-nested installs were walked.
+  Closed on three fronts. **(A) `packages` is now the edge source for v2+** — npm hoists
+  every install into it, resolved through node's own nearest-`node_modules` walk
+  (`_resolve_pkg_path`), so a nested pin correctly shadows the hoisted copy and a
+  workspace `link` entry is followed to its real path; root deps come from `packages[""]`
+  (dependencies + dev + optional + peer) instead of the mirror's flat "every hoisted
+  package is a root child" list. **(B) the legacy path got the literal F30 fix** — a
+  shared `_legacy_children` resolves each `requires` name against the threaded top-level
+  map (nested copy wins; `"requires": true` from old npm is not mistaken for a map), used
+  by BOTH `_build_node_v1` and `_build_node_v2`, which had the identical gap. **(C) the
+  DAG is expanded safely** — a hoisted lockfile is a DAG, not a tree, so full expansion is
+  exponential; the walk is now breadth-first and emits a repeat occurrence as a leaf
+  marked `duplicate` (npm's "deduped") rather than re-walking it, which keeps it linear in
+  edges AND means the shallowest occurrence gets the subtree, so a direct dependency is
+  never demoted to a bare leaf because a transitive peer reached it first. `MAX_TREE_NODES`
+  / `MAX_TREE_DEPTH` are the backstops for pathological graphs (surfaced as a `truncated`
+  stat, never a silent cut). Three pre-existing bugs fell out of the same pass: a nested
+  package's name was mis-derived (every `node_modules/` occurrence was stripped, so
+  `node_modules/a/node_modules/b` was attributed to `a`), a v2 lockfile marked *every* node
+  a duplicate (the pre-scan had already registered all versions), and re-parsing on one
+  visualizer accumulated into the previous run's counters (`find_package` does exactly
+  that) — now reset per parse. **Verified against `npm ls --all` ground truth** on the real
+  v3 lockfile: 0 → 231 nodes, the 17 root deps match `package.json` exactly, max depth 6
+  matches npm's, 1 real cycle found (`update-browserslist-db -> browserslist`), and the
+  edge sets agree — **every installed edge npm reports is present, and NONE are
+  fabricated**. The only divergence is deliberate and in the safe direction: platform-
+  specific optional binaries (`@esbuild/linux-x64`, `@rollup/*`, `fsevents`) that the
+  lockfile records but this OS does not install are reported, because that is what CI on
+  another platform will pull. 34 new tests (`tests/test_dependency_tree.py`: pure units for
+  both resolution primitives, hoisted-only / nested-override / cycle shapes through BOTH
+  the packages and legacy paths, dedupe + shallowest-occurrence + budget + reset guards,
+  every renderer, and two invariants over the real lockfile incl. a no-fabricated-edges
+  property). **Verified fail-first**: 30 of the 34 fail against the pre-change module.
+  Full suite **3007 passed / 1 skipped** (was 2973), `ruff check src tests scripts` clean,
+  coverage **41.95%** over the 28% floor, CI self-scan gate
+  (`scan -s agent --fail-on high .`) exit 0. _(commit 6cd3a52)_
 
 ## Open follow-ups (surfaced by the F29 sandbox-extraction pass, not yet worked)
 
@@ -2126,6 +2157,24 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   packages asserting **zero** dangers, alongside the existing malicious fixtures.
   `sandbox_check.scan_text_for_malware_patterns` / `classify_malware_hits` are now pure,
   so the whole calibration can be driven from tests.
+
+## Open follow-ups (surfaced by the F30 dependency-tree pass, not yet worked)
+
+- F32. [ ] **`parse_yarn_lock` builds a flat list, not a tree** — the same class of bug
+  F30 just closed for npm is still open for yarn. The parser reads only the `version` /
+  `resolved` / `integrity` properties of each yarn.lock block and emits every package as a
+  `depth=1` root node; it never reads an entry's `dependencies:` block, so **no node ever
+  gets a child** — `max_depth` is always 1 and the "tree" is an alphabetical list of every
+  installed package. It also keys `root_deps` by bare name (`if name not in root_deps`),
+  so a package present at two versions collapses to whichever block was parsed first, and
+  the root's real direct dependencies (which live in `package.json`, not the lockfile) are
+  never distinguished from transitive ones. Closing it means parsing the descriptor list
+  in each block header (`"a@^1.0.0", "a@^1.2.0":`) into a resolution map, reading the
+  `dependencies:` sub-block for edges, resolving each against that map, and seeding the
+  roots from `package.json` — then reusing F30's existing `_new_node` / `_should_expand`
+  BFS machinery so the dedupe, cycle and budget guards apply unchanged. Verify the same
+  way F30 did: against `yarn list --json` ground truth on a real yarn project, asserting
+  no fabricated edges.
 
 ---
 

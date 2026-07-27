@@ -11,6 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The dependency tree is no longer empty on every modern npm project.** The
+  builder walked only an entry's NESTED `dependencies` and read the edges from a
+  lockfile's legacy `dependencies` mirror. **lockfileVersion 3 has no such
+  mirror**, so the whole feature returned zero nodes (`total_packages` 0,
+  `max_depth` 0, an empty rendered tree) for any npm v7+ project; on
+  lockfileVersion 2 it followed only the handful of conflict-nested installs and
+  missed every hoisted edge. Edges now come from the authoritative `packages`
+  map, resolved with node's own nearest-`node_modules` walk (so a nested pin
+  correctly shadows the hoisted copy), and the legacy path resolves an entry's
+  `requires` names against the hoisted top level. Expansion is breadth-first
+  with a "deduped" marker for repeat occurrences — the same choice `npm ls`
+  makes — which keeps a hoisted DAG linear instead of exponential, plus node and
+  depth budgets as backstops. Verified against `npm ls --all` on a real
+  lockfileVersion 3 project: 0 → 231 nodes, the 17 root dependencies match
+  `package.json` exactly, max depth matches npm's, and **every installed edge
+  npm reports is present with none fabricated** (the tree additionally reports
+  platform-specific optional binaries that the lockfile records but the local
+  platform does not install — what CI on another OS would pull).
+- Related fixes in the same pass: a nested package's name was mis-derived
+  (`node_modules/a/node_modules/b` was attributed to `a`, because every
+  `node_modules/` occurrence was stripped rather than the last); a v2 lockfile
+  marked *every* node a duplicate, since the pre-scan had already registered all
+  versions; and re-parsing on one visualizer accumulated counts into the
+  previous run's totals.
 - **The `sandbox <pkg>` expected-location filter no longer hides a dropped
   payload.** Deciding whether an install wrote a file it should not have was an
   unanchored substring test, so a payload named `evil-package.json` matched the

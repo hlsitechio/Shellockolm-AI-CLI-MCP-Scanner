@@ -6,8 +6,9 @@ Displays beautiful ASCII/Unicode trees of npm package dependencies
 
 import json
 import os
+from collections import deque
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple, Any
+from typing import Dict, FrozenSet, List, Optional, Set, Tuple, Any
 from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime
@@ -30,6 +31,30 @@ class OutputFormat(Enum):
     JSON = "json"
     DOT = "dot"  # GraphViz format
     ASCII = "ascii"
+
+
+# A hoisted lockfile is a DAG, not a tree: the same package is reachable through
+# many parents, so a naive full expansion is exponential. npm's own `npm ls`
+# sidesteps this by printing a repeat occurrence as "deduped" instead of
+# re-expanding it, which is what `_expanded` below does. These two constants are
+# the backstops for pathological graphs so a scan can never hang or blow the
+# interpreter's recursion limit.
+MAX_TREE_NODES = 50000
+MAX_TREE_DEPTH = 200
+
+# Sections of a `packages` entry that declare real installed edges. Peer
+# dependencies are included because npm resolves them to an actually-installed
+# package (`npm ls --all` lists them as edges), so a vulnerable peer is genuinely
+# reachable from the parent; a peer that was NOT installed simply fails to
+# resolve and is skipped. Matching npm's own edge set is what the tree is
+# checked against.
+_EDGE_SECTIONS = ("dependencies", "optionalDependencies", "peerDependencies")
+_ROOT_EDGE_SECTIONS = (
+    "dependencies",
+    "devDependencies",
+    "optionalDependencies",
+    "peerDependencies",
+)
 
 
 @dataclass
@@ -63,102 +88,110 @@ class DependencyTreeVisualizer:
         self.max_depth: int = 0
         self.total_packages: int = 0
         self.duplicate_count: int = 0
+        self.truncated: bool = False
+        # Package identities already expanded somewhere in the tree. A repeat is
+        # emitted as a leaf marked `duplicate` (npm's "deduped") rather than
+        # re-walked, which keeps a hoisted DAG linear in the number of edges.
+        self._expanded: Set[str] = set()
+
+    def _reset(self) -> None:
+        """Clear per-parse accumulators so re-parsing on one instance is idempotent."""
+        self.all_packages = {}
+        self.circular_refs = []
+        self.max_depth = 0
+        self.total_packages = 0
+        self.duplicate_count = 0
+        self.truncated = False
+        self._expanded = set()
+
+    def _track_version(self, name: str, version: str) -> None:
+        """Record that `name` exists at `version` (drives the multi-version report)."""
+        versions = self.all_packages.setdefault(name, [])
+        if version not in versions:
+            versions.append(version)
+
+    @staticmethod
+    def _package_name_from_path(pkg_path: str) -> str:
+        """Package name for a `packages` key such as `node_modules/a/node_modules/@s/b`.
+
+        The name is what follows the LAST `node_modules/` segment — a nested
+        install belongs to the nested package, not to its host. Returns "" for a
+        workspace entry (a key with no `node_modules/` segment at all), which is
+        a local link rather than a resolved dependency.
+        """
+        marker = "node_modules/"
+        idx = pkg_path.rfind(marker)
+        if idx == -1:
+            return ""
+        parts = pkg_path[idx + len(marker):].split("/")
+        if parts[0].startswith("@") and len(parts) > 1:
+            return f"{parts[0]}/{parts[1]}"
+        return parts[0]
+
+    @staticmethod
+    def _resolve_pkg_path(packages: Dict[str, Dict], from_path: str, name: str) -> Optional[str]:
+        """Resolve `name` as required BY the package installed at `from_path`.
+
+        Mirrors node's own lookup: try the requiring package's own
+        `node_modules`, then each ancestor's, ending at the top level — which is
+        where npm hoists nearly everything on a modern lockfile. Returns None
+        when the dependency is not installed (an unmet optional dep).
+        """
+        prefix = from_path
+        while True:
+            candidate = f"{prefix}/node_modules/{name}" if prefix else f"node_modules/{name}"
+            if candidate in packages:
+                return candidate
+            if not prefix:
+                return None
+            idx = prefix.rfind("/node_modules/")
+            prefix = prefix[:idx] if idx != -1 else ""
 
     def parse_package_lock(self, lock_path: str) -> Dict[str, DependencyNode]:
         """Parse package-lock.json and build dependency tree"""
-        with open(lock_path, "r") as f:
+        with open(lock_path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        root_deps = {}
+        self._reset()
+        root_deps: Dict[str, DependencyNode] = {}
         lock_version = data.get("lockfileVersion", 1)
 
         if lock_version >= 2:
             # npm v7+ format with packages
             packages = data.get("packages", {})
 
-            # Build from packages section
+            # Track every version present in the lockfile
             for pkg_path, pkg_info in packages.items():
                 if pkg_path == "":
                     # Root package
                     continue
+                name = self._package_name_from_path(pkg_path)
+                if not name:
+                    continue  # workspace link, not an installed dependency
+                self._track_version(name, pkg_info.get("version", "0.0.0"))
 
-                # Extract package name from path
-                # node_modules/@scope/package or node_modules/package
-                parts = pkg_path.replace("node_modules/", "").split("/")
-                if parts[0].startswith("@"):
-                    name = f"{parts[0]}/{parts[1]}"
-                else:
-                    name = parts[0]
-
-                # Track all versions
-                version = pkg_info.get("version", "0.0.0")
-                if name not in self.all_packages:
-                    self.all_packages[name] = []
-                if version not in self.all_packages[name]:
-                    self.all_packages[name].append(version)
-
-            # Build dependency tree from dependencies section
-            for name, dep_info in data.get("dependencies", {}).items():
-                node = self._build_node_v2(name, dep_info, set())
-                root_deps[name] = node
+            if packages:
+                # `packages` is the authoritative edge source for npm v7+: every
+                # install is hoisted into it and lockfileVersion 3 drops the
+                # legacy `dependencies` mirror entirely, so reading only that
+                # mirror yields an EMPTY tree on a modern lockfile.
+                root_deps = self._build_tree_from_packages(packages)
+            else:
+                for name, dep_info in data.get("dependencies", {}).items():
+                    root_deps[name] = self._build_node_v2(
+                        name, dep_info, set(), 1, data.get("dependencies", {})
+                    )
 
         else:
             # npm v6 format
-            for name, dep_info in data.get("dependencies", {}).items():
-                node = self._build_node_v1(name, dep_info, set())
-                root_deps[name] = node
+            legacy = data.get("dependencies", {})
+            for name, dep_info in legacy.items():
+                root_deps[name] = self._build_node_v1(name, dep_info, set(), 1, legacy)
 
         return root_deps
 
-    def _build_node_v1(self, name: str, info: Dict, seen: Set[str], depth: int = 1) -> DependencyNode:
-        """Build node for npm v6 lockfile format"""
-        pkg_key = f"{name}@{info.get('version', '0.0.0')}"
-
-        # Check for circular reference
-        circular = pkg_key in seen
-
-        node = DependencyNode(
-            name=name,
-            version=info.get("version", "0.0.0"),
-            resolved=info.get("resolved", ""),
-            integrity=info.get("integrity", ""),
-            dev=info.get("dev", False),
-            optional=info.get("optional", False),
-            depth=depth,
-            circular_ref=circular
-        )
-
-        # Track packages
-        if name not in self.all_packages:
-            self.all_packages[name] = []
-        if node.version not in self.all_packages[name]:
-            self.all_packages[name].append(node.version)
-        else:
-            node.duplicate = True
-            self.duplicate_count += 1
-
-        self.total_packages += 1
-        self.max_depth = max(self.max_depth, depth)
-
-        # Build sub-dependencies if not circular
-        if not circular and "dependencies" in info:
-            seen = seen | {pkg_key}
-            for sub_name, sub_info in info["dependencies"].items():
-                node.dependencies[sub_name] = self._build_node_v1(
-                    sub_name, sub_info, seen, depth + 1
-                )
-
-        return node
-
-    def _build_node_v2(self, name: str, info: Dict, seen: Set[str], depth: int = 1) -> DependencyNode:
-        """Build node for npm v7+ lockfile format"""
-        pkg_key = f"{name}@{info.get('version', '0.0.0')}"
-
-        # Check for circular reference
-        circular = pkg_key in seen
-        if circular:
-            self.circular_refs.append((list(seen)[-1] if seen else "root", name))
-
+    def _new_node(self, name: str, info: Dict, depth: int, circular: bool) -> DependencyNode:
+        """Build a node and fold it into the running counters."""
         node = DependencyNode(
             name=name,
             version=info.get("version", "0.0.0"),
@@ -169,44 +202,163 @@ class DependencyTreeVisualizer:
             peer=info.get("peer", False),
             bundled=info.get("bundled", False),
             depth=depth,
-            circular_ref=circular
+            circular_ref=circular,
         )
-
-        # Track packages
-        if name not in self.all_packages:
-            self.all_packages[name] = []
-        if node.version not in self.all_packages[name]:
-            self.all_packages[name].append(node.version)
-        else:
-            node.duplicate = True
-            self.duplicate_count += 1
-
+        self._track_version(name, node.version)
         self.total_packages += 1
         self.max_depth = max(self.max_depth, depth)
+        return node
 
-        # Build sub-dependencies if not circular
-        if not circular:
-            seen = seen | {pkg_key}
-            sub_deps = info.get("dependencies", {})
+    def _should_expand(self, node: DependencyNode, identity: str, depth: int) -> bool:
+        """Whether to walk `node`'s children, marking why not when we don't."""
+        if node.circular_ref:
+            return False
+        if identity in self._expanded:
+            # Already rendered in full elsewhere in the tree — npm calls this
+            # "deduped". Re-expanding it would duplicate a whole subtree.
+            node.duplicate = True
+            self.duplicate_count += 1
+            return False
+        if depth >= MAX_TREE_DEPTH or self.total_packages >= MAX_TREE_NODES:
+            self.truncated = True
+            return False
+        self._expanded.add(identity)
+        return True
 
-            # Only NESTED dependencies are walked. Edges declared in this
-            # entry's "requires" map but hoisted to the lockfile's top level are
-            # not followed, so the rendered tree under-reports those edges (and
-            # therefore depth/duplicate counts). Resolving them needs the
-            # top-level package map threaded in plus cycle handling — tracked as
-            # follow-up F30 in BUILD_LOOP_TASKS.md.
-            for sub_name, sub_info in sub_deps.items():
+    @staticmethod
+    def _packages_entry(packages: Dict[str, Dict], pkg_path: str) -> Dict:
+        """The metadata for `pkg_path`, following a workspace link to its real entry."""
+        info = packages.get(pkg_path, {})
+        if info.get("link") and info.get("resolved") in packages:
+            return packages[info["resolved"]]
+        return info
+
+    def _build_tree_from_packages(self, packages: Dict[str, Dict]) -> Dict[str, DependencyNode]:
+        """Build the tree from an npm v7+ `packages` map (lockfileVersion 2 and 3).
+
+        Breadth-first, so a package reachable by several routes is expanded at
+        its SHALLOWEST occurrence and deduped deeper — the same choice `npm ls`
+        makes, and the reason a direct dependency is never demoted to a
+        "deduped" leaf just because some transitive peer happened to reach it
+        first.
+        """
+        root_info = packages.get("", {})
+        root_deps: Dict[str, DependencyNode] = {}
+        queue: deque = deque()
+
+        def enqueue(name: str, pkg_path: str, seen: FrozenSet[str], depth: int, parent: str):
+            circular = pkg_path in seen
+            if circular:
+                self.circular_refs.append((parent, name))
+            node = self._new_node(name, self._packages_entry(packages, pkg_path), depth, circular)
+            queue.append((node, pkg_path, seen, depth))
+            return node
+
+        for section in _ROOT_EDGE_SECTIONS:
+            for name in root_info.get(section, {}):
+                if name in root_deps:
+                    continue
+                dep_path = self._resolve_pkg_path(packages, "", name)
+                if dep_path is None:
+                    continue  # declared but not installed (unmet optional dep)
+                root_deps[name] = enqueue(name, dep_path, frozenset(), 1, "root")
+
+        while queue:
+            node, pkg_path, seen, depth = queue.popleft()
+            if not self._should_expand(node, pkg_path, depth):
+                continue
+
+            info = self._packages_entry(packages, pkg_path)
+            child_seen = seen | {pkg_path}
+            for section in _EDGE_SECTIONS:
+                for child_name in info.get(section, {}):
+                    if child_name in node.dependencies:
+                        continue
+                    child_path = self._resolve_pkg_path(packages, pkg_path, child_name)
+                    if child_path is None:
+                        continue  # not installed (unmet optional dep)
+                    node.dependencies[child_name] = enqueue(
+                        child_name, child_path, child_seen, depth + 1, node.name
+                    )
+
+        return root_deps
+
+    @staticmethod
+    def _legacy_children(info: Dict, hoisted: Optional[Dict]) -> Dict[str, Dict]:
+        """Children of a legacy (`dependencies`-mirror) entry.
+
+        An entry's NESTED `dependencies` object holds only the deps npm could
+        not hoist; everything else it declares lives in `requires` and was
+        hoisted to the lockfile's top level. Walking the nested object alone
+        therefore misses nearly every real edge. A nested copy wins over the
+        hoisted one — it is the version actually installed for this parent.
+        """
+        nested = info.get("dependencies")
+        children: Dict[str, Dict] = dict(nested) if isinstance(nested, dict) else {}
+
+        requires = info.get("requires")
+        if isinstance(requires, dict):  # old npm also writes `"requires": true`
+            for req_name in requires:
+                if req_name in children:
+                    continue
+                hoisted_info = (hoisted or {}).get(req_name)
+                if isinstance(hoisted_info, dict):
+                    children[req_name] = hoisted_info
+
+        return children
+
+    def _build_node_v1(
+        self,
+        name: str,
+        info: Dict,
+        seen: Set[str],
+        depth: int = 1,
+        hoisted: Optional[Dict] = None,
+    ) -> DependencyNode:
+        """Build node for npm v6 lockfile format"""
+        pkg_key = f"{name}@{info.get('version', '0.0.0')}"
+        node = self._new_node(name, info, depth, circular=pkg_key in seen)
+
+        if self._should_expand(node, pkg_key, depth):
+            child_seen = seen | {pkg_key}
+            for sub_name, sub_info in self._legacy_children(info, hoisted).items():
+                node.dependencies[sub_name] = self._build_node_v1(
+                    sub_name, sub_info, child_seen, depth + 1, hoisted
+                )
+
+        return node
+
+    def _build_node_v2(
+        self,
+        name: str,
+        info: Dict,
+        seen: Set[str],
+        depth: int = 1,
+        hoisted: Optional[Dict] = None,
+    ) -> DependencyNode:
+        """Build node for a legacy `dependencies` mirror in an npm v7+ lockfile"""
+        pkg_key = f"{name}@{info.get('version', '0.0.0')}"
+        circular = pkg_key in seen
+        if circular:
+            self.circular_refs.append((list(seen)[-1] if seen else "root", name))
+
+        node = self._new_node(name, info, depth, circular)
+
+        if self._should_expand(node, pkg_key, depth):
+            child_seen = seen | {pkg_key}
+            for sub_name, sub_info in self._legacy_children(info, hoisted).items():
                 node.dependencies[sub_name] = self._build_node_v2(
-                    sub_name, sub_info, seen, depth + 1
+                    sub_name, sub_info, child_seen, depth + 1, hoisted
                 )
 
         return node
 
     def parse_yarn_lock(self, lock_path: str) -> Dict[str, DependencyNode]:
         """Parse yarn.lock and build dependency tree"""
-        with open(lock_path, "r") as f:
+        with open(lock_path, "r", encoding="utf-8") as f:
             content = f.read()
 
+        self._reset()
         root_deps = {}
         current_pkg = None
         current_info = {}
@@ -510,6 +662,8 @@ class DependencyTreeVisualizer:
             "max_depth": self.max_depth,
             "duplicate_packages": duplicates,
             "duplicate_count": len(duplicates),
+            "deduped_nodes": self.duplicate_count,
+            "truncated": self.truncated,
             "circular_references": self.circular_refs,
             "multi_version_packages": {
                 name: versions
@@ -530,9 +684,16 @@ class DependencyTreeVisualizer:
         table.add_row("Unique Packages", str(stats["unique_packages"]))
         table.add_row("Max Depth", str(stats["max_depth"]))
         table.add_row("Duplicate Packages", str(stats["duplicate_count"]))
+        table.add_row("Deduped Nodes", str(stats["deduped_nodes"]))
         table.add_row("Circular References", str(len(stats["circular_references"])))
 
         self.console.print(table)
+
+        if stats["truncated"]:
+            self.console.print(
+                f"\n[yellow]Tree truncated at {MAX_TREE_NODES} nodes / depth "
+                f"{MAX_TREE_DEPTH}; some edges are not shown.[/yellow]"
+            )
 
         # Show duplicates if any
         if stats["multi_version_packages"]:
