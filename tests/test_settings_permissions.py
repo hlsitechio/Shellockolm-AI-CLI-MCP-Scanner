@@ -127,13 +127,13 @@ def test_perm_findings_tolerates_non_settings_input(data):
 # ------------------------------------------------------------------ positives
 
 def test_bypass_permissions_mode_fires(tmp_path, scanner):
-    fp = _write_settings(tmp_path, {"permissions": {"defaultMode": "bypassPermissions"}})
+    _write_settings(tmp_path, {"permissions": {"defaultMode": "bypassPermissions"}})
     result = scanner.scan_directory(str(tmp_path))
     assert RULE in _rule_ids(result)
 
 
 def test_blanket_bash_allow_fires(tmp_path, scanner):
-    fp = _write_settings(tmp_path, {"permissions": {"allow": ["Bash"]}})
+    _write_settings(tmp_path, {"permissions": {"allow": ["Bash"]}})
     result = scanner.scan_directory(str(tmp_path))
     assert RULE in _rule_ids(result)
 

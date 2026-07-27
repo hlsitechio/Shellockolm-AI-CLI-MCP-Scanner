@@ -48,13 +48,16 @@ EXPECTED_OSES = ["ubuntu-latest", "windows-latest"]
 ENFORCED_BUG_CODES = ["F821", "F823", "F811", "E9"]
 
 # Hygiene codes the cleanups fixed rather than silenced: E741/E702 in the test
-# tree (F25), E401 in the scripts tree (F26), and E722 (bare-except) in the CLI's
-# sandbox deep-install check (F27) — the rule-family half of the ratchet, where a
-# swallowed exception in a security scanner silently becomes "no findings". They
-# must stay enforced — silencing them in the ignore list is the cheap way to
-# "fix" a future failure, which would quietly re-open the drift this gate exists
-# to close.
-LINT_HYGIENE_CODES = ["E741", "E702", "E401", "E722"]
+# tree (F25), E401 in the scripts tree (F26), E722 (bare-except) in the CLI's
+# sandbox deep-install check (F27), and F841 (unused-variable) across the tree
+# (F28) — the rule-family half of the ratchet, where a swallowed exception or a
+# dropped result in a security scanner silently becomes "no findings". F841 in
+# particular caught an MCP tool input that was read and discarded, so a caller
+# asking to scan node_modules got a scan that never looked. They must stay
+# enforced — silencing them in the ignore list is the cheap way to "fix" a
+# future failure, which would quietly re-open the drift this gate exists to
+# close.
+LINT_HYGIENE_CODES = ["E741", "E702", "E401", "E722", "F841"]
 
 # Trees the CI lint gate must cover. `src` is the shipped package; `tests` is
 # where the detection claims are pinned; `scripts` holds tooling that runs in

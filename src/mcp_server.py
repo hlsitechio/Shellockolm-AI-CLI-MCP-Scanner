@@ -135,6 +135,46 @@ _VALID_CONFIDENCE = {"low", "medium", "high"}
 DEFAULT_AGENT_SCAN_TIME_BUDGET = 120.0
 
 
+def normalize_exclude_node_modules(raw: Any) -> bool:
+    """Coerce the ``exclude_node_modules`` tool input to a bool.
+
+    Only an explicitly false-y value counts as "please scan inside
+    node_modules". Anything unrecognized falls back to ``True``, which is what
+    the scanners actually do — so an odd input can never make the scope note
+    claim more coverage than the scan delivered.
+    """
+    if isinstance(raw, bool):
+        return raw
+    if raw is None:
+        return True
+    if isinstance(raw, str):
+        return raw.strip().lower() not in {"false", "0", "no", "off"}
+    return bool(raw)
+
+
+def node_modules_scope_note(exclude_node_modules: bool) -> str:
+    """Report what the scan actually covered w.r.t. ``node_modules``.
+
+    Every registered scanner excludes ``node_modules`` unconditionally
+    (``BaseScanner.EXCLUDE_DIRS``), so this tool input can only be honored in
+    its default ``True`` direction. A caller passing ``False`` is asking for the
+    installed dependency tree to be scanned — exactly where a supply-chain
+    payload lands — and silently ignoring that request would present a scan as
+    complete when it never looked there. Say so instead of quietly narrowing.
+    """
+    if exclude_node_modules:
+        return (
+            "**Scope**: `node_modules/` excluded — project sources only, "
+            "not installed dependencies.\n\n"
+        )
+    return (
+        "> ⚠️ **`exclude_node_modules=false` was NOT honored.** Every scanner in this "
+        "server excludes `node_modules/` unconditionally, so this scan did **not** "
+        "inspect installed dependencies. Treat the result as covering project sources "
+        "only — it is not evidence that your dependency tree is clean.\n\n"
+    )
+
+
 def _finding_severity(finding) -> str:
     """Normalize a finding's severity to an UPPERCASE string (enum or str safe)."""
     sev = finding.severity
@@ -1057,7 +1097,11 @@ async def handle_list_tools() -> list[types.Tool]:
                     },
                     "exclude_node_modules": {
                         "type": "boolean",
-                        "description": "Skip node_modules folders (scans projects only, not dependencies)",
+                        "description": (
+                            "Skip node_modules folders (scans projects only, not dependencies). "
+                            "Always applied: the scanners exclude node_modules unconditionally, "
+                            "so passing false does not widen the scan — the result says so."
+                        ),
                         "default": True
                     },
                     "scanner": {
@@ -1091,7 +1135,11 @@ async def handle_list_tools() -> list[types.Tool]:
                     },
                     "exclude_node_modules": {
                         "type": "boolean",
-                        "description": "Skip node_modules folders",
+                        "description": (
+                            "Skip node_modules folders. Always applied: the scanners exclude "
+                            "node_modules unconditionally, so passing false does not widen the "
+                            "scan — the result says so."
+                        ),
                         "default": True
                     }
                 },
@@ -1504,13 +1552,16 @@ async def handle_call_tool(
     elif name == "quick_scan":
         path = arguments.get("path", ".")
         recursive = arguments.get("recursive", True)
-        exclude_node_modules = arguments.get("exclude_node_modules", True)
+        exclude_node_modules = normalize_exclude_node_modules(
+            arguments.get("exclude_node_modules", True)
+        )
         scanner_name = arguments.get("scanner")
-        
+
         if not Path(path).exists():
             return [types.TextContent(type="text", text=f"❌ Path does not exist: {path}")]
-        
+
         output = "# Quick CVE Scan Results\n\n"
+        output += node_modules_scope_note(exclude_node_modules)
         output += "**Mode**: Quick scan (package.json + lock files only)\n"
         output += "**Speed**: Skipping deep file analysis, malware detection, and secrets scanning\n\n"
         
@@ -1552,12 +1603,15 @@ async def handle_call_tool(
         path = arguments.get("path", ".")
         recursive = arguments.get("recursive", True)
         scanner_name = arguments.get("scanner")
-        exclude_node_modules = arguments.get("exclude_node_modules", True)
+        exclude_node_modules = normalize_exclude_node_modules(
+            arguments.get("exclude_node_modules", True)
+        )
 
         if not Path(path).exists():
             return [types.TextContent(type="text", text=f"❌ Path does not exist: {path}")]
 
         output = "# Deep Security Scan\n\n"
+        output += node_modules_scope_note(exclude_node_modules)
         output += "**Note**: Deep scan mode - analyzing all files for CVEs, malware, secrets, and backdoors.\n"
         output += "This may take 10+ minutes for large codebases.\n\n"
         

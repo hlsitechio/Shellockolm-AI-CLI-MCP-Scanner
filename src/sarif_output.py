@@ -456,11 +456,22 @@ class SarifGenerator:
         ))
     
     def add_malware_finding(self, pattern_id: str, pattern_name: str, file_path: str,
-                           line_number: int, message: str, severity: str = "high"):
-        """Add a malware pattern finding"""
+                           line_number: int, message: str, severity: str = "high",
+                           malware_type: Optional[str] = None):
+        """Add a malware pattern finding
+
+        ``malware_type`` is the analyzer's classification of the match (e.g.
+        credential-stealer, backdoor). When supplied it becomes an extra rule
+        tag, mirroring how ``add_secret_finding`` tags the secret type, so the
+        family survives into SARIF instead of being dropped. Omitted by default
+        so existing callers serialize byte-identically.
+        """
         rule_id = f"MALWARE-{pattern_id}"
-        
+
         if rule_id not in self.rules:
+            tags = ["security", "malware"]
+            if malware_type:
+                tags.append(str(malware_type).lower())
             self.add_rule(SarifRule(
                 id=rule_id,
                 name=pattern_name,
@@ -468,7 +479,7 @@ class SarifGenerator:
                 full_description=message,
                 help_uri="https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner#malware-patterns",
                 security_severity=severity,
-                tags=["security", "malware"]
+                tags=tags
             ))
         
         level_map = {"critical": "error", "high": "error", "medium": "warning", "low": "note"}
@@ -571,7 +582,8 @@ class SarifGenerator:
                 file_path=match.file_path,
                 line_number=match.line_number,
                 message=f"{match.pattern_name}: {match.explanation}",
-                severity=severity
+                severity=severity,
+                malware_type=malware_type,
             )
     
     def from_secrets_report(self, report: Any):

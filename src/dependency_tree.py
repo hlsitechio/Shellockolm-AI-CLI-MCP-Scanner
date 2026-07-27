@@ -75,7 +75,6 @@ class DependencyTreeVisualizer:
         if lock_version >= 2:
             # npm v7+ format with packages
             packages = data.get("packages", {})
-            dependencies = data.get("dependencies", {})
 
             # Build from packages section
             for pkg_path, pkg_info in packages.items():
@@ -188,10 +187,14 @@ class DependencyTreeVisualizer:
         # Build sub-dependencies if not circular
         if not circular:
             seen = seen | {pkg_key}
-            requires = info.get("requires", {})
             sub_deps = info.get("dependencies", {})
 
-            # First check nested dependencies
+            # Only NESTED dependencies are walked. Edges declared in this
+            # entry's "requires" map but hoisted to the lockfile's top level are
+            # not followed, so the rendered tree under-reports those edges (and
+            # therefore depth/duplicate counts). Resolving them needs the
+            # top-level package map threaded in plus cycle handling — tracked as
+            # follow-up F30 in BUILD_LOOP_TASKS.md.
             for sub_name, sub_info in sub_deps.items():
                 node.dependencies[sub_name] = self._build_node_v2(
                     sub_name, sub_info, seen, depth + 1

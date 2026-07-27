@@ -727,7 +727,8 @@ class ShellockolmGUI:
 def main():
     """Launch the Shellockolm GUI"""
     root = tk.Tk()
-    app = ShellockolmGUI(root)
+    # Widgets register themselves on root; no further reference is needed.
+    ShellockolmGUI(root)
 
     # Center window on screen
     root.update_idletasks()

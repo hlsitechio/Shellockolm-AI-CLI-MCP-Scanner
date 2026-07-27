@@ -189,7 +189,6 @@ ignore = [
     "E402",  # module-import-not-at-top — intentional deferred imports in the CLI
     "F401",  # unused-import — import-hygiene backlog
     "F541",  # f-string-missing-placeholders — cosmetic backlog
-    "F841",  # unused-variable — backlog
     "E712",  # true-false-comparison — cosmetic backlog
 ]
 

@@ -3355,9 +3355,8 @@ def quick_fix_all(session_logger, console):
         if not Path(project_dir).exists():
             continue
 
-        # Check for yarn or npm
+        # Check for yarn; npm is the fallback for everything else (see below).
         has_yarn = (Path(project_dir) / "yarn.lock").exists()
-        has_npm = (Path(project_dir) / "package-lock.json").exists() or (Path(project_dir) / "package.json").exists()
 
         for package, info in packages.items():
             patched = info['patched']
@@ -4758,6 +4757,9 @@ def interactive_shell():
                                 console.print(f"  [bright_white]Version:[/bright_white] {pkg_version}")
                                 console.print(f"  [bright_white]Description:[/bright_white] {pkg_desc}...")
                                 console.print(f"  [bright_white]Last Published:[/bright_white] {last_publish[:10] if last_publish != 'unknown' else 'unknown'}")
+                                # Maintainer count is a supply-chain signal worth
+                                # showing next to the rest of the metadata.
+                                console.print(f"  [bright_white]Maintainers:[/bright_white] {len(maintainers) if isinstance(maintainers, list) else 'unknown'}")
 
                                 # Check for install scripts in metadata
                                 scripts = pkg_data.get('scripts', {})
@@ -5347,15 +5349,14 @@ def interactive_shell():
                     path = cmd_args[-1] if cmd_args and not cmd_args[-1].startswith("-") else "."
                     env_only = cmd_name == "secrets-env"
                     entropy_mode = cmd_name == "secrets-entropy"
-                    # Check for verbose flag
-                    verbose_mode = "-v" in cmd_args or "--verbose" in cmd_args
 
                     console.print(f"[title]🔐 Secrets Scanner{' (.env)' if env_only else ' (Entropy)' if entropy_mode else ''}[/title]")
                     console.print(f"[path]Target: {Path(path).resolve()}[/path]")
 
                     scanner = SecretsScanner()
 
-                    # Use verbose mode with detailed output
+                    # Always verbose: this is the interactive shell, and a long
+                    # scan with no progress output looks like a hang.
                     report = scanner.scan_directory(path, verbose=True, console=console)
 
                     # Display results
@@ -5854,7 +5855,9 @@ def interactive_shell():
                         # 5. Generate SARIF
                         task = progress.add_task("[warning]Generating SARIF report...", total=None)
                         sarif_path = _shellockolm_tmp("sarif-report.sarif")
-                        sarif_output = sarif_gen.generate(str(sarif_path))
+                        # generate() writes the document to sarif_path; the
+                        # returned dict is not needed here.
+                        sarif_gen.generate(str(sarif_path))
                         progress.remove_task(task)
 
                     # Display results

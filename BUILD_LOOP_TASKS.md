@@ -1985,17 +1985,62 @@ each is a separate rule family with its own calibration burden. Ranked by severi
 
 ## Open follow-ups (surfaced by the F27 bare-except pass, not yet worked)
 
-- F28. [ ] **`F841` (unused-variable, 20 sites) is the next genuine-bug family** —
-  with `E722` closed, the ignore list holds only cosmetic width/whitespace backlog
-  (E501/W291/W293/F541/E402/F401/E712) **plus `F841`**, which is the last family that
-  can hide a real defect: an assigned-but-unused variable is often a dropped result
-  (a computed finding list that never reaches the report, an exception bound and
-  discarded, a `_ =`-shaped typo). Re-measure with
-  `ruff check src tests scripts --isolated --select F841`, then review each site
-  individually — some are genuinely inert (loop bookkeeping) and want deletion, but any
-  site where the value *should* have been used is a bug to fix, not to delete. Then drop
-  `"F841"` from the ignore list and add it to `LINT_HYGIENE_CODES`. Verify fail-first as
-  F25/F26/F27 did.
+- F28. [x] **`F841` (unused-variable) closed — the last genuine-bug family in the ignore
+  list** — all **20** sites were reviewed individually and split into real dropped
+  results vs. genuinely inert bindings; the ignore list now holds only the cosmetic
+  width/whitespace/import backlog (E501/W291/W293/F541/E402/F401/E712). The headline
+  defect was in the **shipped MCP surface**: both `quick_scan` and `scan_directory` read
+  the documented `exclude_node_modules` tool input and **threw it away**. Every
+  registered scanner excludes `node_modules` unconditionally
+  (`BaseScanner.EXCLUDE_DIRS`), so a caller passing `false` — asking for the installed
+  dependency tree, which is exactly where a supply-chain payload lands — got a scan that
+  never looked there, reported as an ordinary clean scan. The input is now normalized by
+  a pure `normalize_exclude_node_modules()` (only an explicitly false-y value counts as
+  "scan node_modules"; anything unrecognized falls back to the safe direction so an odd
+  input can never make the report claim more coverage than the scan delivered) and every
+  result carries a `node_modules_scope_note()` — the default states the real scope, and a
+  `false` request says plainly it was **NOT honored** and "is not evidence that your
+  dependency tree is clean". Both tool schema descriptions were corrected to match.
+  Five more sites were the F27 defect class (*a check that did not run reads as clean*):
+  `MalwareAnalyzer.scan_file` / `scan_package_json` and `MalwareScanner._scan_project`
+  swallowed read/parse failures so an unreadable file returned zero matches — now
+  recorded (capped at `MAX_RECORDED_ERRORS`, overflow counted, reset per scan) and
+  surfaced as `AnalysisReport.errors` / the report dict's `errors` key and printed;
+  `GitHubAdvisoryClient._make_graphql_request` discarded the reason a lookup failed, so
+  a rate-limit was indistinguishable from "no advisories" (now `self.request_errors`).
+  The three `MalwareAnalyzer` remediation paths (quarantine / remove / clean) returned an
+  honest `False` but discarded *why* — the reason now lands on `report.errors` (the
+  early missing-file guard is deliberately still not an error, and is pinned as such).
+  `SarifGenerator.from_malware_report` computed the analyzer's malware classification and
+  dropped it before writing SARIF; it now becomes a rule tag, mirroring how
+  `add_secret_finding` tags the secret type, with the parameter optional so existing
+  callers serialize byte-identically. Two smaller dropped values were surfaced rather
+  than deleted: npm `maintainers` (a supply-chain signal) is now shown with the rest of
+  the package metadata, and `github_scanner`'s drafted `pr_body` is printed as a
+  copy-pasteable `gh pr create` invocation instead of being built and discarded by a stub
+  that tells the user to open the PR manually. The genuinely inert bindings were deleted
+  with the reason recorded in a comment: a redundant `has_npm` (the branch below is
+  `if has_yarn: … else: npm`), a re-read `dependencies` local, a vestigial `-v` parse
+  (this REPL scan is unconditionally verbose — a long scan with no progress looks like a
+  hang), a discarded `generate()` return (it writes the file), a dead **shallow**
+  `original_data` copy that could never have served as a snapshot anyway (the real
+  rollback is the on-disk backup), the unused Tk `app` binding, and two unused test
+  locals. One site was NOT closed here and is tracked as **F30** below rather than
+  silently deleted: `dependency_tree._build_node_v2`'s `requires`. `"F841"` dropped from
+  the `[tool.ruff.lint]` ignore list and added to `LINT_HYGIENE_CODES`, plus a mechanism
+  guard (`test_src_tree_has_no_unused_locals`) that re-runs the rule directly so it holds
+  even if the lint config is edited. **Verified fail-first**: a planted
+  `dropped = compute()` in `src/` makes `ruff check src tests scripts` exit **1** and
+  fails the new guard plus `test_repo_source_passes_its_own_ruff_gate` and
+  `test_repo_passes_the_exact_ci_ruff_invocation`; removed, the gate exits **0**.
+  35 new tests (`tests/test_unused_value_fixes.py`: normalizer truth table incl.
+  unparseable-input safety, both scope notes + never-overclaims, schema-honesty and
+  end-to-end tool-output assertions for both MCP tools, read-error recording/cap/
+  per-scan reset/clean-baseline, each remediation failure reason + the guard-not-error
+  case, both malware-scanner paths, SARIF tag + byte-identical default, mechanism guard).
+  Full suite **2876 passed / 1 skipped** (was 2841), `ruff check src tests scripts`
+  clean, mypy clean, coverage 39.61% over the 28% floor, self-scan gate 0 HIGH+
+  (exit 0). _(commit PENDING)_
 - F29. [ ] **The `sandbox <pkg>` command is ~350 lines inline in `interactive_shell()`
   and only its snapshot half is tested** — F27 extracted the snapshot/diff into
   `sandbox_snapshot.py` and unit-tested it, but the phase logic that consumes it (the
@@ -2006,6 +2051,18 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   `sandbox_check.py` (input: snapshots + scan results; output: dangers/warnings/verdict)
   and pin the verdict table with tests — most importantly that "no dangers + blind
   phase" renders INCONCLUSIVE and never "APPEARS SAFE".
+- F30. [ ] **`dependency_tree` under-reports hoisted edges (surfaced by the F28 pass)** —
+  `_build_node_v2` walks only an entry's NESTED `dependencies` and ignores its `requires`
+  map, whose entries npm hoists to the lockfile's top level. The dangling comment
+  ("First check nested dependencies") shows a second pass was intended and never written,
+  so for a modern npm v7+ lockfile — where nearly everything is hoisted — the rendered
+  tree omits most real edges and `total_packages` / `max_depth` / `duplicate_count`
+  under-report accordingly. F28 deleted the dead `requires` local and documented the gap
+  in place rather than silently dropping it. Closing it means threading the top-level
+  package map into `_build_node_v2`, resolving each `requires` name against it, and
+  extending the existing `seen` cycle guard to the new edges (a hoisted graph is far more
+  cyclic than the nested tree). Behaviour-changing: pin the new counts with fixtures
+  covering a hoisted-only dep, a nested override of a hoisted dep, and a requires-cycle.
 
 ---
 

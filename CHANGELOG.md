@@ -11,6 +11,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The MCP `exclude_node_modules` option no longer silently narrows a scan.**
+  Both the `quick_scan` and `scan_directory` tools read the documented input and
+  discarded it. Every scanner excludes `node_modules` unconditionally, so a
+  caller passing `false` — asking for the installed dependency tree, exactly
+  where a supply-chain payload lands — received a scan that never looked there,
+  presented as an ordinary clean result. Scan output now always states its real
+  scope, and a `false` request is answered with an explicit "**NOT honored**"
+  notice making clear the result is not evidence that the dependency tree is
+  clean. Both tool schema descriptions were corrected to match the behaviour.
+- **An unreadable file no longer reads as a clean file in the malware scanners.**
+  `MalwareAnalyzer.scan_file` / `scan_package_json` and the npm
+  `MalwareScanner` swallowed read and parse failures, returning zero matches for
+  a file that was never actually examined. Skips are now recorded (capped, with
+  the overflow counted, and reset between scans) and surfaced as
+  `AnalysisReport.errors` and the scan report's `errors` key, so an empty
+  finding list only means "clean" when the error list is empty too. The three
+  remediation paths (quarantine / remove / clean) still return `False` on
+  failure but now record *why*, and a failed GitHub Advisory lookup records its
+  reason instead of being indistinguishable from "no advisories".
+- **SARIF malware findings keep their classification.** The analyzer's malware
+  type was computed and dropped before the finding was written; it is now
+  emitted as a rule tag, mirroring the secrets path. Findings without a type
+  serialize exactly as before.
+- `F841` (unused-variable) is now enforced by the CI ruff gate with a mechanism
+  guard, closing the last rule family that could hide a dropped result.
 - **The interactive `sandbox <pkg>` deep-install check can no longer report a
   package clean because a check crashed.** All five bare `except:` handlers in
   that command swallowed their failure: a snapshot walk that died on one
