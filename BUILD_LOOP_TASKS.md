@@ -2226,7 +2226,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   cycle/dedupe/budget guards, both root-seeding paths, berry, renderers + `find_package`,
   and the five ground-truth invariants). Full suite **3117 passed / 1 skipped** (was
   3059), `ruff check src tests scripts` clean, `mypy` clean, coverage **43.05%** over the
-  28% floor, CI self-scan gate (`scan -s agent --fail-on high .`) exit 0. _(commit PENDING)_
+  28% floor, CI self-scan gate (`scan -s agent --fail-on high .`) exit 0. _(commit 2a71e19)_
 
 ## Open follow-ups (surfaced by the F31 pattern-calibration pass, not yet worked)
 
