@@ -11,6 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The yarn dependency tree is now a tree.** `parse_yarn_lock` read only each
+  lockfile block's `version` / `resolved` / `integrity` and never opened its
+  `dependencies:` sub-block, so **no node ever got a child**: every installed
+  package was emitted as a `depth=1` root and the "tree" was an alphabetical
+  list. It also keyed packages by bare name, so a project with two copies of one
+  package installed reported only whichever block was parsed first, and it could
+  not tell a direct dependency from a transitive one. Block headers are now
+  parsed into a descriptor→resolution map (`"a@^1.0.0", "a@^1.2.0":`), each
+  entry's `dependencies:` / `optionalDependencies:` sub-blocks resolve through
+  it, and the roots are seeded from the sibling `package.json` — where a
+  project's *direct* dependencies actually live — then walked with the same BFS
+  machinery the npm path uses, so the dedupe, cycle and budget guards apply
+  unchanged. peerDependencies is deliberately **not** an edge: yarn classic does
+  not install peers, so drawing one would attribute a copy installed for
+  somebody else to this parent. Verified against `yarn list --json` plus the
+  real `node_modules` of an 85-package project: **144/144 edges, zero
+  fabricated, zero missed**, every claimed `(name, version)` present on disk,
+  and `ms` correctly resolved to `2.0.0` under `debug` and `2.1.3` under `send`
+  (before: 84 roots, 0 edges, one `ms`).
+
 - **`sandbox <pkg>` no longer tells you not to install lodash.** The phase-5
   malware-pattern table had never been calibrated: `\.exec\s*\(` matched
   JavaScript's `RegExp.prototype.exec` (`reTrimStart.exec(string)`), the whole

@@ -2184,21 +2184,49 @@ each is a separate rule family with its own calibration burden. Ranked by severi
 
 ## Open follow-ups (surfaced by the F30 dependency-tree pass, not yet worked)
 
-- F32. [ ] **`parse_yarn_lock` builds a flat list, not a tree** — the same class of bug
-  F30 just closed for npm is still open for yarn. The parser reads only the `version` /
-  `resolved` / `integrity` properties of each yarn.lock block and emits every package as a
-  `depth=1` root node; it never reads an entry's `dependencies:` block, so **no node ever
-  gets a child** — `max_depth` is always 1 and the "tree" is an alphabetical list of every
-  installed package. It also keys `root_deps` by bare name (`if name not in root_deps`),
-  so a package present at two versions collapses to whichever block was parsed first, and
-  the root's real direct dependencies (which live in `package.json`, not the lockfile) are
-  never distinguished from transitive ones. Closing it means parsing the descriptor list
-  in each block header (`"a@^1.0.0", "a@^1.2.0":`) into a resolution map, reading the
-  `dependencies:` sub-block for edges, resolving each against that map, and seeding the
-  roots from `package.json` — then reusing F30's existing `_new_node` / `_should_expand`
-  BFS machinery so the dedupe, cycle and budget guards apply unchanged. Verify the same
-  way F30 did: against `yarn list --json` ground truth on a real yarn project, asserting
-  no fabricated edges.
+- F32. [x] **`parse_yarn_lock` builds a flat list, not a tree** — closed for yarn the way
+  F30 closed it for npm. The parser read only each block's `version` / `resolved` /
+  `integrity` and never opened its `dependencies:` sub-block, so **no node ever got a
+  child**: every installed package was emitted as a `depth=1` root and the "tree" was an
+  alphabetical list. It also keyed `root_deps` by bare name, collapsing a package present
+  at two versions into whichever block was parsed first, and never distinguished the
+  root's real direct dependencies (which live in `package.json`, not the lockfile) from
+  transitive ones. **Measured fail-first on the vendored real project: 84 roots (the
+  manifest declares 3), 0 edges, `max_depth` 0, one `ms` — and 49 of the 58 new tests
+  fail on the pre-change module.** Now: each block header's descriptor list
+  (`"a@^1.0.0", "a@^1.2.0":`) is parsed into a descriptor→`name@version` resolution map,
+  every descriptor indexed (so both ranges hit the one copy); `dependencies:` /
+  `optionalDependencies:` sub-blocks are read as edges and resolved through that map;
+  roots are seeded from the sibling `package.json` (`dependencies`/`devDependencies`/
+  `optionalDependencies`, which is also the only place root dev/optional-ness is
+  recorded); and the walk is F30's existing `_new_node` / `_should_expand` BFS, so
+  dedupe, cycle and node/depth budget guards apply unchanged. Deliberate calibration:
+  **peerDependencies is NOT an edge** (unlike the npm path) because yarn classic does not
+  install peers — resolving one would attribute a copy yarn installed for somebody else
+  to this parent; an **ambiguous** unresolvable range (two copies installed, no matching
+  descriptor) drops the edge rather than guessing, while a single installed copy resolves
+  a descriptor-format miss because the declared range must be satisfied by the only copy
+  there; unknown sub-blocks (berry's `bin:`, `peerDependenciesMeta:`) are skipped
+  wholesale; an npm alias (`foo@npm:bar@^1.0.0`) splits at the FIRST `@` after index 0 so
+  it never invents a package called `foo@npm:bar`; and berry's colon syntax + `npm:`
+  descriptors parse through the same grammar. With **no** manifest the roots fall back to
+  the entries nothing else depends on (stated as a fallback — a lockfile alone cannot
+  tell direct from transitive), but a manifest that IS present and whose deps are all
+  unmet stays empty rather than promoting transitives to roots. **Verified against
+  ground truth exactly as F30 did**: a real `yarn install` (yarn 1.22.22, 85 packages)
+  compared to `yarn list --json` AND the real `node_modules` — **144/144 edges, zero
+  fabricated, zero missed**, every claimed `(name, version)` present on disk, `max_depth`
+  8, and `ms` resolved per-parent to `2.0.0` under `debug` and `2.1.3` under `send` (the
+  collapse bug in one assertion; note `yarn list` dedupes its own flat listing by name
+  and shows only one `ms`, which is why the on-disk set is the authority). That project
+  is vendored at `tests/fixtures/yarn-tree/` with its recorded ground truth so CI
+  re-checks the invariant with no yarn and no network. 58 new tests
+  (`tests/test_yarn_dependency_tree.py`: descriptor/line-grammar units, multi-version
+  resolution, dev/optional marking, peer-is-not-an-edge, unmet + ambiguous edges,
+  cycle/dedupe/budget guards, both root-seeding paths, berry, renderers + `find_package`,
+  and the five ground-truth invariants). Full suite **3117 passed / 1 skipped** (was
+  3059), `ruff check src tests scripts` clean, `mypy` clean, coverage **43.05%** over the
+  28% floor, CI self-scan gate (`scan -s agent --fail-on high .`) exit 0. _(commit PENDING)_
 
 ## Open follow-ups (surfaced by the F31 pattern-calibration pass, not yet worked)
 
