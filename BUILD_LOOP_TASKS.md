@@ -1909,17 +1909,53 @@ each is a separate rule family with its own calibration burden. Ranked by severi
 
 ## Open follow-ups (surfaced by the F25 lint-gate pass, not yet worked)
 
-- F26. [ ] **`scripts/` is the last tree outside the lint gate** — F25 closed `tests`;
-  the gate is now `ruff check src tests`, which still leaves `scripts/` unlinted.
-  Verified state: `ruff check scripts` reports **1 error** (`E401`,
-  multiple-imports-on-one-line, ruff-fixable). Small, but `scripts/` is not inert —
-  it holds `action_summary.py`, which the **GitHub Action** runs to produce the
-  findings count (task #21), and `benchmark_scan.py`, whose corpus generator the
-  perf tripwire imports (task #26). A break there is a break in shipped CI surface.
-  The mechanism is already built: add `scripts` to the `run:` line in ci.yml and
-  `REQUIRED_LINT_PATHS` in `tests/test_ci_workflow.py` — `_ci_ruff_paths()` re-runs
-  ruff over whatever CI declares, so the new tree is verified with no further wiring.
-  Verify fail-first as F25 did (plant a violation, watch the gate go red, remove it).
+- F26. [x] **`scripts/` is the last tree outside the lint gate** — closed: the CI gate
+  is now **`ruff check src tests scripts`**, and with it **every tracked `.py` file in
+  the repo is inside the gate** (`git ls-files '*.py'` returns nothing outside those
+  three trees, and `ruff check .` over the whole repo is clean). The one drifted
+  violation the widening exposed — `E401` (multiple-imports-on-one-line) at
+  `scripts/run_all_scans.py:7` — was **fixed** (`import sys, os` → two statements),
+  never ignored, and `E401` is now asserted **absent** from the `[tool.ruff.lint]`
+  ignore list alongside F25's `E741`/`E702`, so silencing a future failure re-opens
+  the gate loudly. `scripts/` earns the gate because it is not inert tooling:
+  `action_summary.py` runs **inside the shipped GitHub Action** to produce the
+  findings count (task #21) and `benchmark_scan.py`'s corpus generator is imported
+  by the perf tripwire (task #26) — a break there is a break in shipped CI surface.
+  No new anti-drift mechanism was needed: F25's `_ci_ruff_paths()` parses the path
+  arguments back out of `ci.yml` and re-runs ruff over exactly them, so adding
+  `scripts` to the workflow's `run:` line and to `REQUIRED_LINT_PATHS` was enough for
+  `test_repo_passes_the_exact_ci_ruff_invocation` to start verifying the new tree
+  automatically (the generalized `test_ci_ruff_gate_covers_required_trees` asserts
+  coverage of all three). **Verified fail-first**: a planted `import sys, os` file in
+  `scripts/` makes `ruff check src tests scripts` exit **1** and fails both the new
+  `test_repo_scripts_tree_passes_its_own_ruff_gate` and the exact-CI-invocation test;
+  removed, the gate exits **0** and all 14 pass. 1 new test; full suite
+  **2822 passed / 1 skipped** (was 2821); `ruff check src tests scripts` clean, mypy
+  clean, coverage 35.21% over the 28% floor, self-scan gate 0 HIGH+ (exit 0).
+  _(commit PENDING)_
+
+---
+
+## Open follow-ups (surfaced by the F26 lint-gate pass, not yet worked)
+
+- F27. [ ] **The gate now covers every tree but silences 9 rule families** — F26 closed
+  the last path gap, so the drift surface moves from *which trees* to *which rules*.
+  Measured state (`ruff check src tests scripts --isolated --select <the ignore list>`):
+  **2,858 violations** are currently deferred — E501 line-too-long **2346**, F541
+  f-string-missing-placeholders **185**, W293 blank-line-with-whitespace **166**, F401
+  unused-import **102**, E402 module-import-not-at-top **30**, F841 unused-variable
+  **20**, E722 bare-except **5**, W291 trailing-whitespace **3**, E712
+  true-false-comparison **1**. Most are cosmetic width/whitespace backlog that a
+  formatter owns. **Close `E722` (5 sites) first** — it is the only genuine-bug family
+  in the list small enough for one run, and in a *security scanner* a bare `except:`
+  is the exact failure mode task #27(B) fixed by hand for read errors: a swallowed
+  parse/read exception silently becomes "no findings", i.e. a scan that reports clean
+  because it crashed. Review each of the 5 individually (narrow to the real exception,
+  or catch `Exception` and record it in `result.errors` where a scan must continue) —
+  do **not** blanket-rewrite; then drop `"E722"` from the `[tool.ruff.lint]` ignore
+  list and add it to `LINT_HYGIENE_CODES` in `tests/test_ci_workflow.py` so it can
+  never be re-silenced. `F841` (20) is the natural next one after it. Verify
+  fail-first as F25/F26 did.
 
 ---
 

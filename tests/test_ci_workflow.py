@@ -5,12 +5,15 @@ Task #42 asks for a CI workflow that runs **lint (ruff)**, tests across
 across two committed files:
 
 * ``.github/workflows/ci.yml`` — the test matrix (OS x Python) and a dedicated,
-  build-blocking ``lint`` job that runs ``ruff check src tests``. The ``tests``
-  path was added by build-loop follow-up F25: the test tree is where every
-  detection claim in the backlog is actually pinned, and while it sat outside
-  the gate it drifted (13 violations the day it was folded in). The gate paths
-  are parsed back out of the workflow here and re-run, so the tree CI lints and
-  the tree these tests prove clean can never diverge.
+  build-blocking ``lint`` job that runs ``ruff check src tests scripts``. The
+  ``tests`` path was added by build-loop follow-up F25: the test tree is where
+  every detection claim in the backlog is actually pinned, and while it sat
+  outside the gate it drifted (13 violations the day it was folded in).
+  ``scripts`` followed in F26 — ``action_summary.py`` runs inside the shipped
+  GitHub Action and ``benchmark_scan.py`` is imported by the perf tripwire, so
+  it is shipped CI surface, not inert tooling. The gate paths are parsed back
+  out of the workflow here and re-run, so the tree CI lints and the tree these
+  tests prove clean can never diverge.
 * ``pyproject.toml`` — declares ``ruff`` as a dev dependency and the single
   source of truth for the lint rule selection / deferred-backlog ignore list in
   ``[tool.ruff.lint]`` (shared by CI and a local ``ruff check``).
@@ -44,14 +47,17 @@ EXPECTED_OSES = ["ubuntu-latest", "windows-latest"]
 # may never be added to the deferred-backlog ignore list.
 ENFORCED_BUG_CODES = ["F821", "F823", "F811", "E9"]
 
-# Hygiene codes the F25 cleanup fixed in the test tree. They must stay enforced:
-# silencing them in the ignore list is the cheap way to "fix" a future failure,
-# which would quietly re-open the drift this gate exists to close.
-LINT_HYGIENE_CODES = ["E741", "E702"]
+# Hygiene codes the tree-widening cleanups fixed rather than silenced: E741/E702
+# in the test tree (F25) and E401 in the scripts tree (F26). They must stay
+# enforced — silencing them in the ignore list is the cheap way to "fix" a future
+# failure, which would quietly re-open the drift this gate exists to close.
+LINT_HYGIENE_CODES = ["E741", "E702", "E401"]
 
 # Trees the CI lint gate must cover. `src` is the shipped package; `tests` is
-# where the detection claims are pinned.
-REQUIRED_LINT_PATHS = ["src", "tests"]
+# where the detection claims are pinned; `scripts` holds tooling that runs in
+# shipped CI surface (action_summary.py inside the GitHub Action,
+# benchmark_scan.py's corpus generator imported by the perf tripwire).
+REQUIRED_LINT_PATHS = ["src", "tests", "scripts"]
 
 
 def _read(path: Path) -> str:
@@ -221,9 +227,10 @@ def test_ci_has_dedicated_blocking_ruff_lint_job():
     )
 
 
-def test_ci_ruff_gate_covers_src_and_tests():
-    """The gate must lint the test tree as well as the shipped package —
-    `tests` sat outside it and drifted (F25)."""
+def test_ci_ruff_gate_covers_required_trees():
+    """The gate must lint every tree that can break something: the shipped
+    package, the test tree that pins the detection claims (it sat outside and
+    drifted — F25), and the scripts tree that runs in shipped CI surface (F26)."""
     paths = _ci_ruff_paths(_read(CI_WORKFLOW))
     for required in REQUIRED_LINT_PATHS:
         assert required in paths, (
@@ -267,6 +274,25 @@ def test_repo_tests_tree_passes_its_own_ruff_gate():
     )
     assert result.returncode == 0, (
         "the committed tests/ tree fails its own ruff gate:\n"
+        f"{result.stdout}\n{result.stderr}"
+    )
+
+
+def test_repo_scripts_tree_passes_its_own_ruff_gate():
+    """The committed scripts/ tree must pass `ruff check scripts` — the tree F26
+    added. It is not inert: `action_summary.py` runs inside the shipped GitHub
+    Action and `benchmark_scan.py` is imported by the perf tripwire."""
+    argv = _ruff_argv()
+    if argv is None:
+        pytest.skip("ruff not installed; gate mechanism is exercised in CI")
+    result = subprocess.run(
+        argv + ["check", "scripts"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        "the committed scripts/ tree fails its own ruff gate:\n"
         f"{result.stdout}\n{result.stderr}"
     )
 

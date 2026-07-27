@@ -102,6 +102,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The lint gate now covers every tracked Python file: `ruff check src tests` →
+  `ruff check src tests scripts`.** `scripts/` was the last tree outside the gate, and
+  it is not inert tooling: `action_summary.py` runs **inside the shipped GitHub Action**
+  to produce the findings count, and `benchmark_scan.py`'s corpus generator is imported
+  by the perf tripwire — a break there is a break in shipped CI surface, not a local
+  convenience script. Folding it in surfaced one drifted violation, `E401`
+  (multiple-imports-on-one-line) at `scripts/run_all_scans.py:7`, which is **fixed**
+  rather than ignored; `E401` now joins `E741`/`E702` in the set asserted absent from the
+  deferred ignore list, so it can't be silenced back into drift. With this, `git ls-files
+  '*.py'` returns nothing outside the gated trees and `ruff check .` over the whole repo
+  is clean. No new anti-drift machinery was needed — the contract tests parse the gate's
+  paths back out of `ci.yml` and re-run ruff over exactly them, so declaring the tree in
+  the workflow is what puts it under verification. Verified fail-first: a planted
+  `import sys, os` in `scripts/` makes `ruff check src tests scripts` exit 1 and fails
+  both the new scripts-tree test and the exact-CI-invocation test; removed, all 14 pass.
+  1 new test; suite **2822 passed / 1 skipped** (was 2821), mypy clean, coverage 35.21%
+  over the 28% floor, self-scan 0 HIGH+.
+
 - **The lint gate now covers the test tree: `ruff check src` → `ruff check src tests`.**
   CI's build-blocking lint step only ever linted `src`, so the suite that pins every
   detection claim in the project was never checked by anything. It had drifted: folding
