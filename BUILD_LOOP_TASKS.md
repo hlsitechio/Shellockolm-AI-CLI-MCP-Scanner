@@ -2281,7 +2281,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   longer globs `*.js` and actually calls the walk + `blind_reason`). Full suite
   **3177 passed / 1 skipped** (was 3117), `ruff check src tests scripts` clean,
   `mypy` clean, coverage **43.46%** over the 28% floor, CI self-scan gate
-  (`scan -s agent --fail-on high .`) exit 0. _(commit )_
+  (`scan -s agent --fail-on high .`) exit 0. _(commit 13731dc)_
 
 ## Open follow-ups (surfaced by the F33 phase-5 coverage pass, not yet worked)
 
