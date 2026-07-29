@@ -145,6 +145,7 @@ py-modules = [
     "sandbox_snapshot",
     "sandbox_check",
     "sandbox_codescan",
+    "sandbox_deps",
 ]
 
 [tool.setuptools.packages.find]

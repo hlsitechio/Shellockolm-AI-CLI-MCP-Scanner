@@ -27,6 +27,7 @@ SRC_MODULES = [
     "sandbox_snapshot",
     "sandbox_check",
     "sandbox_codescan",
+    "sandbox_deps",
     "scan",
     "scan_simple",
     "auto_fix",

@@ -2285,16 +2285,68 @@ each is a separate rule family with its own calibration burden. Ranked by severi
 
 ## Open follow-ups (surfaced by the F33 phase-5 coverage pass, not yet worked)
 
-- F34. [ ] **A nested dependency's lifecycle hooks are never analyzed** — phase 1
-  runs `analyze_install_scripts` on the *target* package's `scripts` block as
+- F34. [x] **A nested dependency's lifecycle hooks are never analyzed** — phase 1
+  ran `analyze_install_scripts` on the *target* package's `scripts` block as
   returned by `npm view`, and phase 5 deliberately does not treat `package.json`
-  as scannable code. Nothing therefore looks at the `preinstall` / `install` /
-  `postinstall` / `prepare` hooks of the **transitive** packages npm just
-  installed — which all ran during phase 3, and which is where a compromised
-  indirect dependency actually lands. Closing it means walking
-  `node_modules/**/package.json` after the install and running the existing
-  structured `analyze_install_scripts` over each, reported per package (the
-  free-text malware table is the wrong tool for a manifest).
+  as scannable code. Nothing therefore looked at the `preinstall` / `install` /
+  `postinstall` hooks of the **transitive** packages npm just installed — which
+  all ran during phase 3, and which is where a compromised indirect dependency
+  actually lands. A user was shown "✓ No install scripts" for the package they
+  named while a dependency four levels down ran `curl … | sh` on their machine.
+  New `src/sandbox_deps.py` (filesystem-touching but console-free and
+  unit-testable, mirroring `sandbox_codescan`/`sandbox_snapshot`; the hook table
+  and danger classification stay in the pure `sandbox_check`) walks the
+  installed tree and runs the **existing structured `analyze_install_scripts`**
+  over every installed manifest, reported per package and named in the finding
+  (`🚨 dependency <name>@<version>: postinstall script: …`, so it can never read
+  as if the *target* declared it). Wired as **PHASE 5b** over the whole
+  `<sandbox>/node_modules` root — the target's own directory holds none of its
+  dependencies — and the target is excluded ONLY when phase 1 actually analyzed
+  it (`metadata_scripts_analyzed`), so a blind metadata phase does not also lose
+  the target's on-disk hooks. Two calibrations carry the precision:
+  **(A) what npm actually installed** — `is_installed_package_manifest` accepts
+  a directory chain of `<name>` / `@scope/<name>` optionally repeated through a
+  nested `node_modules`, and the same predicate gates the descent, so the walk
+  never reads a package's source tree and a `package.json` in a package's own
+  test fixtures or examples (whose hooks npm never runs) is never reported;
+  `.bin`/`.cache`/`.pnpm` and a bare `node_modules` chain are structurally
+  rejected, and already-visited real paths are tracked so a linked/junctioned
+  `node_modules` cannot cycle. **(B) `prepare` is not an auto-run hook** —
+  npm runs it for the root project, for a git-URL dependency and before
+  `npm publish`, never for a registry tarball; it is surfaced as a declared
+  hook but marked "not run for a registry install" and can never contribute a
+  danger. Measured over **44,980 real installed packages across 102
+  `node_modules` trees** (0 unreadable / 0 unparseable / 0 directory errors):
+  3,472 packages declare a lifecycle hook but only **238 actually run one**, and
+  the pass emits **exactly one danger line — a true positive** (`faiss-node`'s
+  `install` hook, `prebuild-install || (git clone https://github.com/… && npm i
+  cmake-js && npm run build)`). Before calibration (B) it emitted two; the
+  second was `remix-island`'s `prepare` (`rm -rf dist && npm run build`), a
+  build cleanup that never runs on a consumer's machine. Coverage follows the
+  F29 rule: an unreadable manifest, an unparseable one or an unlistable
+  directory marks the phase blind (`INCONCLUSIVE`) rather than printing a pass,
+  while a run where every manifest was *excluded* is correctly NOT blind (a
+  target with no dependencies is a clean result, not an unseen one). Verified
+  end-to-end by replaying phase 5b's exact call shape over a real
+  `npm install nodemon` tree: 28 packages found, target excluded, 27 scanned,
+  zero read errors, the 4 real `prepare` hooks correctly reported as not run and
+  **zero dangers**; planting a malicious transitive dependency into the same
+  tree produced 3 package-qualified danger lines. 66 new tests
+  (`tests/test_sandbox_deps.py`: the fail-first proof that the phase-5 walk
+  reads **zero** of the dependency manifests, the pure predicate over every
+  accepted and rejected shape, the fixture-manifest anti-FP, walk units incl.
+  scope/nested ordering + `.bin` skipping + unlistable directories + cycle
+  safety, detection through every auto-run hook, a benign baseline over the 7
+  shapes real install hooks actually have, both `prepare` calibration pins with
+  their detection-preserving counterpart, target-exclusion incl. the
+  excluded-only-is-not-blind case, every coverage/blind axis, the reporting
+  helpers, and mechanism guards that `cli.py` calls the pass over the whole
+  installed root and can mark itself blind). Full suite **3243 passed /
+  2 skipped** (was 3177/1; the added skip is the directory-symlink cycle test,
+  which Windows withholds the privilege for — a deterministic realpath-collapse
+  test covers the same guard), `ruff check src tests scripts` clean, `mypy`
+  clean, coverage **44.08%** over the 28% floor (`sandbox_deps.py` at 96.79%),
+  CI self-scan gate (`scan -s agent --fail-on high .`) exit 0. _(commit PENDING)_
 
 - F35. [ ] **The corroboration rule still condemns six mainstream packages** —
   independent of F33 (they score identically before and after the widening),
@@ -2309,6 +2361,34 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   got: something that distinguishes "downloads and then executes" from "is a
   build tool". Until then a user who sandbox-checks `vite` is told not to
   install it.
+
+## Open follow-ups (surfaced by the F34 dependency-hook pass, not yet worked)
+
+- F36. [ ] **A git-sourced dependency's `prepare` hook DID run, and phase 5b says
+  it did not** — F34 excludes `prepare` from the auto-run set because npm does
+  not run it for a registry tarball, which is right for the overwhelming
+  majority and removes the only measured false positive. But npm *does* run
+  `prepare` for a dependency given as a **git URL** (it builds it from source),
+  and the pass has no way to tell the two apart: it reads only the installed
+  manifest, which records nothing about where the package came from. A malicious
+  `prepare` in a git dependency therefore executes and is then reported as "not
+  run for a registry install" — the one shape this calibration is blind to.
+  Closing it means reading the sandbox's `package-lock.json`, whose per-package
+  `resolved` field records `git+ssh://` / `git+https://` for exactly these, and
+  promoting `prepare` to auto-run for those packages only.
+
+- F37. [ ] **The install-hook danger table is flat, so "prints a URL" scores like
+  "pipes curl to sh"** — `INSTALL_SCRIPT_DANGER_PATTERNS` is a substring list
+  with no severity tiers, and every hit is a full DANGER. That was tolerable
+  when it ran against one package the user had explicitly named; F34 now applies
+  it across a whole dependency tree. The single true positive it produced over
+  44,980 packages illustrates the imprecision: `faiss-node` is reported as
+  "External URL (https://)" — the weakest pattern in the table — when the actual
+  finding is that its `install` hook clones a GitHub repo and builds it, and a
+  hook whose body merely *echoes* a documentation URL would score identically.
+  Worth tiering (download-and-execute / encoded payload / reverse shell as
+  DANGER; a bare URL or `exec` substring as a WARNING) before the pass is
+  extended any further.
 
 ---
 

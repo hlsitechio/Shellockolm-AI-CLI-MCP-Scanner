@@ -4714,6 +4714,10 @@ def interactive_shell():
                         describe_scanned_extensions,
                         scan_installed_package_code,
                     )
+                    from sandbox_deps import (
+                        format_hooked_package_line,
+                        scan_installed_dependency_scripts,
+                    )
 
                     # The menu accepts "name or URL"; normalize before anything
                     # is handed to npm (a registry URL never resolved before).
@@ -4727,6 +4731,10 @@ def interactive_shell():
                     # Single accumulator: dangers/warnings/info plus the blind
                     # phases that downgrade a finding-free run to INCONCLUSIVE.
                     findings = SandboxFindings()
+                    # Whether phase 1 actually read the target's own hooks. The
+                    # dependency pass skips the target only when it did — if the
+                    # metadata fetch was blind, nothing else has looked at it.
+                    metadata_scripts_analyzed = False
 
                     def note_snapshot_errors(label: str, snap) -> None:
                         """Surface an incomplete snapshot and mark the phase blind.
@@ -4794,6 +4802,7 @@ def interactive_shell():
                                 # Check for install scripts in metadata
                                 script_report = analyze_install_scripts(pkg_data.get('scripts', {}))
                                 findings.extend(dangers=script_report.dangers)
+                                metadata_scripts_analyzed = True
 
                                 if script_report.has_hooks:
                                     console.print(f"  [bright_yellow]⚠️ Has install scripts:[/bright_yellow] {', '.join(script_report.hooks)}")
@@ -4957,6 +4966,60 @@ def interactive_shell():
                                 f"node_modules/{installed_package_dirname(pkg_name)} not found "
                                 f"- the package code was NOT analyzed",
                             )
+
+                        # PHASE 5b: Lifecycle hooks of every INSTALLED dependency.
+                        # Phase 1 only reads the target's own `scripts` block, so
+                        # the hooks of the transitive packages npm just installed
+                        # - which all executed during phase 3, and which is where
+                        # a compromised indirect dependency lands - had nobody
+                        # looking at them.
+                        console.print(f"[bright_cyan]━━━ PHASE 5b: Dependency Lifecycle Hooks ━━━[/bright_cyan]")
+
+                        installed_root = Path(sandbox_dir) / "node_modules"
+                        # Skip the target only if phase 1 actually analyzed it;
+                        # a blind metadata phase means this is its only coverage.
+                        exclude = (
+                            frozenset({installed_package_dirname(pkg_name)})
+                            if metadata_scripts_analyzed
+                            else frozenset()
+                        )
+                        dep_report = scan_installed_dependency_scripts(
+                            installed_root, exclude_dirs=exclude
+                        )
+
+                        console.print(
+                            f"  [dim]Analyzed {dep_report.packages_scanned} installed "
+                            f"dependency manifest(s)[/dim]"
+                        )
+                        for rel_path, read_err in dep_report.unreadable_examples:
+                            console.print(f"  [dim]Unreadable: {rel_path} ({read_err})[/dim]")
+                        if dep_report.manifests_unreadable:
+                            console.print(f"  [warning]⚠️ {dep_report.manifests_unreadable} dependency manifest(s) could not be read - NOT analyzed[/warning]")
+                        if dep_report.manifests_invalid:
+                            console.print(f"  [warning]⚠️ {dep_report.manifests_invalid} dependency manifest(s) could not be parsed - NOT analyzed[/warning]")
+                        if dep_report.dir_errors:
+                            console.print(f"  [warning]⚠️ {dep_report.dir_errors} directory(s) could not be listed - NOT analyzed[/warning]")
+
+                        if dep_report.with_hooks:
+                            console.print(
+                                f"  [bright_yellow]⚠️ {dep_report.executed_count} dependency(s) "
+                                f"ran code during this install[/bright_yellow]"
+                            )
+                            for entry in dep_report.with_hooks[:10]:
+                                console.print(f"    [dim]{format_hooked_package_line(entry)}[/dim]")
+                            if len(dep_report.with_hooks) > 10:
+                                console.print(f"    [dim]... and {len(dep_report.with_hooks) - 10} more[/dim]")
+                            findings.extend(dangers=dep_report.dangers)
+
+                        # A pass that could not read the manifests never reports
+                        # a clean dependency tree.
+                        dep_blind_reason = dep_report.blind_reason()
+                        if dep_blind_reason:
+                            findings.mark_blind("Dependency hooks", dep_blind_reason)
+                            console.print(f"  [warning]⚠️ No dependency-hook conclusion can be drawn - {dep_blind_reason}[/warning]")
+                        elif not dep_report.dangers:
+                            console.print(f"  [bright_green]✓ No dangerous dependency install hooks[/bright_green]")
+                            findings.add_info("No dangerous dependency install hooks")
 
                         # PHASE 6: Check for known CVEs
                         console.print(f"[bright_cyan]━━━ PHASE 6: CVE Database Check ━━━[/bright_cyan]")

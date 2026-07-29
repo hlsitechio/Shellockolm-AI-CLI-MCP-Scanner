@@ -11,6 +11,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`sandbox <pkg>` never looked at a single dependency's install hooks.**
+  Phase 1 ran the install-script analysis over the **target** package's
+  `scripts` block only, as returned by `npm view`, and phase 5 deliberately
+  treats `package.json` as data rather than scannable source. Nothing therefore
+  inspected the `preinstall` / `install` / `postinstall` hooks of the
+  **transitive** packages npm had just installed — every one of which already
+  executed during phase 3, and which is exactly where a compromised indirect
+  dependency lands. A user was shown "✓ No install scripts" for the package they
+  named while a dependency four levels down ran `curl … | sh` on their machine.
+  A new phase 5b walks the installed tree and runs the same structured
+  `analyze_install_scripts` over every installed manifest, reported per package
+  and named in the finding (`dependency <name>@<version>: postinstall script:
+  …`). Two things keep it precise: a manifest counts only when its directory
+  chain is what npm actually installs (`<name>` / `@scope/<name>`, optionally
+  repeated through a nested `node_modules`), so a `package.json` in a package's
+  own test fixtures — whose hooks npm never runs — is never reported; and
+  `prepare` is excluded from the executed set, because npm does not run it for a
+  registry-tarball dependency. Measured over **44,980 real installed packages**
+  across 102 `node_modules` trees, the pass produces **one danger line, and it
+  is a true positive** (`faiss-node`'s `install` hook clones and builds from
+  GitHub); the `prepare` calibration is what removes the only false positive
+  (`remix-island`'s `rm -rf dist && npm run build`, which never runs on a
+  consumer's machine). Coverage is reported the same way phase 5 reports its
+  own: an unreadable manifest, an unparseable one, or a directory that could not
+  be listed marks the phase blind (`INCONCLUSIVE`) instead of printing a pass.
+
 - **`sandbox <pkg>` phase 5 read only `*.js`, so a payload in any other
   extension was invisible — and reading nothing was reported as a pass.** The
   deep-code-analysis walk was `node_modules/<pkg>.rglob("*.js")`. A package
