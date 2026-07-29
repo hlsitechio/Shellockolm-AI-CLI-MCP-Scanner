@@ -2346,7 +2346,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   which Windows withholds the privilege for — a deterministic realpath-collapse
   test covers the same guard), `ruff check src tests scripts` clean, `mypy`
   clean, coverage **44.08%** over the 28% floor (`sandbox_deps.py` at 96.79%),
-  CI self-scan gate (`scan -s agent --fail-on high .`) exit 0. _(commit PENDING)_
+  CI self-scan gate (`scan -s agent --fail-on high .`) exit 0. _(commit a240118)_
 
 - F35. [ ] **The corroboration rule still condemns six mainstream packages** —
   independent of F33 (they score identically before and after the widening),
