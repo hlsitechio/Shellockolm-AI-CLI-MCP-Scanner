@@ -2230,16 +2230,85 @@ each is a separate rule family with its own calibration burden. Ranked by severi
 
 ## Open follow-ups (surfaced by the F31 pattern-calibration pass, not yet worked)
 
-- F33. [ ] **Phase 5 only reads `*.js`, so a payload in any other extension is
-  invisible** — the deep-code-analysis walk is `node_modules/<pkg>.rglob("*.js")`.
-  A package whose entry point is `.cjs` / `.mjs` (increasingly the default for
-  ESM-only packages), or that ships `.ts`, `.json` or a `bin/` script with no
-  extension, gets **zero** files scanned by the malware pass — and unlike an
-  unreadable file, that is not counted or marked blind, so "✓ No obvious malware
-  patterns" is printed over a phase that read nothing. Closing it means widening the
-  glob to the executable-source extensions, and treating "the package directory
-  exists but no scannable file was found" as a blind phase (`mark_blind`) rather
-  than a pass — the rule F29 established everywhere else in this command.
+- F33. [x] **Phase 5 only read `*.js`, so a payload in any other extension was
+  invisible** — the deep-code-analysis walk was
+  `node_modules/<pkg>.rglob("*.js")`, so a package whose entry point is `.cjs` /
+  `.mjs`, or that ships TypeScript source, an extension-less `bin/` script or an
+  `install.sh` / `install.ps1` invoked from a lifecycle hook, had **zero** files
+  read by the malware pass — and unlike an unreadable file, that was not counted
+  or marked blind, so "✓ No obvious malware patterns" plus a clean-code `info`
+  finding was printed over a phase that read no bytes. Selection and the walk now
+  live in `src/sandbox_codescan.py` (the pattern table and classification stay in
+  the pure `sandbox_check`): `is_scannable_code_path` matches by **extension and
+  path segment**, covering the JS family (`.js/.cjs/.mjs/.jsx`), TypeScript
+  (`.ts/.cts/.mts/.tsx`), hook-invokable scripts
+  (`.sh/.bash/.zsh/.ps1/.psm1/.bat/.cmd/.py`) and extension-less files under
+  `bin/` — never by substring, so `binaries/tool` is not mistaken for a `bin/`
+  executable and `notes.js.txt` is not mistaken for code. `.json` is deliberately
+  **excluded**: it is data, and since every package ships a `package.json`,
+  counting it would mean no package could ever report "nothing scannable" and
+  the coverage check below would be dead code (a nested package's lifecycle
+  hooks want the structured `analyze_install_scripts` pass instead — F34).
+  `DeepCodeScanReport` then reports its own coverage: nothing scanned, an
+  unreadable file, or a directory that could not be listed each yield a
+  `blind_reason()` the CLI feeds to `mark_blind`, so the verdict is
+  `INCONCLUSIVE` rather than a pass — the F29 rule, applied to the case F29
+  itself missed. **Measured over 995 publishable installed packages** (private
+  app checkouts excluded — `sandbox` can only ever scan what npm published):
+  57 (5.7%) had zero files read by the old glob, of which **39 are now scanned**
+  and the remaining **18 are correctly reported blind** instead of clean;
+  **16,410 more files** read overall (`.ts` 11,289 · `.mjs` 1,896 · `.mts` 1,252
+  · `.cjs` 871 · `.cts` 818 · `.tsx` 109 · `.py` 79 · 42 extension-less `bin/`
+  · `.ps1` 21 · `.cmd` 20 · `.sh` 8 · `.bat` 5). Reading `.mjs` builds exposed
+  two corroboration signals that turned an ordinary capability into a **DO NOT
+  INSTALL** on mainstream packages; both were fixed at the source of the
+  imprecision rather than by deleting a detection: the hex-blob pattern now
+  requires **printable-ASCII** escapes (obfuscated text like
+  `\x63\x75\x72\x6c` = `curl` still matches; the binary CMap/glyph runs in
+  `pdfjs-dist`, `pdf-parse` and `sass` no longer do — F31's "hex has no benign
+  twin" held only for its 480-package corpus), and `screen capture` left
+  `CONTEXT_DESCRIPTIONS` because "spawns a process and mentions screenshots" is
+  puppeteer/playwright, not spyware. With both in place the widening is
+  **danger-neutral: 15 dangers over 6 packages before and after, delta 0, zero
+  newly-condemned packages** on the same corpus. 60 new tests
+  (`tests/test_sandbox_codescan.py`: selection units per extension + segment
+  anchoring + dotfile/case handling, the fail-first proof that the old glob
+  selects **zero** of four payload-bearing files, detection through the widened
+  set, blind-vs-partial-vs-clean coverage reporting incl. unreadable files, the
+  example cap and an unlistable directory, the benign baseline, the
+  binary-is-not-obfuscation and visual-testing anti-FP pins with their
+  detection-preserving counterparts, and a mechanism guard that `cli.py` no
+  longer globs `*.js` and actually calls the walk + `blind_reason`). Full suite
+  **3177 passed / 1 skipped** (was 3117), `ruff check src tests scripts` clean,
+  `mypy` clean, coverage **43.46%** over the 28% floor, CI self-scan gate
+  (`scan -s agent --fail-on high .`) exit 0. _(commit )_
+
+## Open follow-ups (surfaced by the F33 phase-5 coverage pass, not yet worked)
+
+- F34. [ ] **A nested dependency's lifecycle hooks are never analyzed** — phase 1
+  runs `analyze_install_scripts` on the *target* package's `scripts` block as
+  returned by `npm view`, and phase 5 deliberately does not treat `package.json`
+  as scannable code. Nothing therefore looks at the `preinstall` / `install` /
+  `postinstall` / `prepare` hooks of the **transitive** packages npm just
+  installed — which all ran during phase 3, and which is where a compromised
+  indirect dependency actually lands. Closing it means walking
+  `node_modules/**/package.json` after the install and running the existing
+  structured `analyze_install_scripts` over each, reported per package (the
+  free-text malware table is the wrong tool for a manifest).
+
+- F35. [ ] **The corroboration rule still condemns six mainstream packages** —
+  independent of F33 (they score identically before and after the widening),
+  `vite`, `esbuild`, `supabase-js`, `app-builder-lib` and two `@agent-tars`
+  packages are reported **DO NOT INSTALL** on a real corpus of 995 publishable
+  installed packages, i.e. 15 dangers that are all false. Every one is a
+  capability (`child_process` / `exec` / `spawn` / `Function` / `eval`)
+  co-located with `HTTP client` or `HTTPS client` in one file — which is simply
+  what a bundler, a dev server or a desktop-app builder does. F31 measured that
+  pairing at zero over 480 packages; the wider corpus falsifies it, so the
+  `HTTP(S) client` context signal needs the same treatment the hex blob just
+  got: something that distinguishes "downloads and then executes" from "is a
+  build tool". Until then a user who sandbox-checks `vite` is told not to
+  install it.
 
 ---
 

@@ -4708,8 +4708,11 @@ def interactive_shell():
                         filter_suspicious_new_files,
                         installed_package_dirname,
                         normalize_package_spec,
-                        scan_text_for_malware_patterns,
                         typosquat_matches,
+                    )
+                    from sandbox_codescan import (
+                        describe_scanned_extensions,
+                        scan_installed_package_code,
                     )
 
                     # The menu accepts "name or URL"; normalize before anything
@@ -4897,37 +4900,38 @@ def interactive_shell():
                         node_modules = Path(sandbox_dir) / "node_modules" / installed_package_dirname(pkg_name)
 
                         if node_modules.exists():
-                            # Scan for malicious patterns in installed code
+                            # Scan for malicious patterns in installed code.
+                            # The walk reads every EXECUTABLE SOURCE file, not
+                            # just `*.js`: a `.cjs`/`.mjs` entry point, shipped
+                            # TypeScript, an extension-less `bin/` script or an
+                            # `install.sh` used to be invisible to this phase.
                             console.print(f"[info]🔍 Scanning installed code for malware patterns...[/info]")
 
-                            files_scanned = 0
-                            files_unreadable = 0
-                            malware_hits = []
+                            code_report = scan_installed_package_code(node_modules)
+                            malware_hits = code_report.hits
 
-                            for js_file in node_modules.rglob("*.js"):
-                                try:
-                                    content = js_file.read_text(errors='ignore')
-                                except OSError as read_err:
-                                    # An unreadable file is NOT a scanned file:
-                                    # counting it would inflate the coverage
-                                    # number behind a "no malware" claim.
-                                    files_unreadable += 1
-                                    if files_unreadable <= 3:
-                                        console.print(f"  [dim]Unreadable: {js_file.name} ({read_err})[/dim]")
-                                    continue
-                                files_scanned += 1
-                                rel_path = str(js_file.relative_to(node_modules))
-                                for desc in scan_text_for_malware_patterns(content):
-                                    malware_hits.append((rel_path, desc))
+                            for rel_path, read_err in code_report.unreadable_examples:
+                                console.print(f"  [dim]Unreadable: {rel_path} ({read_err})[/dim]")
 
-                            console.print(f"  [dim]Scanned {files_scanned} JavaScript files[/dim]")
-                            if files_unreadable:
-                                console.print(f"  [warning]⚠️ {files_unreadable} JavaScript file(s) could not be read - NOT scanned[/warning]")
-                                findings.mark_blind(
-                                    "Code analysis",
-                                    f"{files_unreadable} installed file(s) unreadable - "
-                                    f"code analysis is partial",
-                                )
+                            console.print(
+                                f"  [dim]Scanned {code_report.files_scanned} source file(s)"
+                                f" ({describe_scanned_extensions(code_report.scanned_by_extension)})[/dim]"
+                            )
+                            if code_report.files_unreadable:
+                                console.print(f"  [warning]⚠️ {code_report.files_unreadable} source file(s) could not be read - NOT scanned[/warning]")
+                            if code_report.dir_errors:
+                                console.print(f"  [warning]⚠️ {code_report.dir_errors} directory(s) could not be listed - NOT scanned[/warning]")
+                            if not code_report.scanned_anything:
+                                console.print(f"  [warning]⚠️ No scannable source file found - code analysis read nothing[/warning]")
+
+                            # A phase that could not see the code never passes:
+                            # nothing scanned, an unreadable file or an unlistable
+                            # directory all downgrade the run to INCONCLUSIVE.
+                            blind_reason = code_report.blind_reason(
+                                installed_package_dirname(pkg_name)
+                            )
+                            if blind_reason:
+                                findings.mark_blind("Code analysis", blind_reason)
 
                             # Group and report malware hits
                             if malware_hits:
@@ -4936,7 +4940,9 @@ def interactive_shell():
                                     dangers=malware_report.dangers,
                                     warnings=malware_report.warnings,
                                 )
-                            elif files_unreadable:
+                            elif not code_report.scanned_anything:
+                                console.print(f"  [warning]⚠️ No malware conclusion can be drawn - nothing was scanned[/warning]")
+                            elif blind_reason:
                                 console.print(f"  [warning]⚠️ No malware patterns in the files that could be read (partial)[/warning]")
                             else:
                                 console.print(f"  [bright_green]✓ No obvious malware patterns[/bright_green]")

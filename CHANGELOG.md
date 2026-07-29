@@ -11,6 +11,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`sandbox <pkg>` phase 5 read only `*.js`, so a payload in any other
+  extension was invisible — and reading nothing was reported as a pass.** The
+  deep-code-analysis walk was `node_modules/<pkg>.rglob("*.js")`. A package
+  whose entry point is `.cjs` / `.mjs` (increasingly the default for ESM-only
+  packages), or that ships TypeScript source, an extension-less `bin/` script,
+  or an `install.sh` / `install.ps1` invoked from a lifecycle hook, had **zero**
+  files read by the malware pass. Unlike an unreadable file, that was not
+  counted or marked blind: the run printed "✓ No obvious malware patterns" and
+  recorded a clean-code finding over a phase that had not looked at a single
+  byte, so the package could reach "APPEARS SAFE TO DOWNLOAD" on it. Selection
+  now covers every executable-source extension plus extension-less files under
+  `bin/`, matched by **path segment and extension** rather than substring, and
+  the phase reports its own coverage: nothing scanned, an unreadable file or an
+  unlistable directory each mark it blind (`INCONCLUSIVE`), never a pass — the
+  rule the rest of the command already followed. Measured over **995
+  publishable installed packages**: 57 of them (5.7%) had zero files read by the
+  old glob; 39 are now scanned and the remaining 18 (native-binary packages) are
+  correctly reported blind instead of clean, with 16,410 more files read
+  overall.
+
+- **A PDF renderer's font tables are not obfuscation.** Reading `.mjs` builds
+  exposed two corroboration signals that promoted an ordinary capability to a
+  **DO NOT INSTALL** verdict on mainstream packages. The hex-blob pattern
+  matched any run of `\xNN` escapes, so the binary CMap/glyph tables in
+  `pdfjs-dist` and `pdf-parse`'s workers — and in `sass`'s dist — read as
+  obfuscation; it now requires escapes in the **printable-ASCII** range, because
+  writing readable text as `\x63\x75\x72\x6c` ("curl") has no purpose except to
+  hide it, while arbitrary bytes are just embedded data. And `screen capture` no
+  longer corroborates: "spawns a process and mentions screenshots" is the shape
+  of puppeteer, playwright and every visual-testing tool, not of spyware. Both
+  remain warning-level detections, the obfuscated-command shape they were meant
+  to catch still reports as a danger, and the widened file selection above
+  introduces **zero** new dangers across the 995-package corpus.
+
 - **The yarn dependency tree is now a tree.** `parse_yarn_lock` read only each
   lockfile block's `version` / `resolved` / `integrity` and never opened its
   `dependencies:` sub-block, so **no node ever got a child**: every installed

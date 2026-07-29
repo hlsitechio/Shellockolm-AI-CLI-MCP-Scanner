@@ -392,8 +392,14 @@ MALWARE_PATTERN_TABLE: Tuple[MalwarePattern, ...] = (
         r"Buffer\.from\([^)]+,\s*['\"]base64['\"]", "base64 decoding"
     ),
     MalwarePattern(r"\batob\s*\(", "base64 decoding (atob)"),
+    # Only escapes in the PRINTABLE ASCII range (\x20-\x7f) count. Writing
+    # readable text as `\x63\x75\x72\x6c` ("curl") has no purpose except to hide
+    # it from a reader, whereas an arbitrary-byte run is embedded binary data:
+    # pdf-parse's PDF worker and sass's dist both carry a long `\xNN` run of
+    # font/CMap bytes, and the unrestricted pattern made them corroborating
+    # evidence of obfuscation (F33).
     MalwarePattern(
-        r"(?:\\x[0-9a-fA-F]{2}){%d,}" % ENCODED_RUN_LENGTH,
+        r"(?:\\x[2-7][0-9a-fA-F]){%d,}" % ENCODED_RUN_LENGTH,
         "hex-encoded string blob (possible obfuscation)",
     ),
     MalwarePattern(
@@ -502,15 +508,29 @@ CAPABILITY_DESCRIPTIONS: frozenset = frozenset(
 #:   socket; the reverse-shell shape it was meant to catch is covered by
 #:   ``shell process spawned`` and ``shell backdoor``;
 #: * ``unicode-encoded string blob`` — json5, terser and @vue all embed Unicode
-#:   identifier range tables as long ``\\uXXXX`` runs. The hex form has no such
-#:   benign twin and stays.
+#:   identifier range tables as long ``\\uXXXX`` runs. The hex form stays in the
+#:   set, but F33 narrowed the *pattern* to printable-ASCII escapes so embedded
+#:   binary (a PDF worker's font tables, sass's dist) is no longer read as
+#:   obfuscation — F31's claim that hex "has no benign twin" held only for its
+#:   480-package corpus.
+#:
+#: One further exclusion came from F33, which widened the phase's file selection
+#: past ``*.js`` and so read a much larger slice of real installed code.
+#: Re-measured over **995 publishable installed packages** (vs F31's 480):
+#:
+#: * ``screen capture`` — pairs with ``child_process`` in every package that
+#:   renders or visually tests something; ``pdf-parse``'s own CLI test spawns a
+#:   process and talks about screenshots, and puppeteer / playwright /
+#:   jest-image-snapshot are that same shape. "Spawns a process and mentions
+#:   screenshots" describes a testing tool, not spyware. It remains a
+#:   warning-level pattern; only its power to promote a capability to a danger
+#:   is removed.
 CONTEXT_DESCRIPTIONS: frozenset = frozenset(
     {
         "HTTP client",
         "HTTPS client",
         "hex-encoded string blob (possible obfuscation)",
         "cryptocurrency references",
-        "screen capture",
         "shell process spawned",
     }
 )

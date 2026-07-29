@@ -26,6 +26,7 @@ SRC_MODULES = [
     "mcp_config_locations",
     "sandbox_snapshot",
     "sandbox_check",
+    "sandbox_codescan",
     "scan",
     "scan_simple",
     "auto_fix",
