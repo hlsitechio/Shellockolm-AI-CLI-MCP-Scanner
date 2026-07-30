@@ -2348,19 +2348,53 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   clean, coverage **44.08%** over the 28% floor (`sandbox_deps.py` at 96.79%),
   CI self-scan gate (`scan -s agent --fail-on high .`) exit 0. _(commit a240118)_
 
-- F35. [ ] **The corroboration rule still condemns six mainstream packages** —
-  independent of F33 (they score identically before and after the widening),
-  `vite`, `esbuild`, `supabase-js`, `app-builder-lib` and two `@agent-tars`
-  packages are reported **DO NOT INSTALL** on a real corpus of 995 publishable
-  installed packages, i.e. 15 dangers that are all false. Every one is a
-  capability (`child_process` / `exec` / `spawn` / `Function` / `eval`)
-  co-located with `HTTP client` or `HTTPS client` in one file — which is simply
-  what a bundler, a dev server or a desktop-app builder does. F31 measured that
-  pairing at zero over 480 packages; the wider corpus falsifies it, so the
-  `HTTP(S) client` context signal needs the same treatment the hex blob just
-  got: something that distinguishes "downloads and then executes" from "is a
-  build tool". Until then a user who sandbox-checks `vite` is told not to
-  install it.
+- F35. [x] **The corroboration rule still condemns six mainstream packages** —
+  the `HTTP(S) client` context signal matched `require('http')` /
+  `require('https')`: an **import**, which says nothing about what the file does
+  with it. Re-measured over a rebuilt corpus of **736 publishable installed
+  packages** it escalated **17 capabilities across 5 packages, all false** —
+  `vite`'s two hits are inside a JSDoc example (`* var connect =
+  require('connect'), http = require('http')`), all three `@agent-tars` hits are
+  webpack's bundled map of node builtins (`http: function(module) {
+  module.exports = require("http") }`), and `esbuild`'s is a real import used to
+  download its own platform binary from the npm registry. The task asked for the
+  treatment the hex blob got (narrow the pattern); the measurement says no
+  narrowing of an *import* can work, because "downloads and then executes" and
+  "is a build tool" are the same code at the import. Both signals were therefore
+  demoted to warnings — still reported, never a verdict — and replaced by two
+  patterns that state the shape directly: a network call and an execution sink
+  within `NETWORK_EXEC_WINDOW` (240) characters of each other, **in either
+  order**, since fetch-then-run is a dropper and run-then-send is exfiltration.
+  Precision is anchored where the shapes actually collide: the command sink is
+  deliberately NOT the capability table's broad `(?:\.|\b)exec\s*\(`, because
+  the nearest benign shape to a dropper is `RE.exec(await response.text())`, so
+  plain `exec` matches only on a child_process-shaped receiver or destructured
+  at the head of a statement, and that variant is additionally gated on a
+  child_process binding (the dynamic-code variant is ungated —
+  `fetch(...).then(eval)` runs no OS command). Over the same 736 packages the
+  new patterns match **zero** files while catching every dropper/exfil fixture
+  including the two the removed signal used to carry, and false DO-NOT-INSTALL
+  verdicts fall from **7 packages / 20 danger lines to 3 / 8**. **Correction to
+  this task's premise:** the residue is not this rule and `vite` is *not*
+  cleared — its file also matches `shell process spawned` (a
+  `powershell -NoProfile -Command` call), which is a different signal, now F38;
+  the third package is a `@types/node` keylogger false positive, now F39.
+  `supabase-js` produced no danger at all on the current version. Perf: the
+  first, precision-equivalent formulation cost **+139%** wall clock, because a
+  lookbehind *inside an alternation* defeats CPython's prefix-charset
+  optimisation (0.42s → 2.62s for the network pattern alone over 19 MB of real
+  bundles); reformulated without lookbehinds — the ambiguous names (`fetch`,
+  `request`) must instead be handed something URL-shaped, a semantic guard
+  rather than a syntactic one — it is **+7%** (133.9s → 143.8s over the corpus),
+  and the one shape that gives up (a global `fetch(x)` with an opaque argument)
+  is pinned by its own test rather than left implicit. Three tests asserted the
+  old behaviour and now assert the new; new coverage pins both wiring
+  directions, the window bound, the gate, every network-call form, the
+  RegExp-exec anti-FP under a tight window, and five corpus-derived benign
+  shapes (vite's JSDoc, webpack's module map, esbuild's installer, a dev server,
+  a cache `.fetch`). Full suite **3274 passed / 2 skipped** (was 3265/2), `ruff`
+  and `mypy` clean, coverage **44.11%** over the 28% floor (`sandbox_check.py`
+  at 99.13%), CI self-scan gate exit 0. _(commit cbc139a)_
 
 ## Open follow-ups (surfaced by the F34 dependency-hook pass, not yet worked)
 
@@ -2389,6 +2423,43 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   Worth tiering (download-and-execute / encoded payload / reverse shell as
   DANGER; a bare URL or `exec` substring as a WARNING) before the pass is
   extended any further.
+
+## Open follow-ups (surfaced by the F35 corroboration pass, not yet worked)
+
+- F38. [ ] **`shell process spawned` calls `powershell -NoProfile -Command` an
+  attack** — this is why `vite` is still DO NOT INSTALL after F35, and it is the
+  larger of the two remaining false-danger classes: the pattern is
+  *always*-dangerous (a verdict on its own, no corroboration needed) AND a
+  context signal, so its one hit in `vite`'s dep chunk both condemns the package
+  and escalates all five of its capabilities — 6 of the 8 remaining false danger
+  lines over the 736-package corpus come from this single match. F31 introduced
+  it as "spawning a raw shell binary, as opposed to spawning `git` or `node`"
+  and measured it at zero over 480 packages; the wider corpus finds two, and
+  both are ordinary Windows support code: `vite` runs
+  `execSync('powershell -NoProfile -Command "[Console]::OutputEncoding=…"')` and
+  `app-builder-lib` runs `exec("powershell.exe", ["-NoProfile",
+  "-NonInteractive", "-Command", "Get-Command pwsh.exe"])`. Invoking an
+  interpreter to *query the OS* is what every cross-platform tool does on
+  Windows. The attacker shapes the pattern must keep are narrower and both are
+  already fixtures: a shell spawned with **no command** and wired to a socket
+  (`spawn('/bin/sh', [])` — the reverse shell), and a shell command line
+  carrying a **downloader or an encoded payload** (`cmd.exe /c curl … && a.exe`,
+  `-enc`, `DownloadString`). Their union catches both fixtures and clears both
+  real packages — measure it before trusting that. Note the split roles: even if
+  it stays always-dangerous, removing it from `CONTEXT_DESCRIPTIONS` alone would
+  drop 5 of the 6 vite lines.
+
+- F39. [ ] **`@types/node` is reported as a keylogger** — the third package in
+  the post-F35 residue, and the cheapest of the three. `keylogger indicators`
+  fires twice on a package that contains **no runtime code at all**: `.d.ts`
+  files are (correctly) scanned as `.ts` by the F33 selection, and node's own
+  type declarations describe keypress handling in prose. Worth deciding between
+  two fixes rather than guessing: treat `.d.ts` as declarations rather than
+  executable source (they cannot run — but the extension is also a place to hide
+  nothing, so this is close to free), or require the keylogger pattern to
+  co-occur with a capability the way the other prose patterns now do. Measure
+  which one holds over the corpus; a type-declaration package reaching DO NOT
+  INSTALL is the most obviously wrong verdict the phase currently produces.
 
 ---
 
