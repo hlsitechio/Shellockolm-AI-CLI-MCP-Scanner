@@ -351,6 +351,64 @@ _CO_OCCURRENCE_GATES: Dict[str, Any] = {
     ),
 }
 
+#: How far apart a network call and an execution sink may sit and still count as
+#: *wired together* (F35). Sized to span a request call and its response
+#: callback body — the dropper's whole shape — without reaching across the
+#: unrelated statements of a minified bundle. Measured at zero hits over 736
+#: real installed packages; the same window at 120 catches the same droppers, so
+#: 240 is the loose end of a range that is empty of benign code either way.
+NETWORK_EXEC_WINDOW = 240
+
+#: An outbound network call.
+#:
+#: ``cache.fetch(key)`` and ``store.request(id)`` are ordinary method calls, and
+#: counting them as network I/O is the same imprecision F35 exists to remove. The
+#: obvious guard — a ``(?<![.\w$])`` lookbehind — turned out to cost 6x: a
+#: lookbehind *inside an alternation* defeats CPython's prefix-charset
+#: optimisation, so the branch is tried at every offset instead of skipping to
+#: the next candidate character (measured over 19 MB of real bundles:
+#: 0.42s -> 2.62s for this pattern alone). The guard is therefore semantic
+#: rather than syntactic: the ambiguous names must be handed something
+#: URL-shaped. ``https.get`` / ``axios`` / ``XMLHttpRequest`` name the transport
+#: outright and need no such restriction, so the node-native dropper forms stay
+#: fully covered; the narrowing costs only a global ``fetch(x)`` whose argument
+#: is an opaque local name.
+_NETWORK_CALL = (
+    r"(?:\bhttps?\.(?:get|request)\s*\("
+    r"|\bfetch\s*\(\s*(?:['\"`]https?://"
+    r"|[\w.]*(?:url|Url|URL|uri|Uri|URI|endpoint|Endpoint|host|Host)\b)"
+    r"|\baxios\s*(?:\.\s*(?:get|post|put|patch|delete)\s*)?\("
+    r"|\brequest\s*\(\s*['\"`]https?://"
+    r"|\bnew\s+XMLHttpRequest\b)"
+)
+
+#: Building and running code from a string.
+_DYNAMIC_CODE_SINK = r"(?:\beval\s*\(|\bnew\s+Function\s*\(|\bFunction\s*\(\s*['\"`])"
+
+#: Running an OS command. Deliberately NOT the capability table's broad
+#: ``(?:\.|\b)exec\s*\(``: the one benign shape that sits closest to a dropper is
+#: ``RE.exec(await response.text())`` — parsing a fetched string with a regular
+#: expression, which is ordinary code and lands well inside the window. So the
+#: exec-family names a ``RegExp`` never has (``execSync``, ``execFile``,
+#: ``spawn``…) match anywhere, while plain ``exec`` matches only in the two forms
+#: a command runner takes: on a child_process-shaped receiver (``cp.exec(cmd)``)
+#: or destructured at the head of a statement (``; exec(cmd)``, ``=> exec(cmd)``).
+_COMMAND_EXEC_SINK = (
+    r"(?:\b(?:execSync|execFile|execFileSync|spawn|spawnSync)\s*\("
+    r"|\b(?:child_process|childProcess|child|cp|proc|subprocess)\s*\.\s*exec\s*\("
+    r"|[;{}>]\s*exec\s*\()"
+)
+
+
+def _wired_within(first: str, second: str) -> str:
+    """Regex matching ``first`` and ``second`` within :data:`NETWORK_EXEC_WINDOW`.
+
+    Both orders match, because both are attacker shapes and only the direction
+    differs: fetch-then-execute is a dropper, execute-then-send is exfiltration.
+    """
+    gap = r"[\s\S]{0,%d}?" % NETWORK_EXEC_WINDOW
+    return f"(?:{first}{gap}{second})|(?:{second}{gap}{first})"
+
 #: The calibrated pattern table applied to each installed ``.js`` file.
 #:
 #: Calibration rules (build-loop follow-up F31), each pinned by a test over real
@@ -456,6 +514,23 @@ MALWARE_PATTERN_TABLE: Tuple[MalwarePattern, ...] = (
         "decoded payload executed (base64 -> eval/exec)",
         ignore_case=False,
     ),
+    # F35: what `require('https')` was *meant* to stand for, stated directly.
+    # A network call and an execution sink close enough together to be one
+    # operation is the dropper (fetch, then run what came back) and the
+    # exfiltrator (run, then send the output out). A build tool does both
+    # things — that is why the import alone condemned vite and esbuild — but it
+    # does not wire them to each other.
+    MalwarePattern(
+        _wired_within(_NETWORK_CALL, _DYNAMIC_CODE_SINK),
+        "network I/O wired to dynamic code execution",
+        ignore_case=False,
+    ),
+    MalwarePattern(
+        _wired_within(_NETWORK_CALL, _COMMAND_EXEC_SINK),
+        "network I/O wired to command execution",
+        ignore_case=False,
+        requires="child_process",
+    ),
 )
 
 #: Backwards-compatible ``(regex, description)`` view of the table.
@@ -473,6 +548,8 @@ ALWAYS_DANGEROUS_DESCRIPTIONS: frozenset = frozenset(
         "shell process spawned",
         "download piped to shell",
         "decoded payload executed (base64 -> eval/exec)",
+        "network I/O wired to dynamic code execution",
+        "network I/O wired to command execution",
     }
 )
 
@@ -525,13 +602,30 @@ CAPABILITY_DESCRIPTIONS: frozenset = frozenset(
 #:   screenshots" describes a testing tool, not spyware. It remains a
 #:   warning-level pattern; only its power to promote a capability to a danger
 #:   is removed.
+#:
+#: F35 then removed the two signals the set was built around. ``HTTP client`` and
+#: ``HTTPS client`` match ``require('http')`` / ``require('https')`` — an
+#: **import**, which says nothing about what the file does with it. Re-measured
+#: over 736 installed packages they escalated 17 capabilities across 5 packages
+#: and every one was false: ``vite``'s two hits are inside a JSDoc comment
+#: (``* var connect = require('connect'), http = require('http')``), all three
+#: ``@agent-tars`` hits are webpack's bundled module map (``http: function
+#: (module) { module.exports = require("http") }``), and ``esbuild``'s is a real
+#: import used to download its own platform binary from the npm registry. F31
+#: measured this pairing at zero over 480 packages; the wider corpus falsifies
+#: that, and narrowing an *import* pattern cannot separate "downloads and then
+#: executes" from "is a build tool" — at the import the two are the same code.
+#: The shape the set actually wanted is now stated directly by the two
+#: ``network I/O wired to …`` patterns, which require the network call and the
+#: execution sink to be within :data:`NETWORK_EXEC_WINDOW` of each other. Both
+#: import patterns remain in the table, as warnings.
 CONTEXT_DESCRIPTIONS: frozenset = frozenset(
     {
-        "HTTP client",
-        "HTTPS client",
         "hex-encoded string blob (possible obfuscation)",
         "cryptocurrency references",
         "shell process spawned",
+        "network I/O wired to dynamic code execution",
+        "network I/O wired to command execution",
     }
 )
 

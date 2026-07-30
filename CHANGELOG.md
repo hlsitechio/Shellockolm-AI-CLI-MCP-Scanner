@@ -11,6 +11,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`sandbox <pkg>` told you not to install esbuild, because it imports
+  `https`.** The malware pass promotes a *capability* (running a subprocess,
+  building a function at runtime) to a DANGER when the same file also carries an
+  "attacker context" signal, and two of those signals were `require('http')` and
+  `require('https')` — an **import**, which says nothing about what the file
+  does with it. Re-measured over **736 real installed packages**, that pairing
+  escalated **17 capabilities across 5 packages and every one was false**:
+  `vite`'s two hits are inside a JSDoc example (`* var connect =
+  require('connect'), http = require('http')`), all three `@agent-tars` hits are
+  webpack's bundled map of node builtins (`http: function(module) {
+  module.exports = require("http") }`), and `esbuild`'s is a real import used to
+  download its own platform binary from the npm registry. No narrowing of an
+  import pattern can separate "downloads and then executes" from "is a build
+  tool" — at the import they are the same code — so both signals were demoted to
+  warnings and replaced by two patterns that state the shape directly: a network
+  call and an execution sink **within 240 characters of each other**, in either
+  order (fetch-then-run is a dropper, run-then-send is exfiltration). The new
+  patterns match **zero** files across the same 736 packages while catching
+  every dropper and exfil fixture, including the two the removed signal used to
+  carry. False DO-NOT-INSTALL verdicts over the corpus drop from 7 packages / 20
+  danger lines to 3 / 8. The deep-code pass costs 7% more wall clock for it
+  (133.9s → 143.8s over the corpus); a first, precision-equivalent formulation
+  cost 139% more, because a lookbehind inside an alternation defeats CPython's
+  prefix-charset optimisation.
+
 - **`sandbox <pkg>` never looked at a single dependency's install hooks.**
   Phase 1 ran the install-script analysis over the **target** package's
   `scripts` block only, as returned by `npm view`, and phase 5 deliberately
