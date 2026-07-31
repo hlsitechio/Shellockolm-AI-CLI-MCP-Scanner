@@ -2746,7 +2746,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   ruff + mypy clean on the new module. Honest scope, stated in the module
   docstring: this does **not** watch the network (F49), and the
   stage-inside-your-own-package route is measured and deliberately uncovered
-  (F48). _(commit PENDING)_
+  (F48). _(commit bcf3551)_
 
 - F47. [ ] **A dependency wiping a *sibling* package is filtered out as npm's
   own pruning** — `filter_unexpected_deletions` drops everything under
