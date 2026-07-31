@@ -25,6 +25,17 @@ The precision of the pass rests on two calibrations, both pinned here:
   hook, whose ``rm -rf dist && npm run build`` never runs on a consumer's
   machine. Excluding ``prepare`` from the executed set leaves **one danger over
   44,980 packages, and it is real**.
+
+F36 closes the one shape that calibration was blind to: npm *does* run
+``prepare`` for a dependency given as a **git URL**, because it builds it from
+source. Verified against the real npm (11.9.0) rather than assumed — installing
+a local git package whose ``prepare`` writes a marker file produced that marker,
+while the same install left the hook untouched from a registry tarball. The
+lockfile is the only thing that can tell the two apart, so the sandbox install
+must stop suppressing it: ``--no-save`` writes no ``package-lock.json`` at all,
+which is why :func:`test_cli_install_lets_npm_write_the_lockfile` guards the
+argv. Both provenance shapes below are the real ones npm emitted —
+``git+file://…#<sha>`` and ``https://registry.npmjs.org/…``.
 """
 
 import ast
@@ -37,12 +48,18 @@ import sandbox_deps
 from sandbox_codescan import scan_installed_package_code
 from sandbox_deps import (
     AUTO_RUN_DEPENDENCY_HOOKS,
+    GIT_SOURCE_HOOK,
+    LOCKFILE_NAME,
+    MAX_LOCKFILE_DEPTH,
     MAX_UNREADABLE_EXAMPLES,
     DependencyScriptReport,
+    InstallSourceIndex,
     InstalledPackageScripts,
     collect_installed_manifests,
     format_hooked_package_line,
     is_installed_package_manifest,
+    load_install_source_index,
+    lockfile_key_to_package_dir,
     qualify_dependency_danger,
     scan_installed_dependency_scripts,
 )
@@ -62,6 +79,18 @@ BENIGN_HOOKS = (
 )
 
 
+#: What npm 11.9.0 actually wrote to `resolved` for a git dependency, copied from
+#: the real lockfile the F36 verification install produced.
+GIT_RESOLVED = (
+    "git+file://C:/Users/x/AppData/Local/Temp/f36probe/gitdep"
+    "#56598265a92c16e6c0617ff1fa24aa2581062dd7"
+)
+
+#: The same field for a registry tarball — the shape that must never be read as
+#: a git checkout, or F34's calibration is undone.
+REGISTRY_RESOLVED = "https://registry.npmjs.org/lodash/-/lodash-4.18.1.tgz"
+
+
 def install_package(root: Path, package_dir: str, scripts=None, **extra) -> Path:
     """Write an installed package manifest under a ``node_modules`` root."""
     directory = root / package_dir
@@ -71,6 +100,30 @@ def install_package(root: Path, package_dir: str, scripts=None, **extra) -> Path
         manifest["scripts"] = scripts
     (directory / "package.json").write_text(json.dumps(manifest), encoding="utf-8")
     return directory
+
+
+def write_lockfile(project_root: Path, body: dict) -> Path:
+    """Write a ``package-lock.json`` at the sandbox project root."""
+    project_root.mkdir(parents=True, exist_ok=True)
+    lockfile = project_root / LOCKFILE_NAME
+    lockfile.write_text(json.dumps(body), encoding="utf-8")
+    return lockfile
+
+
+def v3_lockfile(entries: dict) -> dict:
+    """A ``lockfileVersion`` 3 document, keyed the way npm keys one.
+
+    ``entries`` maps an installed directory (``lodash``, ``a/node_modules/b``) to
+    its ``resolved`` value; the empty root entry npm always writes is included so
+    the fixture exercises the "not an installed package" rejection too.
+    """
+    packages = {"": {"name": "shellockolm-sandbox", "version": "1.0.0"}}
+    for package_dir, resolved in entries.items():
+        packages[f"node_modules/{package_dir}"] = {
+            "version": "1.0.0",
+            "resolved": resolved,
+        }
+    return {"name": "shellockolm-sandbox", "lockfileVersion": 3, "packages": packages}
 
 
 # ---------------------------------------------------------------------------
@@ -382,6 +435,414 @@ def test_prepare_is_not_in_the_auto_run_set():
 
 
 # ---------------------------------------------------------------------------
+# F36 — where each package came from decides whether `prepare` ran
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "key,expected",
+    [
+        ("node_modules/lodash", "lodash"),
+        ("node_modules/@babel/core", "@babel/core"),
+        ("node_modules/a/node_modules/b", "a/node_modules/b"),
+        ("node_modules/@a/b/node_modules/@c/d", "@a/b/node_modules/@c/d"),
+        (r"node_modules\lodash", "lodash"),
+    ],
+)
+def test_lockfile_keys_map_to_installed_directories(key, expected):
+    assert lockfile_key_to_package_dir(key) == expected
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "",  # the root project entry npm always writes
+        "packages/app",  # a workspace, not an installed package
+        "node_modules",
+        "node_modules/",
+        "node_modules/.bin",
+        "lodash",  # a bare name is not a lockfile key
+    ],
+)
+def test_non_package_lockfile_keys_are_rejected(key):
+    """The lockfile side and the filesystem side must agree on what a package is."""
+    assert lockfile_key_to_package_dir(key) is None
+
+
+def test_v3_lockfile_indexes_a_git_sourced_package(tmp_path):
+    write_lockfile(tmp_path, v3_lockfile({"gitdep": GIT_RESOLVED}))
+
+    index = load_install_source_index(tmp_path)
+
+    assert index.is_authoritative
+    assert index.git_sourced == frozenset({"gitdep"})
+
+
+def test_registry_entries_are_never_read_as_git(tmp_path):
+    """The F34 calibration survives: a tarball is not a checkout."""
+    write_lockfile(
+        tmp_path, v3_lockfile({"lodash": REGISTRY_RESOLVED, "left-pad": REGISTRY_RESOLVED})
+    )
+
+    index = load_install_source_index(tmp_path)
+
+    assert index.is_authoritative
+    assert index.git_sourced == frozenset()
+
+
+@pytest.mark.parametrize(
+    "resolved",
+    [
+        "git+ssh://git@github.com/owner/repo.git#0123456789abcdef",
+        "git+https://github.com/owner/repo.git#0123456789abcdef",
+        "git://github.com/owner/repo.git",
+        GIT_RESOLVED,
+    ],
+)
+def test_every_git_url_form_npm_normalizes_to_is_recognized(tmp_path, resolved):
+    write_lockfile(tmp_path, v3_lockfile({"dep": resolved}))
+
+    assert load_install_source_index(tmp_path).git_sourced == frozenset({"dep"})
+
+
+def test_v1_lockfile_tree_is_walked(tmp_path):
+    """114 of the 559 lockfiles measured are still v1, so this path is not legacy."""
+    write_lockfile(
+        tmp_path,
+        {
+            "lockfileVersion": 1,
+            "dependencies": {
+                "top": {
+                    "version": REGISTRY_RESOLVED,
+                    "dependencies": {"nested": {"version": GIT_RESOLVED}},
+                },
+                "gitdep": {"from": GIT_RESOLVED, "resolved": GIT_RESOLVED},
+            },
+        },
+    )
+
+    index = load_install_source_index(tmp_path)
+
+    assert index.is_authoritative
+    assert index.git_sourced == frozenset({"gitdep", "top/node_modules/nested"})
+
+
+def test_v2_prefers_the_flat_packages_map(tmp_path):
+    """v2 carries both layouts; the map is the one npm keeps accurate."""
+    body = v3_lockfile({"dep": REGISTRY_RESOLVED})
+    body["lockfileVersion"] = 2
+    body["dependencies"] = {"dep": {"version": GIT_RESOLVED}}
+
+    write_lockfile(tmp_path, body)
+
+    assert load_install_source_index(tmp_path).git_sourced == frozenset()
+
+
+def test_deeply_nested_v1_tree_is_bounded(tmp_path):
+    """A lockfile is untrusted input; nesting must not make the walk unbounded."""
+    innermost = {"version": GIT_RESOLVED}
+    node = innermost
+    for _ in range(MAX_LOCKFILE_DEPTH + 20):
+        node = {"pkg": {"version": REGISTRY_RESOLVED, "dependencies": node}}
+    write_lockfile(tmp_path, {"lockfileVersion": 1, "dependencies": node})
+
+    index = load_install_source_index(tmp_path)
+
+    # Completes rather than recursing forever, and stays authoritative.
+    assert index.is_authoritative
+
+
+def test_missing_lockfile_is_unavailable_not_empty(tmp_path):
+    """"No git dependencies" and "unknown" are different answers."""
+    index = load_install_source_index(tmp_path)
+
+    assert index.is_authoritative is False
+    assert index.unavailable_reason
+    assert index.git_sourced == frozenset()
+
+
+def test_unreadable_lockfile_is_unavailable(tmp_path, monkeypatch):
+    write_lockfile(tmp_path, v3_lockfile({"dep": GIT_RESOLVED}))
+
+    def exploding_read(path):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(sandbox_deps, "read_lockfile", exploding_read)
+    index = load_install_source_index(tmp_path)
+
+    assert index.is_authoritative is False
+    assert "denied" in index.unavailable_reason
+
+
+def test_unparseable_lockfile_is_unavailable(tmp_path):
+    (tmp_path / LOCKFILE_NAME).write_text("{not json", encoding="utf-8")
+
+    index = load_install_source_index(tmp_path)
+
+    assert index.is_authoritative is False
+    assert "could not be parsed" in index.unavailable_reason
+
+
+def test_non_object_lockfile_is_unavailable(tmp_path):
+    (tmp_path / LOCKFILE_NAME).write_text('["a", "list"]', encoding="utf-8")
+
+    index = load_install_source_index(tmp_path)
+
+    assert index.is_authoritative is False
+    assert "not an object" in index.unavailable_reason
+
+
+def test_auto_run_hooks_adds_prepare_only_for_a_git_sourced_package():
+    index = InstallSourceIndex(git_sourced=frozenset({"gitdep"}))
+
+    assert index.auto_run_hooks("gitdep") == AUTO_RUN_DEPENDENCY_HOOKS + (GIT_SOURCE_HOOK,)
+    assert index.auto_run_hooks("lodash") == AUTO_RUN_DEPENDENCY_HOOKS
+
+
+# --- the fix, end to end ---------------------------------------------------
+
+
+def test_git_sourced_prepare_hook_is_reported_as_executed(tmp_path):
+    """The F36 bug: this hook RAN on the user's machine and was reported as not run.
+
+    Verified against the real npm before it was written: installing a local git
+    package whose ``prepare`` writes a marker file produced that marker.
+    """
+    node_modules = tmp_path / "node_modules"
+    install_package(node_modules, "gitdep", scripts={"prepare": MALICIOUS_HOOK})
+    write_lockfile(tmp_path, v3_lockfile({"gitdep": GIT_RESOLVED}))
+
+    report = scan_installed_dependency_scripts(
+        node_modules, install_sources=load_install_source_index(tmp_path)
+    )
+
+    entry = report.with_hooks[0]
+    assert entry.git_sourced is True
+    assert entry.auto_run_hooks == [GIT_SOURCE_HOOK]
+    assert entry.executed is True
+    assert report.dangers
+    assert all("dependency gitdep@1.0.0" in danger for danger in report.dangers)
+    assert report.git_sourced_count == 1
+    assert report.blind_reason() is None
+
+
+def test_the_same_package_from_the_registry_is_still_not_a_danger(tmp_path):
+    """The zero-false-positive baseline: only the provenance differs from above."""
+    node_modules = tmp_path / "node_modules"
+    install_package(node_modules, "gitdep", scripts={"prepare": MALICIOUS_HOOK})
+    write_lockfile(tmp_path, v3_lockfile({"gitdep": REGISTRY_RESOLVED}))
+
+    report = scan_installed_dependency_scripts(
+        node_modules, install_sources=load_install_source_index(tmp_path)
+    )
+
+    entry = report.with_hooks[0]
+    assert entry.git_sourced is False
+    assert entry.auto_run_hooks == []
+    assert entry.executed is False
+    assert report.dangers == []
+    assert report.blind_reason() is None
+
+
+@pytest.mark.parametrize("body", ["tsc -p .", "husky", "npm run build", "node-gyp rebuild"])
+def test_a_git_sourced_benign_prepare_is_not_a_danger(tmp_path, body):
+    """Promoting the hook must not turn every built-from-source package into a finding.
+
+    The ordinary ``prepare`` body is a build step, and a build step executing is
+    not a finding — only the danger table's contents are.
+    """
+    node_modules = tmp_path / "node_modules"
+    install_package(node_modules, "gitdep", scripts={"prepare": body})
+    write_lockfile(tmp_path, v3_lockfile({"gitdep": GIT_RESOLVED}))
+
+    report = scan_installed_dependency_scripts(
+        node_modules, install_sources=load_install_source_index(tmp_path)
+    )
+
+    assert report.dangers == []
+    assert report.with_hooks[0].git_sourced is True
+    assert report.with_hooks[0].executed is True
+
+
+def test_the_f34_calibration_case_inverts_when_the_package_is_git_sourced(tmp_path):
+    """``remix-island``'s ``rm -rf dist && npm run build``, read both ways.
+
+    F34 measured this exact hook as the pass's only false positive and excluded
+    ``prepare`` to remove it — correct for the registry tarball it was installed
+    from, where the script never ran. Installed from a git URL the same script
+    genuinely deletes a directory on the user's machine, so the same body is a
+    finding. That inversion IS F36: the hook body never decided this, the
+    provenance did.
+
+    (The line it produces, "Destructive file operation (rm -rf)", is the flat
+    danger table F37 proposes to tier; F36 only decides whether it is consulted.)
+    """
+    hook = {"prepare": "rm -rf dist && npm run build"}
+
+    registry_root = tmp_path / "registry"
+    install_package(registry_root / "node_modules", "remix-island", scripts=hook)
+    write_lockfile(registry_root, v3_lockfile({"remix-island": REGISTRY_RESOLVED}))
+    registry = scan_installed_dependency_scripts(
+        registry_root / "node_modules",
+        install_sources=load_install_source_index(registry_root),
+    )
+
+    git_root = tmp_path / "git"
+    install_package(git_root / "node_modules", "remix-island", scripts=hook)
+    write_lockfile(git_root, v3_lockfile({"remix-island": GIT_RESOLVED}))
+    from_git = scan_installed_dependency_scripts(
+        git_root / "node_modules",
+        install_sources=load_install_source_index(git_root),
+    )
+
+    assert registry.dangers == []
+    assert from_git.dangers
+    assert all("rm -rf" in danger for danger in from_git.dangers)
+
+
+def test_git_provenance_applies_to_the_named_package_only(tmp_path):
+    """One git dependency must not promote `prepare` for the whole tree."""
+    node_modules = tmp_path / "node_modules"
+    install_package(node_modules, "gitdep", scripts={"prepare": MALICIOUS_HOOK})
+    install_package(node_modules, "tarball", scripts={"prepare": MALICIOUS_HOOK})
+    write_lockfile(
+        tmp_path,
+        v3_lockfile({"gitdep": GIT_RESOLVED, "tarball": REGISTRY_RESOLVED}),
+    )
+
+    report = scan_installed_dependency_scripts(
+        node_modules, install_sources=load_install_source_index(tmp_path)
+    )
+
+    assert report.dangers
+    assert all("dependency gitdep@1.0.0" in danger for danger in report.dangers)
+    assert not any("tarball" in danger for danger in report.dangers)
+    assert report.git_sourced_count == 1
+    assert report.executed_count == 1
+
+
+def test_a_nested_git_dependency_is_matched_by_its_installed_directory(tmp_path):
+    """The lockfile key and the walk key have to be the same string."""
+    node_modules = tmp_path / "node_modules"
+    install_package(node_modules, "top")
+    install_package(
+        node_modules, "top/node_modules/inner", scripts={"prepare": MALICIOUS_HOOK}
+    )
+    write_lockfile(tmp_path, v3_lockfile({"top/node_modules/inner": GIT_RESOLVED}))
+
+    report = scan_installed_dependency_scripts(
+        node_modules, install_sources=load_install_source_index(tmp_path)
+    )
+
+    assert report.dangers
+    assert report.with_hooks[0].git_sourced is True
+
+
+def test_a_git_sourced_postinstall_is_unchanged(tmp_path):
+    """Provenance only ever adds `prepare`; the registry hooks are unconditional."""
+    node_modules = tmp_path / "node_modules"
+    install_package(node_modules, "gitdep", scripts={"postinstall": MALICIOUS_HOOK})
+    write_lockfile(tmp_path, v3_lockfile({"gitdep": GIT_RESOLVED}))
+
+    report = scan_installed_dependency_scripts(
+        node_modules, install_sources=load_install_source_index(tmp_path)
+    )
+
+    assert report.with_hooks[0].auto_run_hooks == ["postinstall"]
+    assert report.dangers
+
+
+# --- the honest third state ------------------------------------------------
+
+
+def test_a_prepare_hook_with_no_lockfile_is_blind_not_a_pass(tmp_path):
+    """Unknown provenance cannot claim the hook did not run."""
+    node_modules = tmp_path / "node_modules"
+    install_package(node_modules, "maybe", scripts={"prepare": MALICIOUS_HOOK})
+
+    report = scan_installed_dependency_scripts(
+        node_modules, install_sources=load_install_source_index(tmp_path)
+    )
+
+    entry = report.with_hooks[0]
+    assert entry.source_unverified is True
+    assert entry.git_sourced is False
+    assert report.source_unverified_count == 1
+    reason = report.blind_reason()
+    assert reason is not None
+    assert GIT_SOURCE_HOOK in reason
+    assert "NOT determined" in reason
+
+
+def test_an_absent_lockfile_alone_does_not_make_the_pass_blind(tmp_path):
+    """Narrow by design: no `prepare` declared means nothing was at stake."""
+    node_modules = tmp_path / "node_modules"
+    install_package(node_modules, "ordinary", scripts={"postinstall": "node-gyp rebuild"})
+
+    report = scan_installed_dependency_scripts(
+        node_modules, install_sources=load_install_source_index(tmp_path)
+    )
+
+    assert report.source_unverified_count == 0
+    assert report.blind_reason() is None
+
+
+def test_omitting_the_index_entirely_is_treated_as_unknown(tmp_path):
+    """A caller that forgets the lockfile must not silently get "registry"."""
+    node_modules = tmp_path / "node_modules"
+    install_package(node_modules, "maybe", scripts={"prepare": MALICIOUS_HOOK})
+
+    report = scan_installed_dependency_scripts(node_modules)
+
+    assert report.with_hooks[0].source_unverified is True
+    assert report.blind_reason() is not None
+
+
+def test_an_authoritative_lockfile_leaves_a_registry_prepare_conclusive(tmp_path):
+    node_modules = tmp_path / "node_modules"
+    install_package(node_modules, "remix-island", scripts={"prepare": "rm -rf dist"})
+    write_lockfile(tmp_path, v3_lockfile({"remix-island": REGISTRY_RESOLVED}))
+
+    report = scan_installed_dependency_scripts(
+        node_modules, install_sources=load_install_source_index(tmp_path)
+    )
+
+    assert report.with_hooks[0].source_unverified is False
+    assert report.blind_reason() is None
+
+
+def test_console_line_marks_a_package_built_from_git():
+    entry = InstalledPackageScripts(
+        package_dir="gitdep",
+        name="gitdep",
+        version="1.0.0",
+        hooks=["prepare"],
+        auto_run_hooks=["prepare"],
+        git_sourced=True,
+    )
+
+    line = format_hooked_package_line(entry)
+
+    assert "built from a git checkout" in line
+    assert "not run" not in line
+
+
+def test_console_line_marks_an_unverified_install_source():
+    entry = InstalledPackageScripts(
+        package_dir="maybe",
+        name="maybe",
+        version="1.0.0",
+        hooks=["prepare"],
+        source_unverified=True,
+    )
+
+    line = format_hooked_package_line(entry)
+
+    assert "install source unverified" in line
+    assert "not run for a registry install" not in line
+
+
+# ---------------------------------------------------------------------------
 # Exclusion of the target package
 # ---------------------------------------------------------------------------
 
@@ -639,3 +1100,28 @@ def test_cli_excludes_the_target_only_when_phase_one_analyzed_it():
     assert "metadata_scripts_analyzed = False" in source
     assert "metadata_scripts_analyzed = True" in source
     assert "if metadata_scripts_analyzed" in source
+
+
+def test_cli_reads_the_lockfile_and_hands_it_to_the_pass():
+    """Provenance the CLI never loads leaves `prepare` exactly as unknowable."""
+    source = CLI_SOURCE.read_text(encoding="utf-8", errors="replace")
+
+    assert "load_install_source_index" in source
+    assert "load_install_source_index(Path(sandbox_dir))" in source
+    assert "install_sources=install_sources" in source
+
+
+def test_cli_install_lets_npm_write_the_lockfile():
+    """The regression guard for F36's data source.
+
+    ``npm install --no-save`` suppresses ``package-lock.json`` entirely — measured
+    against npm 11.9.0, the sandbox root held only ``package.json`` and
+    ``node_modules``. Re-adding the flag would not fail any behavioural test; it
+    would just silently return every ``prepare`` hook to "unknown", so the flag is
+    pinned here instead.
+    """
+    source = CLI_SOURCE.read_text(encoding="utf-8", errors="replace")
+
+    assert '["npm", "install", pkg_name, "--prefix", sandbox_dir]' in source
+    # Quoted, so the comment explaining the flag's absence does not satisfy it.
+    assert '"--no-save"' not in source

@@ -4716,6 +4716,7 @@ def interactive_shell():
                     )
                     from sandbox_deps import (
                         format_hooked_package_line,
+                        load_install_source_index,
                         scan_installed_dependency_scripts,
                     )
 
@@ -4844,8 +4845,17 @@ def interactive_shell():
                         install_env['HOME'] = sandbox_dir
                         install_env['NPM_CONFIG_CACHE'] = str(Path(sandbox_dir) / '.npm-cache')
 
+                        # NO `--no-save`: it also suppresses the lockfile, and the
+                        # lockfile is the ONLY record of where each package came
+                        # from (an installed manifest has no such field on npm 7+).
+                        # Without it phase 5b cannot tell a registry tarball from a
+                        # git checkout, so it cannot say whether a `prepare` hook
+                        # ran (F36). Saving costs nothing here — the package.json
+                        # is one we just wrote into a throwaway temp directory, and
+                        # `package-lock.json` is already an expected install
+                        # artifact for the phase-4 dropped-file check.
                         install_result = subprocess.run(
-                            ["npm", "install", pkg_name, "--no-save", "--prefix", sandbox_dir],
+                            ["npm", "install", pkg_name, "--prefix", sandbox_dir],
                             capture_output=True, text=True, cwd=sandbox_dir,
                             timeout=120, env=install_env
                         )
@@ -4983,14 +4993,27 @@ def interactive_shell():
                             if metadata_scripts_analyzed
                             else frozenset()
                         )
+                        # The lockfile is the only record of where each package
+                        # came from. npm runs `prepare` for a dependency it built
+                        # from a git checkout and not for a registry tarball, and
+                        # without this the former was reported as the latter.
+                        install_sources = load_install_source_index(Path(sandbox_dir))
                         dep_report = scan_installed_dependency_scripts(
-                            installed_root, exclude_dirs=exclude
+                            installed_root,
+                            exclude_dirs=exclude,
+                            install_sources=install_sources,
                         )
 
                         console.print(
                             f"  [dim]Analyzed {dep_report.packages_scanned} installed "
                             f"dependency manifest(s)[/dim]"
                         )
+                        if dep_report.git_sourced_count:
+                            console.print(
+                                f"  [bright_yellow]⚠️ {dep_report.git_sourced_count} "
+                                f"dependency(s) were built from a git checkout - npm "
+                                f"ran their `prepare` hook here[/bright_yellow]"
+                            )
                         for rel_path, read_err in dep_report.unreadable_examples:
                             console.print(f"  [dim]Unreadable: {rel_path} ({read_err})[/dim]")
                         if dep_report.manifests_unreadable:

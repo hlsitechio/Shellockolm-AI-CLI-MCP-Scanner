@@ -18,7 +18,7 @@ This module closes that: it walks the installed tree and runs the existing
 structured ``analyze_install_scripts`` over each installed manifest, reported
 per package.
 
-Two things make it precise rather than noisy:
+Three things make it precise rather than noisy:
 
 * :func:`is_installed_package_manifest` is the rule for what npm actually
   *installed*, expressed structurally: a manifest counts only when its directory
@@ -27,10 +27,17 @@ Two things make it precise rather than noisy:
   or examples is **not** an installed package and its hooks never run, so it is
   never reported. The same predicate gates the traversal, so the walk descends
   only where npm places packages instead of reading a whole source tree.
+* :func:`load_install_source_index` reads ``package-lock.json`` so the pass can
+  tell a **registry tarball** from a dependency npm **built from source**. npm
+  runs ``prepare`` for the latter and not the former, and the manifest alone
+  records nothing about where the package came from (build-loop follow-up F36).
+  Without the lockfile a malicious ``prepare`` in a git dependency executes and
+  is then reported as "not run for a registry install".
 * :meth:`DependencyScriptReport.blind_reason` applies the F29 rule — an
-  unreadable manifest, an unparseable one, or a directory that could not be
-  listed means the pass has no conclusion to offer, so the caller marks it blind
-  rather than printing a pass.
+  unreadable manifest, an unparseable one, a directory that could not be listed,
+  or a ``prepare`` hook whose install source could not be determined means the
+  pass has no conclusion to offer, so the caller marks it blind rather than
+  printing a pass.
 
 Filesystem-touching but console-free and unit-testable, mirroring
 :mod:`sandbox_codescan` and :mod:`sandbox_snapshot`; the hook table and the
@@ -49,6 +56,10 @@ from sandbox_check import analyze_install_scripts
 
 #: The manifest filename npm reads a package's lifecycle hooks from.
 MANIFEST_NAME = "package.json"
+
+#: The lockfile npm writes at the project root. It is the only record of *where*
+#: each installed package came from; the installed manifest has none.
+LOCKFILE_NAME = "package-lock.json"
 
 #: The directory name that separates one package from its nested dependencies.
 NESTED_MODULES_DIR = "node_modules"
@@ -72,7 +83,39 @@ DANGER_PREFIX = "🚨 "
 #: npm run build`` is the package's own build cleanup and never ran on any
 #: consumer's machine. A declared ``prepare`` is still surfaced, but as a
 #: conditional hook rather than as something that executed.
+#:
+#: The one shape that calibration was blind to is closed by
+#: :data:`GIT_SOURCE_HOOK` below.
 AUTO_RUN_DEPENDENCY_HOOKS: Tuple[str, ...] = ("preinstall", "install", "postinstall")
+
+#: The hook npm runs *in addition* for a dependency it had to build from source
+#: — i.e. one given as a git URL rather than fetched as a registry tarball
+#: (build-loop follow-up F36). For those packages ``prepare`` genuinely executed
+#: on the user's machine during phase 3, so excluding it unconditionally reported
+#: a hook that ran as one that did not.
+GIT_SOURCE_HOOK = "prepare"
+
+#: How npm records a git dependency's origin in ``package-lock.json``. Measured
+#: over **559 real lockfiles** on a development machine: 19 of them carry a git
+#: dependency, for 25 git-sourced entries in total, and every one is
+#: ``git+ssh://git@host/owner/repo.git#<sha>``. ``git+https://``, ``git+file://``
+#: (what a locally cloned dependency resolves to — the shape the F36 fixture
+#: installs) and the bare ``git://`` scheme are the other forms npm normalizes
+#: to, so the ``git+`` family and ``git://`` are all accepted. A registry
+#: tarball's ``resolved`` is an ``https://registry.npmjs.org/…`` URL and never
+#: matches, which is what keeps the F34 calibration intact.
+GIT_SOURCE_PREFIXES: Tuple[str, ...] = ("git+", "git://")
+
+#: Lockfile fields that can carry the origin. The same measurement found the git
+#: URL in ``resolved`` 20 times and in ``version`` 5 times — the latter is the
+#: ``lockfileVersion`` 1 layout, which is not a legacy curiosity: 114 of those
+#: 559 lockfiles are still v1 (280 v3, 165 v2), so both readers below earn their
+#: place. ``from`` is v1's third spelling of the same fact.
+GIT_SOURCE_FIELDS: Tuple[str, ...] = ("resolved", "version", "from")
+
+#: Bound on the v1 dependency tree walk. A lockfile is untrusted input; a
+#: pathologically nested one must not be able to make the walk unbounded.
+MAX_LOCKFILE_DEPTH = 64
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +292,172 @@ def read_manifest(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="ignore")
 
 
+def read_lockfile(path: Path) -> str:
+    """Read the project's ``package-lock.json``.
+
+    Separate from :func:`read_manifest` so a test can fail one without the other,
+    and so a lockfile failure is never miscounted as an unreadable manifest.
+    """
+    return path.read_text(encoding="utf-8", errors="ignore")
+
+
+# ---------------------------------------------------------------------------
+# Where each package came from (F36)
+# ---------------------------------------------------------------------------
+
+
+def _is_git_source(value: object) -> bool:
+    """Whether a lockfile origin field names a git checkout.
+
+    ``git+ssh://``, ``git+https://`` and ``git://`` are git; a registry
+    tarball's plain ``https://registry.npmjs.org/…`` URL is not.
+    """
+    return isinstance(value, str) and value.startswith(GIT_SOURCE_PREFIXES)
+
+
+def _entry_is_git_sourced(entry: object) -> bool:
+    """Whether one lockfile entry records a git origin in any known field."""
+    if not isinstance(entry, dict):
+        return False
+    return any(_is_git_source(entry.get(field)) for field in GIT_SOURCE_FIELDS)
+
+
+def lockfile_key_to_package_dir(key: str) -> Optional[str]:
+    """The installed package directory a ``lockfileVersion`` 2/3 key refers to.
+
+    Lockfile keys are paths from the project root, so they carry a leading
+    ``node_modules/`` that the walk's keys do not::
+
+        node_modules/lodash                        -> lodash
+        node_modules/a/node_modules/b              -> a/node_modules/b
+        node_modules/@scope/pkg                    -> @scope/pkg
+
+    Returns ``None`` for anything that is not an installed package: the root
+    project (``""``), a workspace directory (``packages/app``), or a malformed
+    chain. Reusing :func:`is_installed_package_manifest` here means the lockfile
+    side and the filesystem side agree on what a package is by construction,
+    rather than by two hand-written path rules that can drift apart.
+    """
+    normalized = (key or "").replace("\\", "/").strip("/")
+    prefix = f"{NESTED_MODULES_DIR}/"
+    if not normalized.startswith(prefix):
+        return None
+    package_dir = normalized[len(prefix) :]
+    if not is_installed_package_manifest(f"{package_dir}/{MANIFEST_NAME}"):
+        return None
+    return package_dir
+
+
+def _git_packages_from_v3(packages: object) -> List[str]:
+    """Git-sourced package directories from a ``lockfileVersion`` 2/3 map."""
+    found: List[str] = []
+    if not isinstance(packages, dict):
+        return found
+    for key, entry in packages.items():
+        if not isinstance(key, str) or not _entry_is_git_sourced(entry):
+            continue
+        package_dir = lockfile_key_to_package_dir(key)
+        if package_dir:
+            found.append(package_dir)
+    return found
+
+
+def _git_packages_from_v1(dependencies: object) -> List[str]:
+    """Git-sourced package directories from a ``lockfileVersion`` 1 tree.
+
+    Iterative rather than recursive: the lockfile is untrusted input and a deeply
+    nested ``dependencies`` chain must not be able to exhaust the stack.
+    """
+    found: List[str] = []
+    pending: List[Tuple[object, str, int]] = [(dependencies, "", 0)]
+
+    while pending:
+        node, prefix, depth = pending.pop()
+        if not isinstance(node, dict) or depth > MAX_LOCKFILE_DEPTH:
+            continue
+        for name, entry in node.items():
+            if not isinstance(name, str) or not isinstance(entry, dict):
+                continue
+            package_dir = f"{prefix}{name}"
+            if _entry_is_git_sourced(entry) and is_installed_package_manifest(
+                f"{package_dir}/{MANIFEST_NAME}"
+            ):
+                found.append(package_dir)
+            nested = entry.get("dependencies")
+            if isinstance(nested, dict):
+                pending.append(
+                    (nested, f"{package_dir}/{NESTED_MODULES_DIR}/", depth + 1)
+                )
+
+    return found
+
+
+@dataclass(frozen=True)
+class InstallSourceIndex:
+    """Which installed packages npm built from source, per the lockfile.
+
+    ``unavailable_reason`` is the honest third state: not "no git dependencies"
+    but "the lockfile could not answer". A pass holding one of those cannot claim
+    a declared ``prepare`` did not run, so the caller turns it into a blind
+    phase — see :meth:`DependencyScriptReport.blind_reason`.
+    """
+
+    git_sourced: FrozenSet[str] = frozenset()
+    unavailable_reason: Optional[str] = None
+
+    @property
+    def is_authoritative(self) -> bool:
+        """Whether this index can be used to rule a hook out as well as in."""
+        return self.unavailable_reason is None
+
+    def auto_run_hooks(self, package_dir: str) -> Tuple[str, ...]:
+        """The hooks npm ran for ``package_dir`` during the install.
+
+        A git-sourced package gets :data:`GIT_SOURCE_HOOK` on top of the registry
+        set, because npm builds it from source and therefore runs ``prepare``.
+        """
+        if package_dir in self.git_sourced:
+            return AUTO_RUN_DEPENDENCY_HOOKS + (GIT_SOURCE_HOOK,)
+        return AUTO_RUN_DEPENDENCY_HOOKS
+
+
+def load_install_source_index(project_root: Path) -> InstallSourceIndex:
+    """Read ``project_root/package-lock.json`` and index the git-sourced packages.
+
+    Handles both lockfile layouts npm has written: the flat ``packages`` map of
+    ``lockfileVersion`` 2/3, keyed by path from the project root, and the nested
+    ``dependencies`` tree of version 1. A lockfile that is missing, unreadable,
+    unparseable, or not an object yields an index with an
+    ``unavailable_reason`` rather than an empty one — the difference between "no
+    git dependencies" and "unknown".
+    """
+    path = project_root / LOCKFILE_NAME
+
+    try:
+        raw = read_lockfile(path)
+    except OSError as read_err:
+        return InstallSourceIndex(
+            unavailable_reason=f"{LOCKFILE_NAME} could not be read ({read_err})"
+        )
+
+    try:
+        data = json.loads(raw)
+    except (ValueError, RecursionError):
+        return InstallSourceIndex(
+            unavailable_reason=f"{LOCKFILE_NAME} could not be parsed"
+        )
+    if not isinstance(data, dict):
+        return InstallSourceIndex(unavailable_reason=f"{LOCKFILE_NAME} is not an object")
+
+    found = _git_packages_from_v3(data.get("packages"))
+    # v1 had no `packages` map at all; v2 carries both and the flat map is
+    # authoritative, so the tree is only consulted when the map is absent.
+    if not isinstance(data.get("packages"), dict):
+        found.extend(_git_packages_from_v1(data.get("dependencies")))
+
+    return InstallSourceIndex(git_sourced=frozenset(found))
+
+
 # ---------------------------------------------------------------------------
 # The report
 # ---------------------------------------------------------------------------
@@ -270,6 +479,13 @@ class InstalledPackageScripts:
     #: Package-qualified danger lines (see :func:`qualify_dependency_danger`).
     #: Only ever derived from :attr:`auto_run_hooks`.
     dangers: List[str] = field(default_factory=list)
+    #: Whether the lockfile records this package as built from a git checkout, in
+    #: which case npm also ran :data:`GIT_SOURCE_HOOK`.
+    git_sourced: bool = False
+    #: Whether this package declares :data:`GIT_SOURCE_HOOK` while the lockfile
+    #: could not say where it came from. The hook is neither reported as run nor
+    #: ruled out — it makes the phase blind instead.
+    source_unverified: bool = False
 
     @property
     def executed(self) -> bool:
@@ -310,6 +526,9 @@ class DependencyScriptReport:
     unreadable_examples: List[Tuple[str, str]] = field(default_factory=list)
     #: Every scanned package that declares a lifecycle hook, in walk order.
     with_hooks: List[InstalledPackageScripts] = field(default_factory=list)
+    #: Why the lockfile could not say where the packages came from, or ``None``
+    #: when it did (see :class:`InstallSourceIndex`).
+    source_unknown_reason: Optional[str] = None
 
     @property
     def scanned_anything(self) -> bool:
@@ -329,6 +548,16 @@ class DependencyScriptReport:
         hooks that merely exist in a manifest.
         """
         return sum(1 for entry in self.with_hooks if entry.executed)
+
+    @property
+    def git_sourced_count(self) -> int:
+        """Hook-declaring packages npm built from a git checkout."""
+        return sum(1 for entry in self.with_hooks if entry.git_sourced)
+
+    @property
+    def source_unverified_count(self) -> int:
+        """Packages whose ``prepare`` may or may not have run, unknowably."""
+        return sum(1 for entry in self.with_hooks if entry.source_unverified)
 
     @property
     def dangers(self) -> List[str]:
@@ -366,6 +595,18 @@ class DependencyScriptReport:
                 "no installed package manifest found under node_modules "
                 "- dependency lifecycle hooks were NOT analyzed"
             )
+
+        # Narrow by design: a lockfile the pass could not read only costs it the
+        # ability to rule a `prepare` hook in or out, so it is only blind when
+        # some package actually declares one. Reporting every scan as blind
+        # because a lockfile was absent would spend the verdict on nothing.
+        unverified = self.source_unverified_count
+        if unverified:
+            detail = self.source_unknown_reason or "the install source is unknown"
+            return (
+                f"{unverified} dependency(s) declare a `{GIT_SOURCE_HOOK}` hook and "
+                f"{detail} - whether npm ran it was NOT determined"
+            )
         return None
 
 
@@ -384,6 +625,7 @@ def qualify_dependency_danger(label: str, danger: str) -> str:
 def scan_installed_dependency_scripts(
     node_modules_root: Path,
     exclude_dirs: FrozenSet[str] = frozenset(),
+    install_sources: Optional[InstallSourceIndex] = None,
 ) -> DependencyScriptReport:
     """Analyse the lifecycle hooks of every package installed under ``node_modules``.
 
@@ -393,8 +635,17 @@ def scan_installed_dependency_scripts(
     registry metadata. An excluded package still counts toward
     ``packages_found``, so excluding the only installed package does not make the
     pass look blind.
+
+    ``install_sources`` says which packages npm built from source (F36). Omitting
+    it means the provenance is *unknown*, not registry: a declared ``prepare`` is
+    then neither reported as executed nor ruled out, and the pass marks itself
+    blind. Callers get the authoritative answer from
+    :func:`load_install_source_index`.
     """
-    report = DependencyScriptReport()
+    sources = install_sources or InstallSourceIndex(
+        unavailable_reason=f"no {LOCKFILE_NAME} was supplied to the pass"
+    )
+    report = DependencyScriptReport(source_unknown_reason=sources.unavailable_reason)
     manifests, report.dir_errors = collect_installed_manifests(node_modules_root)
     report.packages_found = len(manifests)
 
@@ -435,11 +686,12 @@ def scan_installed_dependency_scripts(
         # rendered danger line: the second pass sees only the hooks that npm
         # actually ran here, so a conditional `prepare` can never contribute a
         # danger for something that did not execute.
+        auto_run = sources.auto_run_hooks(package_dir)
         executed = analyze_install_scripts(
             {
                 hook: body
                 for hook, body in declared.bodies.items()
-                if hook in AUTO_RUN_DEPENDENCY_HOOKS
+                if hook in auto_run
             }
         )
 
@@ -451,6 +703,12 @@ def scan_installed_dependency_scripts(
             version=version if isinstance(version, str) else "",
             hooks=list(declared.hooks),
             auto_run_hooks=list(executed.hooks),
+            git_sourced=package_dir in sources.git_sourced,
+            # Only a declared `prepare` is at stake: every other hook runs for a
+            # registry install too, so an unreadable lockfile costs nothing there.
+            source_unverified=(
+                not sources.is_authoritative and GIT_SOURCE_HOOK in declared.hooks
+            ),
         )
         entry.dangers = [
             qualify_dependency_danger(entry.label, danger) for danger in executed.dangers
@@ -467,10 +725,22 @@ def format_hooked_package_line(entry: InstalledPackageScripts) -> str:
     a nested copy (``foo/node_modules/bar``) is distinguishable from the
     top-level one, and marks a package whose only hooks are conditional — it did
     not run here, and saying otherwise would overstate what happened.
+
+    Three suffixes, one per state the provenance check can be in: built from a
+    git checkout (``prepare`` ran), a registry tarball (it did not), or a lockfile
+    that could not say (unknown — never presented as either).
     """
     hooks = ", ".join(entry.hooks) if entry.hooks else "no hooks"
     location = ""
     if entry.package_dir and entry.package_dir != entry.name:
         location = f" [{entry.package_dir}]"
-    suffix = "" if entry.executed else " (not run for a registry install)"
+
+    if entry.git_sourced:
+        suffix = " (built from a git checkout)"
+    elif entry.source_unverified:
+        suffix = f" (install source unverified - `{GIT_SOURCE_HOOK}` may have run)"
+    elif entry.executed:
+        suffix = ""
+    else:
+        suffix = " (not run for a registry install)"
     return f"{entry.label}{location}: {hooks}{suffix}"
