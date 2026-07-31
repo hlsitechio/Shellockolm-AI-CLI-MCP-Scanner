@@ -2702,7 +2702,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
 
 ## Open follow-ups (surfaced by the F40 phase-4 change-set pass, not yet worked)
 
-- F46. [ ] **The sandbox has nothing worth stealing, so the read side of
+- F46. [x] **The sandbox has nothing worth stealing, so the read side of
   exfiltration is unobservable** — F40 makes rewrites and deletions of
   pre-existing files reportable, but the baseline contains exactly one file we
   wrote (`package.json`), so there is almost nothing for the new check to be
@@ -2710,13 +2710,43 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   thief cannot reach the real one — which also means the sandbox `HOME` is
   empty, and an install script that reads `~/.aws/credentials`, `~/.npmrc` or
   `~/.ssh/id_rsa` finds nothing, does nothing, and looks identical to a package
-  that never tried. Seeding the baseline with clearly-marked decoy files
-  (canary values, never real secrets) would give both the F40 change check and
-  any future read-side signal something to observe. Needs care: the decoys must
-  be obviously fake so no verdict claims a real credential was exposed, they
-  must not change the install's behaviour, and reading a decoy is only
-  observable at all if paired with something that watches for the value leaving
-  (which this check does not have today) — so scope honestly before building.
+  that never tried.
+
+  New `src/sandbox_canary.py` seeds that HOME with four obviously-fake
+  credential files (`.npmrc`, `.aws/credentials`, `.ssh/id_rsa`,
+  `.config/gh/hosts.yml`), each carrying `SHELLOCKOLM-DECOY`, an in-band
+  "grants no access" notice and a per-run canary token, and the check then
+  observes three things: a decoy **rewritten or deleted** (a danger with no
+  calibration needed — nothing in an npm install touches `~/.ssh`), the canary
+  in the install's **captured output**, and the canary in a **file the install
+  wrote outside npm's directories**.
+
+  Two constraints were held and measured rather than asserted. *The decoys must
+  not change the install*: `$HOME/.npmrc` is npm's own user config, so
+  `environment_with_decoy_isolation` redirects `npm_config_userconfig` (both
+  case spellings) at an unused sandbox path — npm reads that missing file as
+  empty, the exact state it had before. The same helper redirects
+  `XDG_CONFIG_HOME`/`XDG_CACHE_HOME`/`XDG_STATE_HOME` at `.npm/`, because the
+  `.config/gh/hosts.yml` decoy puts a `.config/` directory in the sandbox HOME
+  and npm consults XDG there on Linux — without it a *benign* Linux install
+  writing `.config/npm/...` would have been reported as a dropped payload, a
+  false positive the Windows verification could never have caught. *The read
+  side must actually be reachable*: npm 7+ buffers and **discards** lifecycle
+  output unless a script fails, so the install now passes
+  `--foreground-scripts`. Measured against a
+  real install of a purpose-built stealer, that flag is the whole difference —
+  without it `console.log(fs.readFileSync('~/.npmrc'))` reports clean, with it
+  the canary is exposed.
+
+  Verified end to end against real `npm install` runs, not fixtures alone:
+  **zero** findings of any kind across left-pad, chalk, express and typescript
+  (1,480 installed files, all decoys intact, install rc 0 — so the userconfig
+  redirect costs nothing); a postinstall that prints `~/.npmrc` and one that
+  deletes `~/.ssh/id_rsa` are both caught. 66 new tests, full suite green,
+  ruff + mypy clean on the new module. Honest scope, stated in the module
+  docstring: this does **not** watch the network (F49), and the
+  stage-inside-your-own-package route is measured and deliberately uncovered
+  (F48). _(commit PENDING)_
 
 - F47. [ ] **A dependency wiping a *sibling* package is filtered out as npm's
   own pruning** — `filter_unexpected_deletions` drops everything under
@@ -2823,6 +2853,43 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   which exists to mean "we failed to look". Note the scoping before reaching
   for it: this buys quieter reports, not detection, and F39 already removed the
   only wrong *verdict* the declarations produced.
+
+## Open follow-ups (surfaced by the F46 decoy-credential pass, not yet worked)
+
+- F48. [ ] **A postinstall's working directory is inside `node_modules/`, so a
+  stager that drops loot beside its own files is filtered out** — measured, not
+  inferred: a purpose-built stealer that reads the decoys and writes them to
+  `process.cwd()` lands at `node_modules/<pkg>/.cache-tmp.json`, and
+  `filter_suspicious_new_files` correctly excludes that tree as npm's own
+  territory, so the F46 file-side canary scan never sees it. The obvious fix —
+  also feed the scan the new files under the target package's own directory —
+  is not free, and the numbers are why it was not taken in the same run: the
+  package's own directory holds **10 files for `express`, 27 for `react`, 416
+  for `typescript`, 420 for `eslint`, 776 for `webpack` and 8,094 for `next`**,
+  against a `CANARY_SCAN_FILE_LIMIT` of 200 — so a naive widening turns a clean
+  install of `next` into a blind phase and an INCONCLUSIVE verdict, which is
+  the exact failure mode the whole check exists to avoid. Two candidate shapes,
+  both needing a measurement first: raise the cap for the package subtree only
+  (a substring search over 8,094 files is cheap in isolation but duplicates the
+  read phase 5 already does), or fold the canary literal into phase 5's
+  existing walk (free, but that walk reads only executable source extensions,
+  and loot is staged in `.json`/`.txt`). Note the honest bound either way: this
+  closes the *default* staging location, not exfiltration generally, and the
+  network route stays uncovered by design.
+
+- F49. [ ] **The canary proves a read only when the value stays in the
+  sandbox** — F46's two working routes are the install's captured output and
+  files it wrote; a payload that reads a decoy and POSTs it never touches
+  either, and the check reports clean. This is stated plainly in the module
+  docstring rather than hidden, and it is the single biggest gap in the decoy
+  idea. Closing it means observing the sandbox's egress — a loopback proxy with
+  `HTTP_PROXY`/`HTTPS_PROXY` pointed at it, or an offline install with the
+  attempt itself as the signal — both of which change the install's environment
+  materially and need their own false-positive baseline (plenty of benign
+  postinstalls fetch binaries; `esbuild` and `sharp` do it by design). Do not
+  reach for it as a small addition: scope it as its own pass, and measure how
+  many real packages make outbound connections during install *before* deciding
+  what an attempt is worth.
 
 ---
 

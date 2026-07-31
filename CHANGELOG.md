@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`sandbox <pkg>` now plants decoy credentials, so a package that goes hunting
+  for your secrets has something to be caught taking.** The check redirects
+  `HOME` into the throwaway sandbox so a thief cannot reach the real one — which
+  also left that HOME empty, so an install script reading `~/.aws/credentials`
+  found nothing, did nothing, and looked exactly like a package that never
+  tried. The sandbox HOME is now seeded with four obviously-fake credential
+  files (`.npmrc`, `.aws/credentials`, `.ssh/id_rsa`, `.config/gh/hosts.yml`),
+  each stamped `SHELLOCKOLM-DECOY` with an in-band "grants no access" notice and
+  a per-run canary token. Three things are then reportable: a decoy **rewritten
+  or deleted** (nothing in a normal npm install touches `~/.ssh`), the canary in
+  the install's **captured output**, and the canary in a **file the install
+  wrote** outside npm's own directories.
+
+  The install itself is unchanged: `$HOME/.npmrc` is npm's own user config, so
+  `npm_config_userconfig` is redirected at an unused sandbox path and npm reads
+  the same empty config it did before, and the XDG variables are pointed at
+  `.npm/` so npm's Linux config lookups cannot land in the `.config/` directory
+  the decoys create. Separately, the install now runs with
+  `--foreground-scripts`, because npm 7+ buffers and **discards** lifecycle
+  output unless a script fails — measured against a real stealer, that flag is
+  the difference between "clean" and a caught exfiltration.
+
+  Verified against real installs, not fixtures alone: zero findings across
+  left-pad, chalk, express and typescript (1,480 installed files, every decoy
+  intact, install exit code 0), while a `postinstall` that prints `~/.npmrc` and
+  one that deletes `~/.ssh/id_rsa` are both caught. Scope stated honestly in
+  `src/sandbox_canary.py`: this does not watch the network, and a payload that
+  stages loot inside its own `node_modules/` directory is a measured, documented
+  gap rather than a silent one.
+
 ### Fixed
 
 - **`sandbox <pkg>` told you not to install esbuild, because it imports

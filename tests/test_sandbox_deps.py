@@ -1205,9 +1205,13 @@ def test_cli_install_lets_npm_write_the_lockfile():
     ``node_modules``. Re-adding the flag would not fail any behavioural test; it
     would just silently return every ``prepare`` hook to "unknown", so the flag is
     pinned here instead.
+
+    The argv is matched as a PREFIX, not the whole list: F46 appends
+    ``--foreground-scripts`` so lifecycle output is actually captured, and this
+    guard is about ``--no-save``, not about the argv being frozen.
     """
     source = CLI_SOURCE.read_text(encoding="utf-8", errors="replace")
 
-    assert '["npm", "install", pkg_name, "--prefix", sandbox_dir]' in source
+    assert '["npm", "install", pkg_name, "--prefix", sandbox_dir' in source
     # Quoted, so the comment explaining the flag's absence does not satisfy it.
     assert '"--no-save"' not in source

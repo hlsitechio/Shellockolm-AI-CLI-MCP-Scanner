@@ -4696,6 +4696,7 @@ def interactive_shell():
                     import shutil
                     import subprocess
                     import json
+                    import secrets
 
                     from sandbox_snapshot import compare_snapshots, snapshot_directory
                     from sandbox_check import (
@@ -4712,6 +4713,16 @@ def interactive_shell():
                         installed_package_dirname,
                         normalize_package_spec,
                         typosquat_matches,
+                    )
+                    from sandbox_canary import (
+                        build_canary_token,
+                        describe_decoy_tampering,
+                        environment_with_decoy_isolation,
+                        find_canary_in_streams,
+                        merge_exposures,
+                        scan_files_for_canary,
+                        seed_decoys,
+                        split_decoy_changes,
                     )
                     from sandbox_codescan import (
                         describe_scanned_extensions,
@@ -4776,6 +4787,32 @@ def interactive_shell():
                         }
                         with open(Path(sandbox_dir) / "package.json", 'w') as f:
                             json.dump(sandbox_pkg, f)
+
+                        # Plant decoy credentials in the sandbox HOME (F46).
+                        # HOME is redirected here so a thief cannot reach the
+                        # real one - which also left it empty, so a package that
+                        # went looking for ~/.aws/credentials found nothing and
+                        # looked identical to one that never tried. Each decoy
+                        # is obviously fake and carries a per-run canary token;
+                        # phase 4 then reports the token turning up anywhere the
+                        # install could put it.
+                        canary_token = build_canary_token(secrets.token_hex(8))
+                        decoy_seeding = seed_decoys(Path(sandbox_dir), canary_token)
+                        if decoy_seeding.paths:
+                            console.print(
+                                f"[dim]🪤 Planted {len(decoy_seeding.paths)} decoy "
+                                f"credential file(s) (fake values, canary-tagged)[/dim]"
+                            )
+                        if not decoy_seeding.is_complete:
+                            console.print(
+                                f"  [warning]⚠️ Decoy seeding incomplete: "
+                                f"{decoy_seeding.error_summary()}[/warning]"
+                            )
+                            findings.mark_blind(
+                                "Decoy credential seeding",
+                                f"{decoy_seeding.error_summary()} - a decoy that was "
+                                f"never planted cannot be observed being stolen",
+                            )
 
                         # PHASE 1: Get package info first (without install)
                         console.print(f"[bright_cyan]━━━ PHASE 1: Package Metadata Analysis ━━━[/bright_cyan]")
@@ -4865,6 +4902,16 @@ def interactive_shell():
                         install_env = os.environ.copy()
                         install_env['HOME'] = sandbox_dir
                         install_env['NPM_CONFIG_CACHE'] = str(Path(sandbox_dir) / '.npm-cache')
+                        # `$HOME/.npmrc` is npm's OWN user config, and one of the
+                        # decoys lives there - so npm would read a fake auth token
+                        # and send it to the registry. Point the user config at an
+                        # unused path inside the sandbox instead: npm treats the
+                        # missing file as empty, which is the exact config state
+                        # it had before decoys existed (F46's no-behaviour-change
+                        # constraint, kept in one testable helper).
+                        install_env = environment_with_decoy_isolation(
+                            install_env, sandbox_dir
+                        )
 
                         # NO `--no-save`: it also suppresses the lockfile, and the
                         # lockfile is the ONLY record of where each package came
@@ -4875,8 +4922,19 @@ def interactive_shell():
                         # is one we just wrote into a throwaway temp directory, and
                         # `package-lock.json` is already an expected install
                         # artifact for the phase-4 dropped-file check.
+                        # `--foreground-scripts` because npm 7+ BUFFERS AND DISCARDS
+                        # lifecycle-script output unless a script fails. Measured
+                        # against a real install of a postinstall that does
+                        # `console.log(fs.readFileSync('~/.npmrc'))`: without the
+                        # flag `install_result.stdout` contains npm's own summary
+                        # and nothing the package printed, so every check that
+                        # reads the install's output — the F46 canary route, and
+                        # any future one — was looking at a stream the payload
+                        # could never reach. With it, the same install exposes the
+                        # canary. Costs serial script execution, not correctness.
                         install_result = subprocess.run(
-                            ["npm", "install", pkg_name, "--prefix", sandbox_dir],
+                            ["npm", "install", pkg_name, "--prefix", sandbox_dir,
+                             "--foreground-scripts"],
                             capture_output=True, text=True, cwd=sandbox_dir,
                             timeout=120, env=install_env
                         )
@@ -4937,6 +4995,19 @@ def interactive_shell():
                         changed_existing = filter_unexpected_modifications(modified_files)
                         removed_existing = filter_unexpected_deletions(deleted_files)
 
+                        # A decoy in that change set is not the ambiguous
+                        # "a pre-existing file changed" line - nothing in a normal
+                        # npm install rewrites or deletes ~/.aws/credentials, so
+                        # these are split out and reported as dangers (F46).
+                        tampered_decoys, changed_existing = split_decoy_changes(changed_existing)
+                        wiped_decoys, removed_existing = split_decoy_changes(removed_existing)
+                        for line in describe_decoy_tampering(tampered_decoys, "rewritten"):
+                            console.print(f"  [danger]🚨 {line}[/danger]")
+                            findings.add_danger(line)
+                        for line in describe_decoy_tampering(wiped_decoys, "deleted"):
+                            console.print(f"  [danger]🚨 {line}[/danger]")
+                            findings.add_danger(line)
+
                         if changed_existing or removed_existing:
                             console.print(f"[warning]⚠️ Pre-existing sandbox files changed by the install:[/warning]")
                             for mf in changed_existing[:10]:
@@ -4952,6 +5023,37 @@ def interactive_shell():
                                 console.print(f"  [dim]... and {extra_changes} more[/dim]")
                         elif before_snapshot.is_complete and after_snapshot.is_complete:
                             console.print(f"  [bright_green]✓ No pre-existing sandbox file was rewritten or removed[/bright_green]")
+
+                        # The read side of the decoys (F46). Reading a planted
+                        # credential is only observable where the value LANDS, and
+                        # this check does not watch the network - so it looks in
+                        # the two places it already has: the install's own captured
+                        # output, and the files the install wrote outside npm's
+                        # directories. The token exists nowhere else on the machine,
+                        # so a hit is unambiguous; a miss proves only that the value
+                        # did not travel by those two routes, which is why this
+                        # prints nothing reassuring when it finds nothing.
+                        if decoy_seeding.paths:
+                            canary_exposure = merge_exposures(
+                                find_canary_in_streams(
+                                    canary_token,
+                                    {
+                                        "the install's stdout": install_result.stdout or "",
+                                        "the install's stderr": install_result.stderr or "",
+                                    },
+                                ),
+                                scan_files_for_canary(
+                                    Path(sandbox_dir), canary_token, suspicious_new
+                                ),
+                            )
+                            for line in canary_exposure.describe():
+                                console.print(f"  [danger]🚨 {line}[/danger]")
+                                findings.add_danger(line)
+                            if not canary_exposure.is_complete:
+                                findings.mark_blind(
+                                    "Decoy canary check",
+                                    "; ".join(canary_exposure.errors[:3]),
+                                )
 
                         # Count installed files
                         node_modules_count = count_paths_under(new_files, "node_modules")
