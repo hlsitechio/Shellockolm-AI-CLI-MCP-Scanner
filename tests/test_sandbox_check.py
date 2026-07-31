@@ -52,8 +52,11 @@ from sandbox_check import (
     count_paths_under,
     decide_verdict,
     filter_suspicious_new_files,
+    filter_unexpected_deletions,
+    filter_unexpected_modifications,
     installed_package_dirname,
     is_expected_install_path,
+    is_npm_owned_directory_path,
     is_dangerous_hit,
     normalize_package_spec,
     scan_text_for_malware_patterns,
@@ -695,6 +698,86 @@ def test_dot_prefixed_npm_dirs_are_matched_not_stripped():
 def test_expected_path_matching_is_windows_separator_safe():
     assert is_expected_install_path("node_modules\\lodash\\index.js") is True
     assert is_expected_install_path(".ssh\\id_rsa") is False
+
+
+# --------------------------------------------------------------------------
+# F40 — the modified/deleted sets phase 4 used to discard
+# --------------------------------------------------------------------------
+def test_rewritten_pre_existing_file_is_reported():
+    """An install that appends to or truncates an existing file is a change
+    phase 4 never asked about — it only ever answered "what was created"."""
+    modified = [
+        "package.json",  # npm's own write since F36 keeps the lockfile
+        ".bashrc",
+        "config/settings.json",
+    ]
+
+    assert filter_unexpected_modifications(modified) == [
+        ".bashrc",
+        "config/settings.json",
+    ]
+
+
+def test_npms_own_rewrite_of_the_manifest_is_not_a_finding():
+    """The FP that makes this filter necessary: `npm install` rewrites the
+    sandbox package.json on EVERY run, so an unfiltered set fires every time."""
+    assert filter_unexpected_modifications(["package.json"]) == []
+    assert filter_unexpected_modifications(["package-lock.json"]) == []
+    assert filter_unexpected_modifications([".package-lock.json"]) == []
+    assert filter_unexpected_modifications(["node_modules/lodash/index.js"]) == []
+    assert filter_unexpected_modifications([".npm-cache/_cacache/index-v5/aa"]) == []
+
+
+def test_removed_manifest_is_reported_even_though_npm_rewrites_it():
+    """Deletion is filtered more narrowly than modification on purpose: npm
+    rewrites the manifest, it never removes it, so a missing package.json is
+    the install script's doing."""
+    assert filter_unexpected_deletions(["package.json"]) == ["package.json"]
+    assert filter_unexpected_deletions([".npmrc"]) == [".npmrc"]
+
+
+def test_npm_pruning_its_own_tree_is_not_a_deletion_finding():
+    deleted = [
+        "node_modules/.package-lock.json",
+        "node_modules/left-pad/index.js",
+        ".npm-cache/_cacache/tmp/abc123",
+        ".npm/_logs/debug.log",
+    ]
+
+    assert filter_unexpected_deletions(deleted) == []
+
+
+def test_benign_install_produces_no_change_findings():
+    """Zero-false-positive baseline: the full change set of an ordinary install
+    (npm rewrites the manifest, prunes its own cache) yields nothing."""
+    modified = ["package.json", "node_modules/.package-lock.json"]
+    deleted = [".npm-cache/_cacache/tmp/staging-1", "node_modules/.bin/tmp"]
+
+    assert filter_unexpected_modifications(modified) == []
+    assert filter_unexpected_deletions(deleted) == []
+
+
+def test_change_filters_are_segment_anchored_and_separator_safe():
+    """Same substring traps the new-file filter already closed."""
+    assert filter_unexpected_modifications(["evil-package.json"]) == ["evil-package.json"]
+    # `'node_modules/' in path` would have swallowed this one; the head segment
+    # is `.ssh`, so it stays reportable.
+    assert filter_unexpected_deletions([".ssh/node_modules/authorized_keys"]) == [
+        ".ssh/node_modules/authorized_keys"
+    ]
+    assert filter_unexpected_deletions(["node_modules/.ssh/authorized_keys"]) == []
+    assert filter_unexpected_modifications(["node_modules\\lodash\\index.js"]) == []
+    assert filter_unexpected_modifications([".ssh\\id_rsa"]) == [".ssh\\id_rsa"]
+
+
+def test_npm_owned_directory_matching_excludes_root_files():
+    assert is_npm_owned_directory_path("node_modules/lodash/index.js") is True
+    assert is_npm_owned_directory_path(".npm-cache/x") is True
+    assert is_npm_owned_directory_path("./.npm/_logs/debug.log") is True
+    # A root file npm writes is NOT an npm-owned *directory* path — that is
+    # what lets a removed package.json still be reported.
+    assert is_npm_owned_directory_path("package.json") is False
+    assert is_npm_owned_directory_path("") is False
 
 
 def test_count_paths_under_is_segment_anchored():

@@ -521,6 +521,30 @@ EXPECTED_INSTALL_FILES: Tuple[str, ...] = (
 )
 
 
+def _relative_sandbox_path(path: str) -> str:
+    """Normalize a snapshot key to a forward-slashed, root-relative path."""
+    normalized = (path or "").replace("\\", "/")
+    # Strip a leading "./" only. `lstrip("./")` would strip a CHARACTER SET and
+    # turn ".npm-cache/x" into "npm-cache/x", so npm's own cache stopped being
+    # recognized and every cached file was reported as a dropped payload.
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized.lstrip("/")
+
+
+def is_npm_owned_directory_path(path: str) -> bool:
+    """True when ``path`` lives inside a directory npm manages end-to-end.
+
+    npm creates, rewrites and prunes everything under ``node_modules/`` and its
+    cache directories, so churn there is npm's own bookkeeping. Root *files*
+    are deliberately excluded: see :func:`filter_unexpected_deletions`.
+    """
+    normalized = _relative_sandbox_path(path)
+    if not normalized:
+        return False
+    return normalized.split("/", 1)[0] in EXPECTED_INSTALL_DIRS
+
+
 def is_expected_install_path(path: str) -> bool:
     """True when ``path`` is an artifact npm itself creates in the sandbox.
 
@@ -530,24 +554,46 @@ def is_expected_install_path(path: str) -> bool:
     ``.ssh/node_modules/authorized_keys`` — was quietly treated as expected and
     never reported.
     """
-    normalized = (path or "").replace("\\", "/")
-    # Strip a leading "./" only. `lstrip("./")` would strip a CHARACTER SET and
-    # turn ".npm-cache/x" into "npm-cache/x", so npm's own cache stopped being
-    # recognized and every cached file was reported as a dropped payload.
-    while normalized.startswith("./"):
-        normalized = normalized[2:]
-    normalized = normalized.lstrip("/")
+    normalized = _relative_sandbox_path(path)
     if not normalized:
         return False
     if normalized in EXPECTED_INSTALL_FILES:
         return True
-    head = normalized.split("/", 1)[0]
-    return head in EXPECTED_INSTALL_DIRS
+    return is_npm_owned_directory_path(normalized)
 
 
 def filter_suspicious_new_files(new_files: Iterable[str]) -> List[str]:
     """New files that npm did not put there — i.e. what the install wrote."""
     return [path for path in new_files if not is_expected_install_path(path)]
+
+
+def filter_unexpected_modifications(modified_files: Iterable[str]) -> List[str]:
+    """Pre-existing files the install **rewrote** and npm does not own.
+
+    ``compare_snapshots`` has always returned this set and phase 4 has always
+    dropped it, so an install that appended to or truncated a file that already
+    existed was invisible to a check that only ever answered "what was
+    created" (follow-up F40).
+
+    The same expected-artifact filter the new-file check uses applies here:
+    since F36 keeps the lockfile, npm legitimately rewrites the sandbox
+    ``package.json`` on *every* run, so an unfiltered set would report npm's
+    own write as a finding every time.
+    """
+    return [path for path in modified_files if not is_expected_install_path(path)]
+
+
+def filter_unexpected_deletions(deleted_files: Iterable[str]) -> List[str]:
+    """Pre-existing files the install **removed**, minus npm's own churn.
+
+    Deletion is filtered more narrowly than modification, and the asymmetry is
+    the point: npm rewrites ``package.json`` and writes ``package-lock.json``,
+    but it never *removes* the manifest of the project it is installing into.
+    So a root file that existed before the install and is gone afterwards is
+    the install's doing, while a file vanishing from ``node_modules/`` or a
+    cache directory is npm pruning a tree it owns.
+    """
+    return [path for path in deleted_files if not is_npm_owned_directory_path(path)]
 
 
 def count_paths_under(paths: Iterable[str], directory: str) -> int:

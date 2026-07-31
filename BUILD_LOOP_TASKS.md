@@ -2653,7 +2653,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
 
 ## Open follow-ups (surfaced by the F36 install-provenance pass, not yet worked)
 
-- F40. [ ] **Phase 4 computes `modified_files` and `deleted_files` and throws
+- F40. [x] **Phase 4 computes `modified_files` and `deleted_files` and throws
   them away** — `compare_snapshots` returns all three sets, but only `new_files`
   is ever filtered and reported (`src/cli.py`, the phase-4 block): the other two
   are unpacked into locals that nothing reads. So a install script that *appends
@@ -2667,6 +2667,69 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   *every* run. Any fix needs the same expected-artifact filter `new_files`
   already has, extended to modifications, plus a decision about whether a
   *deleted* sandbox file is worth a line at all.
+  Fixed, and scoped as the note asked — a completeness fix, not a new
+  detection, and the entry deliberately claims nothing more. Both sets are now
+  filtered and reported, and the two filters are **deliberately asymmetric**:
+  `filter_unexpected_modifications` reuses the segment-anchored
+  `is_expected_install_path` (so npm's own rewrite of `package.json` — the
+  price of keeping the lockfile since F36 — is silent, which is the false
+  positive that would otherwise fire on *every* run), while
+  `filter_unexpected_deletions` only drops paths under an npm-owned
+  *directory* (`node_modules/`, `.npm-cache/`, `.npm/`) via a new
+  `is_npm_owned_directory_path`. The asymmetry is the whole answer to "is a
+  deleted sandbox file worth a line": npm rewrites the manifest, it never
+  removes it, so had the deletion set reused the new-file filter, the one
+  deletion actually reachable today (a install script unlinking
+  `package.json`) would have been filtered out and the fix would have been a
+  no-op. Reported at **warning** tier, not danger: unlike a dropped file —
+  whose existence outside npm's lane is itself the finding — a rewrite or
+  removal here touches the sandbox scaffold we created, with no content
+  analysis behind it, so it is anomalous install behaviour rather than
+  evidence of a payload (same narrowing discipline as F37/F38/F39). The
+  surface stays honestly small: the baseline holds the one `package.json` we
+  write, so the reachable finding today is a root file being rewritten or
+  unlinked — see F46 for why the baseline is worth seeding, and F47 for the
+  `node_modules` deletions this filter still cannot distinguish from npm's own
+  pruning. 9 new tests (both filters' keep/drop sets, the npm-rewrite
+  zero-FP baseline, the segment-anchoring traps `'node_modules/' in path`
+  used to swallow in both directions, Windows separators, and two end-to-end
+  cases driving real directories through `snapshot_directory` ->
+  `compare_snapshots` -> the filters: one install that truncates a
+  pre-existing file and unlinks another, one ordinary install that must stay
+  silent); full suite **3,507 passed / 2 skipped** (was 3,498/2), `ruff`
+  clean, `mypy` clean on the touched module.
+  _(commit PENDING)_
+
+## Open follow-ups (surfaced by the F40 phase-4 change-set pass, not yet worked)
+
+- F46. [ ] **The sandbox has nothing worth stealing, so the read side of
+  exfiltration is unobservable** — F40 makes rewrites and deletions of
+  pre-existing files reportable, but the baseline contains exactly one file we
+  wrote (`package.json`), so there is almost nothing for the new check to be
+  about. The check redirects `HOME` into the sandbox precisely so a credential
+  thief cannot reach the real one — which also means the sandbox `HOME` is
+  empty, and an install script that reads `~/.aws/credentials`, `~/.npmrc` or
+  `~/.ssh/id_rsa` finds nothing, does nothing, and looks identical to a package
+  that never tried. Seeding the baseline with clearly-marked decoy files
+  (canary values, never real secrets) would give both the F40 change check and
+  any future read-side signal something to observe. Needs care: the decoys must
+  be obviously fake so no verdict claims a real credential was exposed, they
+  must not change the install's behaviour, and reading a decoy is only
+  observable at all if paired with something that watches for the value leaving
+  (which this check does not have today) — so scope honestly before building.
+
+- F47. [ ] **A dependency wiping a *sibling* package is filtered out as npm's
+  own pruning** — `filter_unexpected_deletions` drops everything under
+  `node_modules/`, because npm genuinely creates, dedupes and prunes that tree
+  and every install would otherwise report dozens of deletions. But sabotaging
+  a sibling dependency (truncating or unlinking another package's files during
+  a `postinstall`) is a real supply-chain shape that lands in exactly that
+  directory. Distinguishing the two needs a source of truth for what npm itself
+  intended to leave behind — the lockfile tree that F36 already loads via
+  `load_install_source_index` is the obvious candidate. Not obviously worth it:
+  the false-positive risk is high (npm's dedupe legitimately moves and removes
+  nested copies), so this needs a measured FP count against real installs
+  before any of it ships.
 
 ## Open follow-ups (surfaced by the F37 install-hook tiering pass, not yet worked)
 

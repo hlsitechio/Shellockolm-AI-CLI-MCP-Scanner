@@ -29,6 +29,11 @@ from pathlib import Path
 import pytest
 
 import sandbox_snapshot
+from sandbox_check import (
+    filter_suspicious_new_files,
+    filter_unexpected_deletions,
+    filter_unexpected_modifications,
+)
 from sandbox_snapshot import (
     MAX_RECORDED_ERRORS,
     UNREADABLE,
@@ -261,6 +266,54 @@ def test_compare_of_identical_snapshots_is_empty(tmp_path):
     snap = snapshot_directory(tmp_path)
 
     assert compare_snapshots(snap, snap) == ([], [], [])
+
+
+def test_install_that_rewrites_and_removes_sandbox_files_is_surfaced(tmp_path):
+    """End-to-end for F40: the two diff sets phase 4 used to discard.
+
+    Simulates an install that truncates a file it did not create and deletes
+    another, alongside npm's own legitimate rewrite of the sandbox manifest.
+    Before this, the whole scenario produced an empty ``new_files`` list and a
+    clean "no suspicious files created" line.
+    """
+    _write(tmp_path, "package.json", '{"name":"shellockolm-sandbox"}')
+    _write(tmp_path, ".npmrc", "registry=https://registry.npmjs.org/")
+    _write(tmp_path, "notes.txt", "pre-existing content")
+    before = snapshot_directory(tmp_path)
+
+    # npm's own write (expected) ...
+    _write(tmp_path, "package.json", '{"name":"shellockolm-sandbox","dependencies":{}}')
+    _write(tmp_path, "package-lock.json", "{}")
+    _write(tmp_path, "node_modules/pkg/index.js", "1")
+    # ... and the install script's (not expected)
+    _write(tmp_path, "notes.txt", "")
+    (tmp_path / ".npmrc").unlink()
+    after = snapshot_directory(tmp_path)
+
+    new_files, modified, deleted = compare_snapshots(before, after)
+
+    assert filter_suspicious_new_files(new_files) == []
+    assert filter_unexpected_modifications(modified) == ["notes.txt"]
+    assert filter_unexpected_deletions(deleted) == [".npmrc"]
+
+
+def test_ordinary_install_reports_no_rewritten_or_removed_file(tmp_path):
+    """Zero-false-positive baseline against a real directory: npm rewriting the
+    manifest it must rewrite (the price of keeping the lockfile, F36) is silent."""
+    _write(tmp_path, "package.json", '{"name":"shellockolm-sandbox"}')
+    before = snapshot_directory(tmp_path)
+
+    _write(tmp_path, "package.json", '{"name":"shellockolm-sandbox","dependencies":{"lodash":"^4"}}')
+    _write(tmp_path, "package-lock.json", "{}")
+    _write(tmp_path, "node_modules/lodash/index.js", "module.exports = 1;")
+    _write(tmp_path, ".npm-cache/_cacache/index-v5/aa/bb", "x")
+    after = snapshot_directory(tmp_path)
+
+    new_files, modified, deleted = compare_snapshots(before, after)
+
+    assert filter_suspicious_new_files(new_files) == []
+    assert filter_unexpected_modifications(modified) == []
+    assert filter_unexpected_deletions(deleted) == []
 
 
 def test_unreadable_on_both_sides_is_not_reported_as_modified():

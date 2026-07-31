@@ -4707,6 +4707,8 @@ def interactive_shell():
                         classify_malware_hits,
                         count_paths_under,
                         filter_suspicious_new_files,
+                        filter_unexpected_deletions,
+                        filter_unexpected_modifications,
                         installed_package_dirname,
                         normalize_package_spec,
                         typosquat_matches,
@@ -4923,6 +4925,33 @@ def interactive_shell():
                             # Both snapshots were partial, so "no new files" is
                             # the absence of evidence, not evidence of absence.
                             console.print(f"  [warning]⚠️ No suspicious files seen - but the snapshots were incomplete (inconclusive)[/warning]")
+
+                        # The other two thirds of the diff. `compare_snapshots`
+                        # has always returned them and this block has always
+                        # thrown them away, so an install that *rewrote* or
+                        # *removed* a file that already existed was invisible to
+                        # a check that only ever answered "what was created"
+                        # (F40). The exposed surface is small by construction -
+                        # the baseline holds the one package.json we wrote - so
+                        # this is a completeness fix, not a new detection.
+                        changed_existing = filter_unexpected_modifications(modified_files)
+                        removed_existing = filter_unexpected_deletions(deleted_files)
+
+                        if changed_existing or removed_existing:
+                            console.print(f"[warning]⚠️ Pre-existing sandbox files changed by the install:[/warning]")
+                            for mf in changed_existing[:10]:
+                                console.print(f"  [warning]~ {mf} (rewritten)[/warning]")
+                            for mf in changed_existing:
+                                findings.add_warning(f"Pre-existing file rewritten during install: {mf}")
+                            for df in removed_existing[:10]:
+                                console.print(f"  [warning]- {df} (removed)[/warning]")
+                            for df in removed_existing:
+                                findings.add_warning(f"Pre-existing file removed during install: {df}")
+                            extra_changes = max(len(changed_existing) - 10, 0) + max(len(removed_existing) - 10, 0)
+                            if extra_changes:
+                                console.print(f"  [dim]... and {extra_changes} more[/dim]")
+                        elif before_snapshot.is_complete and after_snapshot.is_complete:
+                            console.print(f"  [bright_green]✓ No pre-existing sandbox file was rewritten or removed[/bright_green]")
 
                         # Count installed files
                         node_modules_count = count_paths_under(new_files, "node_modules")
