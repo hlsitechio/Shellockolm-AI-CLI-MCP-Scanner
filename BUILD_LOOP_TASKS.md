@@ -2516,7 +2516,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   94 new tests; full suite **3431 passed / 2 skipped** (was 3317/2), `ruff` and
   `mypy` clean, coverage **44.68%** over the 28% floor (`sandbox_check.py` at
   99.25%, `sandbox_deps.py` at 97.35%), CI self-scan gate exit 0.
-  _(commit PENDING)_
+  _(commit 1009c95)_
 
 ## Open follow-ups (surfaced by the F35 corroboration pass, not yet worked)
 
