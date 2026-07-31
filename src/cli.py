@@ -4714,6 +4714,11 @@ def interactive_shell():
                         normalize_package_spec,
                         typosquat_matches,
                     )
+                    from hook_scripts import (
+                        HookReachableReport,
+                        classify_hook_reachable_hits,
+                        scan_hook_reachable_scripts,
+                    )
                     from sandbox_canary import (
                         build_canary_token,
                         describe_decoy_tampering,
@@ -5196,6 +5201,78 @@ def interactive_shell():
                         elif not dep_report.dangers:
                             console.print(f"  [bright_green]✓ No dangerous dependency install hooks[/bright_green]")
                             findings.add_info("No dangerous dependency install hooks")
+
+                        # PHASE 5c: the code the install hooks actually EXECUTE.
+                        # Phase 1 reads the hook string, and every documented
+                        # install-hook attack has an innocuous one: eslint-scope
+                        # shipped `node ./lib/build.js`, coa and rc shipped
+                        # `node compile.js`. The payload was in the referenced
+                        # file, which phase 5 reads only as one entry in a
+                        # whole-package sweep - and not at all when it has no
+                        # source extension (`node scripts/postinstall`).
+                        console.print(f"[bright_cyan]━━━ PHASE 5c: Install-Hook Reachable Code ━━━[/bright_cyan]")
+
+                        target_dir = installed_package_dirname(pkg_name)
+                        hook_report = HookReachableReport()
+                        installed_manifest = (
+                            Path(sandbox_dir) / "node_modules" / target_dir / "package.json"
+                        )
+                        try:
+                            manifest_data = json.loads(
+                                installed_manifest.read_text(encoding="utf-8", errors="ignore")
+                            )
+                            installed_scripts = (
+                                manifest_data.get("scripts")
+                                if isinstance(manifest_data, dict)
+                                else None
+                            )
+                            hook_report = scan_hook_reachable_scripts(
+                                installed_manifest.parent,
+                                installed_scripts,
+                                # The lockfile decides whether `prepare` ran: npm
+                                # runs it for a git checkout and not for a
+                                # registry tarball (F36). Following it
+                                # unconditionally makes 16% of real packages
+                                # blind on repo-only build scripts.
+                                hooks=install_sources.auto_run_hooks(target_dir),
+                            )
+                        except (OSError, json.JSONDecodeError) as manifest_err:
+                            # The manifest is how we know what ran. Without it
+                            # this phase has no conclusion - not a clean one.
+                            hook_report.manifest_error = (
+                                f"the installed manifest could not be read ({manifest_err}) "
+                                f"- the code the install hooks run was NOT analyzed"
+                            )
+
+                        hook_dangers, hook_info = classify_hook_reachable_hits(hook_report)
+                        if hook_report.targets:
+                            console.print(
+                                f"  [dim]Read {hook_report.files_scanned} file(s) reachable "
+                                f"from an install hook[/dim]"
+                            )
+                            for target in hook_report.targets[:10]:
+                                console.print(f"    [dim]{target.label}[/dim]")
+                            if len(hook_report.targets) > 10:
+                                console.print(f"    [dim]... and {len(hook_report.targets) - 10} more[/dim]")
+
+                        for line in hook_info:
+                            findings.add_info(line)
+                        if hook_dangers:
+                            findings.extend(dangers=hook_dangers)
+                            for line in hook_dangers:
+                                console.print(f"  [danger]{line}[/danger]")
+
+                        hook_blind_reason = hook_report.blind_reason()
+                        if hook_blind_reason:
+                            findings.mark_blind("Install-hook code", hook_blind_reason)
+                            console.print(f"  [warning]⚠️ {hook_blind_reason}[/warning]")
+                        elif not hook_report.targets:
+                            # No hook named a file in this package: it either has
+                            # no hooks, or they run a dependency's binary. Both
+                            # are ordinary, and neither is a conclusion about code.
+                            console.print(f"  [dim]No install hook runs a file shipped in this package[/dim]")
+                        elif not hook_dangers:
+                            console.print(f"  [bright_green]✓ No dangerous patterns in the code the install hooks run[/bright_green]")
 
                         # PHASE 6: Check for known CVEs
                         console.print(f"[bright_cyan]━━━ PHASE 6: CVE Database Check ━━━[/bright_cyan]")
