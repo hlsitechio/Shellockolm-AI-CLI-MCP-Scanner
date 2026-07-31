@@ -698,6 +698,26 @@ _SHELL_PAYLOAD = (
 #: flags: ``bash -ec "npm run build"`` is a real build idiom.
 _POWERSHELL_ENCODED = r"-(?:enc|ec|e)\b|EncodedCommand|FromBase64String"
 
+#: How far from a weak input-capture noun (``keystrokes``, ``keylog``) the
+#: corroborating verb may sit. A line bound, like every other window here, and
+#: the value the ``keystrokes`` arm has always used — reused rather than picked
+#: again so the two arms cannot drift apart.
+KEYLOG_VERB_WINDOW = 40
+
+#: What turns a bare ``keylog`` into a keylogger: a theft verb following it —
+#: the same vocabulary the ``credential theft`` pattern below already uses,
+#: deliberately reused rather than invented.
+#:
+#: The obvious wider set is wrong, and measurably so. ``captur`` and ``record``
+#: read as *packet* capture right next to this token: "run with
+#: ``--tls-keylog`` to decrypt the capture in Wireshark" is the documented
+#: workflow the option exists for, and it put the rule straight back on benign
+#: prose. ``logg`` is absent for the same reason the reverse holds — "keylog …
+#: logging" corroborates nothing and re-opens a config key named ``keylog``
+#: beside a ``logger`` call. Stealing, exfiltrating, harvesting and siphoning
+#: have no such second reading.
+_KEYLOG_THEFT_VERB = r"steal|exfiltrat|harvest|siphon"
+
 #: The calibrated pattern table applied to each installed ``.js`` file.
 #:
 #: Calibration rules (build-loop follow-up F31), each pinned by a test over real
@@ -757,9 +777,45 @@ MALWARE_PATTERN_TABLE: Tuple[MalwarePattern, ...] = (
         r"\b(?:cryptocurrency|bitcoin|monero|wallet)\b",
         "cryptocurrency references",
     ),
+    # Three arms, because only one of the three spellings is unambiguous.
+    #
+    # ``keylogger`` / ``keylogging`` name the thing and have no benign twin, so
+    # they fire alone. The bare token ``keylog`` does have one, and it is in the
+    # standard library: ``keylog`` is Node's TLS session-key event
+    # (``tlsSocket.on('keylog', line => …)``, ``--tls-keylog=<file>``), which
+    # writes an NSS keylog file so *you* can decrypt *your own* traffic in
+    # Wireshark. Nothing to do with keystrokes (F39).
+    #
+    # Measured over 1,372 unique installed packages / 56,282 scanned source
+    # files, every hit this rule produced was that event: 8 files, all of them
+    # ``@types/node``'s ``tls.d.ts`` and ``https.d.ts``. Because the rule is
+    # always-dangerous, one hit is a verdict — and those 8 files made
+    # ``@types/node``, a package containing no runtime code at all, DO NOT
+    # INSTALL, which was **4 of the 7** danger verdicts the whole phase produced
+    # over that corpus.
+    #
+    # So ``keylog`` now needs a :data:`_KEYLOG_THEFT_VERB` within
+    # :data:`KEYLOG_VERB_WINDOW` **after** it on the same line — exactly the
+    # corroboration the equally-weak ``keystrokes`` arm has always required.
+    #
+    # Narrowing the pattern rather than skipping ``.d.ts`` is what makes this
+    # hold for code as well as declarations: the runtime form
+    # ``socket.on('keylog', …)`` in a real ``.js`` file was condemned by the same
+    # arm, and a file-selection fix would have left that untouched.
+    #
+    # The reverse phrasing ("harvest the keylog") is a KNOWN, measured miss, not
+    # an oversight. Every arm here starts with the literal ``key``, so CPython
+    # skips to the next ``k`` instead of trying the branch at every offset; an
+    # arm led by the verbs instead starts on s/e/h and destroys that. Measured
+    # over 25.7 MB of real bundle text: 0.60s before this task, 0.64s as
+    # written, **1.04s** with the reverse arm added — 63% of the pattern's whole
+    # runtime, spent on a shape with zero true positives in the 1,372-package
+    # corpus. A test pins the miss so it stays a decision rather than a bug.
     MalwarePattern(
-        r"\bkey(?:logger|logging)\b|\bkeylog\b"
-        r"|\bkeystrokes?\b[^\n]{0,40}\b(?:captur|logg|record|steal)",
+        r"\bkey(?:logger|logging)\b"
+        r"|\bkeylog\b[^\n]{0,%d}\b(?:%s)" % (KEYLOG_VERB_WINDOW, _KEYLOG_THEFT_VERB)
+        + r"|\bkeystrokes?\b[^\n]{0,%d}\b(?:captur|logg|record|steal)"
+        % KEYLOG_VERB_WINDOW,
         "keylogger indicators",
     ),
     MalwarePattern(

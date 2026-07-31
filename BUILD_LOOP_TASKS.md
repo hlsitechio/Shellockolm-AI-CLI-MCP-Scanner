@@ -2591,17 +2591,64 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   CI self-scan gate exit 0.
   _(commit 64290a1)_
 
-- F39. [ ] **`@types/node` is reported as a keylogger** — the third package in
-  the post-F35 residue, and the cheapest of the three. `keylogger indicators`
-  fires twice on a package that contains **no runtime code at all**: `.d.ts`
-  files are (correctly) scanned as `.ts` by the F33 selection, and node's own
-  type declarations describe keypress handling in prose. Worth deciding between
-  two fixes rather than guessing: treat `.d.ts` as declarations rather than
-  executable source (they cannot run — but the extension is also a place to hide
-  nothing, so this is close to free), or require the keylogger pattern to
-  co-occur with a capability the way the other prose patterns now do. Measure
-  which one holds over the corpus; a type-declaration package reaching DO NOT
-  INSTALL is the most obviously wrong verdict the phase currently produces.
+- F39. [x] **`@types/node` is reported as a keylogger** — reproduced, and the
+  cause is not the one the note assumed. It is not prose about keypress
+  handling: `keylog` is node's own **TLS session-key event**
+  (`tlsSocket.on('keylog', line => …)`, `--tls-keylog=<file>`), which writes an
+  NSS keylog file so you can decrypt *your own* traffic in Wireshark. The
+  always-dangerous `keylogger indicators` pattern accepted the bare token, and
+  `@types/node`'s `tls.d.ts` / `https.d.ts` enumerate that event once per
+  listener overload. Measured over **1,372 unique installed packages / 56,282
+  scanned source files** (84,739 files walked across four real installs), the
+  rule fired on **8 files, every one of them `@types/node`**, and every hit was
+  the bare-`keylog` arm. Because one always-dangerous hit IS the verdict, that
+  was **4 of the 7** DO-NOT-INSTALL verdicts the whole phase produced over the
+  corpus. Zero non-declaration hits.
+  Both fixes the note proposed were measured, and **both fall short**:
+  * **skip `.d.ts`** removes exactly those 4 dangers, but **59 of the 1,372
+    packages (4.3%)** then contain no scannable file at all and go *blind*
+    ("the package code was NOT analyzed" -> INCONCLUSIVE) — every `@types/*`
+    plus `@eslint/core` and `@csstools/css-syntax-patches-for-csstree`. And it
+    leaves the rule itself intact: the same arm condemns
+    `socket.on('keylog', …)` in ordinary runtime `.js`, which a file-selection
+    fix cannot see. Re-opened as F45 with those numbers.
+  * **require a co-occurring capability** removes the same 4 — and removes the
+    only keylogger detection the suite has. `MALICIOUS_PACKAGE_CODE["keylogger"]`
+    (`const keylogger = require('./kl'); keylogger.start();`) carries no
+    capability pattern at all, so the gate demotes a true positive.
+  Narrowed at the source instead, the F38 way. `keylogger` / `keylogging` have
+  no benign twin and still fire alone; bare `keylog` now needs a theft verb
+  following it within `KEYLOG_VERB_WINDOW` (40 — the constant the equally-weak
+  `keystrokes` arm already used, now named and shared by both windowed arms).
+  Two mistakes the measurement caught. The obvious verb set is wrong: `captur`
+  and `record` read as *packet* capture right beside this token — "run with
+  `--tls-keylog` to decrypt the capture in Wireshark" is the documented workflow
+  the option exists for — and put the rule straight back on benign prose (a
+  fixture pins it), so the verbs are the `credential theft` rule's own theft
+  vocabulary (`steal|exfiltrat|harvest|siphon`), reused rather than invented.
+  And matching the reverse phrasing ("harvest the keylog") cost **63% of the
+  pattern's runtime**: every arm starts with the literal `key`, so CPython skips
+  to the next `k` instead of trying the branch at every offset, and a
+  verb-led arm starting on s/e/h destroys that — 0.64s -> **1.04s** over 25.7 MB
+  of real bundle text, for a shape with zero true positives in the corpus. The
+  reverse phrasing is therefore a priced, test-pinned miss, and a second test
+  asserts every arm keeps the `key` prefix so a future arm cannot quietly
+  reintroduce the cost.
+  Result, re-run with the **shipped** regex read straight off
+  `MALWARE_PATTERN_TABLE` over the same corpus: old **8** hits / 4 packages, new
+  **0** / 0; danger verdicts **7 -> 3**, the four removed being exactly the
+  `@types/node` ones and the other three unchanged; `@types/node` itself goes
+  from DO NOT INSTALL to **zero dangers** (25 warning hits across 8 descriptions
+  remain, all capability/prose — see F45); and the pattern costs nothing,
+  measured twice on two slices of real bundle text (0.60s -> 0.64s over 25.7 MB,
+  0.61s -> 0.59s over 24.3 MB — inside the noise either way, against the 1.04s
+  the reverse arm would have cost). 29 new tests (the six
+  `@types/node` declaration lines verbatim, the runtime `socket.on('keylog')`
+  form a `.d.ts` fix would have missed, the `--tls-keylog`-plus-"capture"
+  sentence, the theft-verb arm, the line bound and the window bound, the priced
+  reverse-order miss, the `key`-prefix and shared-window anti-drift guards, and
+  the package-level verdict end to end); full suite **3,498 passed / 2 skipped**
+  (was 3,469/2), `ruff` clean, `mypy` clean on the touched module.
 
 ## Open follow-ups (surfaced by the F36 install-provenance pass, not yet worked)
 
@@ -2687,6 +2734,31 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   env var (`process.env.SHELL`/`ComSpec`) within a short window of the spawn,
   which is a small dataflow step rather than a wider pattern. Measure the
   assignment form's base rate over the corpus first.
+
+## Open follow-ups (surfaced by the F39 keylog-narrowing pass, not yet worked)
+
+- F45. [ ] **A declarations-only package is still scanned as if it could run**
+  — F39 measured the `.d.ts` question rather than settling it, because the
+  numbers say the answer is not the one-line exclusion it looks like.
+  `@types/node` still produces **25 warning-level hits across 8 pattern
+  descriptions** out of pure type declarations and documentation prose:
+  `child_process - command execution` from
+  `/// <reference path="child_process.d.ts" />`, `exec()` from a JSDoc example,
+  `base64 decoding` from `function atob(data: string): string;`, `eval()` from
+  an MDN link in a comment. None is a danger any more, so this is report noise
+  rather than a wrong verdict — but it scales with how much of a package is
+  declarations, and **13,828 of the 56,282 files** the phase scans across the
+  corpus are `.d.ts`. The cost of the obvious fix is measured and real: **59 of
+  1,372 packages** have no other source file, so excluding declarations makes
+  each of them report "no scannable source file found - the package code was
+  NOT analyzed" and downgrades every one to INCONCLUSIVE. Whether that is
+  honest (nothing there can execute, so there is nothing to conclude) or merely
+  loud (the phase saw everything there was to see, which is a pass) is the
+  actual question, and answering it needs a **third** terminal state — "this
+  package contains nothing executable" — rather than reusing `blind_reason`,
+  which exists to mean "we failed to look". Note the scoping before reaching
+  for it: this buys quieter reports, not detection, and F39 already removed the
+  only wrong *verdict* the declarations produced.
 
 ---
 
