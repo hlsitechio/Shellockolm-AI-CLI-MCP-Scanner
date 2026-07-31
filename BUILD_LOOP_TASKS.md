@@ -2763,7 +2763,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
 
 ## Open follow-ups (surfaced by the F37 install-hook tiering pass, not yet worked)
 
-- F41. [ ] **Every documented npm install-hook attack has an innocuous hook
+- F41. [x] **Every documented npm install-hook attack has an innocuous hook
   body** — the table F37 just tiered reads the hook *string* and nothing else,
   and that is a narrower surface than the pass presents. `eslint-scope` (2018)
   shipped `postinstall: "node ./lib/build.js"`; `ua-parser-js` (2021) shipped
@@ -2780,6 +2780,50 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   case that must not print a pass. Note the honest scoping: this makes the
   entry point *visible*, it does not make the payload detectable, and the
   writeups are the evidence that a clean hook body means very little.
+
+  New `src/hook_scripts.py` is that resolver, wired in as **PHASE 5c**:
+  `resolve_hook_targets` is a pure parser over a hook body,
+  `scan_hook_reachable_scripts` resolves each target against the installed
+  package and runs the malware table over it, and every hit is attributed to
+  the hook that ran it (`postinstall hook executes lib/build.js: …`).
+
+  It closes a real coverage hole rather than only re-labelling one: phase 5
+  selects files by **extension**, so `node scripts/postinstall` — extension-
+  less, outside `bin/`, and a shape present in the corpus — was read by
+  nothing at all.
+
+  Two calibrations, both measured over **1,965 installed packages that declare
+  an install hook** across 38 real dependency trees (**263** hook-target files
+  read). *Indirection is followed*: `npm run build` is the single most common
+  hook body in the corpus, so a script name is resolved through the manifest's
+  own `scripts` block rather than left opaque, with a depth bound and a cycle
+  guard. *`prepare` is not followed by default*: doing so makes **27 of 169**
+  hooked packages blind — 16% — and every one of the 27 is a repo-only build
+  script excluded from the published tarball (`rollup`'s
+  `scripts/check-release.js`, `lru-cache`'s `fixup.sh`, `undici`'s
+  `./scripts/platform-shell.js`). F36 already established that npm does not run
+  `prepare` for a registry tarball, so those files are not missing, they are
+  irrelevant; a git-sourced package passes `prepare` in explicitly through the
+  same install-source index.
+
+  Blindness is correspondingly narrow, and that narrowness is the calibration:
+  the hook **names a script** and it could not be read (computed path, escapes
+  the package, missing, or an `npm run` naming a script the manifest does not
+  define). A dependency binary (`tshy`, `husky`, `node-gyp rebuild` — roughly
+  half of all occurrences) and inline `node -e` code name no file in this
+  package, so neither is blind. Over the corpus: **zero** blind marks, **zero**
+  dangers. Severity reuses phase 5's rule rather than inventing one — dangerous
+  alone, or a capability corroborated by an attacker signal in the *same* file
+  (F31) — which is measurably free here (the corroboration rule adds zero
+  dangers over the 263 targets) and is what separates `esbuild`'s installer
+  from a stager that pipes an HTTP response into `execSync`.
+
+  Verified end to end against real `npm install` runs, not fixtures alone: a
+  purpose-built stager at `postinstall: node ./lib/build.js` produces three
+  attributed dangers; `esbuild`'s genuine postinstall downloader produces zero
+  dangers with its capabilities reported as info; `left-pad` and `chalk` claim
+  nothing. 76 new tests, full suite green, ruff + mypy clean on the new module.
+  _(commit 860284c)_
 
 - F42. [ ] **The warning tier is still substring-matched, and a tree-wide sweep
   multiplies it** — F37 word-anchored the six entries with a measured
@@ -2890,6 +2934,34 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   reach for it as a small addition: scope it as its own pass, and measure how
   many real packages make outbound connections during install *before* deciding
   what an attempt is worth.
+
+## Open follow-ups (surfaced by the F41 hook-reachable pass, not yet worked)
+
+- F50. [ ] **Only the *target* package's hooks are followed into code; the
+  dependency tree's are not** — F41 resolves what the named package's install
+  hooks run. Phase 5b (F34) reads the hook *string* of every installed
+  dependency, which is precisely the surface F41 just demonstrated is too
+  narrow: a compromised transitive dependency shipping
+  `postinstall: "node install.js"` is the `eslint-scope` shape exactly, and
+  nothing follows it. The cost is measured and small — across 38 real trees,
+  1,965 hooked packages resolve to **263** target files, about 7 per tree — so
+  this is not the `next`-sized problem F48 ran into. The open question is the
+  *report*, not the scan: phase 5b already caps its summary at 10 lines and
+  prints "… and N more", which is the F42 concern, and 263 attributed info
+  lines would bury the one that matters. Settle the grouping before adding the
+  reads, and note that F42 and this task now want the same decision.
+
+- F51. [ ] **The hook target is the entry point, and the payload can be one
+  `require` away** — the pass reads the file the hook names and stops there. A
+  hook target that does `require('./lib/payload')` has its real content in a
+  file this pass never opens. For an extension-carrying file phase 5's
+  whole-package walk still covers it, so the gap is narrow — but it is exactly
+  as wide as the hole F41 closed: `node scripts/postinstall` is now read, and
+  what *it* requires is not. Following one hop needs a module resolver
+  (extension candidates, `index.js`, `package.json#main`, bare specifiers that
+  leave the package), which is why it is its own pass rather than an addition.
+  Bound it first: measure how many of the 263 real hook targets require a
+  relative sibling at all before deciding the resolver is worth its surface.
 
 ---
 
