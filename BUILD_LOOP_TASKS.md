@@ -2649,6 +2649,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   reverse-order miss, the `key`-prefix and shared-window anti-drift guards, and
   the package-level verdict end to end); full suite **3,498 passed / 2 skipped**
   (was 3,469/2), `ruff` clean, `mypy` clean on the touched module.
+  _(commit 641f7bc)_
 
 ## Open follow-ups (surfaced by the F36 install-provenance pass, not yet worked)
 
