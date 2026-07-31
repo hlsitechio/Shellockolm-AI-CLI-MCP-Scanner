@@ -2698,7 +2698,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   pre-existing file and unlinks another, one ordinary install that must stay
   silent); full suite **3,507 passed / 2 skipped** (was 3,498/2), `ruff`
   clean, `mypy` clean on the touched module.
-  _(commit PENDING)_
+  _(commit c5a0a09)_
 
 ## Open follow-ups (surfaced by the F40 phase-4 change-set pass, not yet worked)
 
