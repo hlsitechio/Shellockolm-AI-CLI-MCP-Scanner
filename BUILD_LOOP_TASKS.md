@@ -2398,7 +2398,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
 
 ## Open follow-ups (surfaced by the F34 dependency-hook pass, not yet worked)
 
-- F36. [ ] **A git-sourced dependency's `prepare` hook DID run, and phase 5b says
+- F36. [x] **A git-sourced dependency's `prepare` hook DID run, and phase 5b says
   it did not** — F34 excludes `prepare` from the auto-run set because npm does
   not run it for a registry tarball, which is right for the overwhelming
   majority and removes the only measured false positive. But npm *does* run
@@ -2407,9 +2407,35 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   manifest, which records nothing about where the package came from. A malicious
   `prepare` in a git dependency therefore executes and is then reported as "not
   run for a registry install" — the one shape this calibration is blind to.
-  Closing it means reading the sandbox's `package-lock.json`, whose per-package
-  `resolved` field records `git+ssh://` / `git+https://` for exactly these, and
-  promoting `prepare` to auto-run for those packages only.
+  Closed by reading the sandbox's `package-lock.json` and promoting `prepare` to
+  auto-run for git-sourced packages only. **Verified against the real npm
+  (11.9.0), not assumed:** a local git package whose `prepare` writes a marker
+  file produced that marker during the sandbox install. **The plan's own premise
+  was wrong in one place, and that was the real bug:** the sandbox installed with
+  `--no-save`, which suppresses `package-lock.json` *entirely* (measured — the
+  sandbox root held only `package.json` and `node_modules`), so the lockfile the
+  fix reads was never written. Shipping the reader alone would have left F36
+  permanently inert AND downgraded every `prepare`-declaring tree to a blind
+  phase; dropping the flag costs nothing (throwaway temp dir, and
+  `package-lock.json` was already in the phase-4 expected-artifact list) and
+  yields exactly the `lockfileVersion` 3 path-keyed `packages` map the reader
+  wants. The argv is pinned by a test, because re-adding `--no-save` would fail
+  no behavioural test — it would just silently return every `prepare` to
+  "unknown". Both lockfile layouts are read (v2/3 flat map, v1 nested tree,
+  iterative + depth-bounded as untrusted input); re-measured over **559 real
+  lockfiles**: 280 v3 / 165 v2 / **114 v1** (so neither reader is legacy), 19
+  carrying a git dependency for 25 git-sourced entries, all `git+ssh://`, in
+  `resolved` 20× and v1's `version` 5×. A missing/unreadable/unparseable
+  lockfile yields an `unavailable_reason`, not an empty index — "no git
+  dependencies" and "unknown" are different answers — and unknown is narrow by
+  design: it only blinds the phase when some package actually declares a
+  `prepare`, never on a lockfile-less tree with nothing at stake. Verified end to
+  end on trees the real npm produced (git dep → executed, not blind; same
+  package from the registry → still not executed, no danger, F34 intact; git dep
+  under the old argv → blind). 43 new tests; full suite **3317 passed / 2
+  skipped** (was 3274/2), `ruff` and `mypy` clean, coverage **44.47%** over the
+  28% floor (`sandbox_deps.py` at 97.19%), CI self-scan gate exit 0.
+  _(commit a5de32e)_
 
 - F37. [ ] **The install-hook danger table is flat, so "prints a URL" scores like
   "pipes curl to sh"** — `INSTALL_SCRIPT_DANGER_PATTERNS` is a substring list
@@ -2422,7 +2448,15 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   hook whose body merely *echoes* a documentation URL would score identically.
   Worth tiering (download-and-execute / encoded payload / reverse shell as
   DANGER; a bare URL or `exec` substring as a WARNING) before the pass is
-  extended any further.
+  extended any further. **F36 raised the stakes here:** a git-sourced package's
+  `prepare` now genuinely executes and is scored, and the canonical `prepare`
+  body is a *build* step — F34's own example, `remix-island`'s `rm -rf dist &&
+  npm run build`, scores a full DANGER ("Destructive file operation") the moment
+  the package is installed from a git URL, which is pinned as current behaviour
+  by `test_the_f34_calibration_case_inverts_when_the_package_is_git_sourced`.
+  Deleting your own `dist/` before rebuilding it is not an attack; a tiered table
+  would rank it well below `curl | sh`. Expect the first real-world false danger
+  from this pass to be a build script, not a payload.
 
 ## Open follow-ups (surfaced by the F35 corroboration pass, not yet worked)
 
@@ -2460,6 +2494,23 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   co-occur with a capability the way the other prose patterns now do. Measure
   which one holds over the corpus; a type-declaration package reaching DO NOT
   INSTALL is the most obviously wrong verdict the phase currently produces.
+
+## Open follow-ups (surfaced by the F36 install-provenance pass, not yet worked)
+
+- F40. [ ] **Phase 4 computes `modified_files` and `deleted_files` and throws
+  them away** — `compare_snapshots` returns all three sets, but only `new_files`
+  is ever filtered and reported (`src/cli.py`, the phase-4 block): the other two
+  are unpacked into locals that nothing reads. So a install script that *appends
+  to* or *truncates* a file that already existed is invisible to the dropped-file
+  check, which only ever answers "what was created". The exposed surface is
+  genuinely small — before the install the sandbox holds one file we wrote — so
+  this is a completeness gap, not a live hole, and it should be scoped honestly
+  rather than sold as a new detection. Note the wrinkle F36 just added: npm now
+  legitimately rewrites `package.json` (that is the price of the lockfile), so
+  naively reporting modifications would false-positive on npm's own write on
+  *every* run. Any fix needs the same expected-artifact filter `new_files`
+  already has, extended to modifications, plus a decision about whether a
+  *deleted* sandbox file is worth a line at all.
 
 ---
 
