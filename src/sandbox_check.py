@@ -655,6 +655,49 @@ def _wired_within(first: str, second: str) -> str:
     gap = r"[\s\S]{0,%d}?" % NETWORK_EXEC_WINDOW
     return f"(?:{first}{gap}{second})|(?:{second}{gap}{first})"
 
+
+#: How far along a spawn call's command line the shell-payload check reads. The
+#: bound is a *line*, not a character window over the file, so the check cannot
+#: run off the end of the call into an unrelated statement — a command line is
+#: written on one line even in a minified bundle.
+SHELL_COMMAND_WINDOW = 200
+
+#: The call forms that start a process, up to and including the opening quote of
+#: their first argument. The three shell shapes below share this prefix and are
+#: spelled as ONE branch after it rather than three whole patterns: repeating the
+#: prefix made the pattern **4x** slower over 23.5 MB of real bundles
+#: (1.09s -> 4.24s), because the engine re-scans the file per alternative.
+#: ``(?:\.|\b)`` is likewise dropped for a plain ``\b`` — the two are equivalent
+#: here (``.`` is a non-word character, so a boundary already sits before the
+#: ``e`` of ``cp.exec``) and the alternation cost 0.26s of the remainder.
+_PROCESS_CALL = r"\b(?:exec|execSync|execFile|execFileSync|spawn|spawnSync)\s*\(\s*['\"`]"
+
+#: A raw shell binary, spelled the way a spawn call spells it. The leading
+#: ``(?:/(?:usr/)?bin/)|\b`` is one alternation rather than a plain ``\b``
+#: because there is no word boundary between a quote and the ``/`` of an
+#: absolute path; without the boundary, the bare ``sh`` alternative matches
+#: inside ``npm publish``.
+_SHELL_BINARY = (
+    r"(?:(?:/(?:usr/)?bin/)|\b)(?:sh|bash|zsh|dash|ash)\b"
+    r"|\bcmd(?:\.exe)?\b|\bpowershell(?:\.exe)?\b|\bpwsh(?:\.exe)?\b"
+)
+
+#: PowerShell, which gets its own arm because its encoded-payload flags are
+#: ambiguous outside it.
+_POWERSHELL = r"(?:powershell(?:\.exe)?|pwsh(?:\.exe)?)"
+
+#: What makes a shell command line a delivery mechanism: it fetches the payload
+#: (``curl``, ``certutil``, a ``/dev/tcp`` socket) or decodes one it carries.
+_SHELL_PAYLOAD = (
+    r"\bcurl\b|\bwget\b|Invoke-WebRequest|\biwr\b|Net\.WebClient|DownloadString"
+    r"|DownloadFile|\bcertutil\b|\bbitsadmin\b|/dev/tcp|\bnc\s+-e|\bbase64\s+-d\b"
+)
+
+#: PowerShell's encoded-payload spellings. Kept PowerShell-only, and NOT folded
+#: into :data:`_SHELL_PAYLOAD`, because ``-ec`` and ``-e`` are also POSIX shell
+#: flags: ``bash -ec "npm run build"`` is a real build idiom.
+_POWERSHELL_ENCODED = r"-(?:enc|ec|e)\b|EncodedCommand|FromBase64String"
+
 #: The calibrated pattern table applied to each installed ``.js`` file.
 #:
 #: Calibration rules (build-loop follow-up F31), each pinned by a test over real
@@ -732,12 +775,50 @@ MALWARE_PATTERN_TABLE: Tuple[MalwarePattern, ...] = (
     MalwarePattern(
         r"reverse[\s._-]?shell|bind[\s._-]?shell", "shell backdoor"
     ),
-    # Spawning a raw shell binary, as opposed to spawning `git` or `node`.
-    # Measured at zero hits across 480 installed real packages, which is why
-    # this one is trusted on its own where bare `spawn()` is not.
+    # A shell spawned for one of the two reasons an attacker spawns one.
+    #
+    # F31 introduced this as "spawning a raw shell binary, as opposed to
+    # spawning `git` or `node`" and measured it at zero hits over 480 packages.
+    # A wider sweep — 2,080 unique installed packages, 82,677 scanned files —
+    # falsifies that: invoking an interpreter to *query the OS* or hand a path
+    # to a Windows helper is what every cross-platform tool does. All four hits
+    # it produced are support code. `vite` runs `execSync('powershell -NoProfile
+    # -Command "[Console]::OutputEncoding=…"')`, `app-builder-lib` runs
+    # `exec("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+    # "Get-Command pwsh.exe"])`, and `next`'s dev overlay runs
+    # `spawn("cmd.exe", ["/C", editor].concat(args))` to open your editor. The
+    # old pattern called all three DO NOT INSTALL — worse, since it is
+    # always-dangerous AND a context signal, one hit both condemned the package
+    # and escalated every capability in the file with it (F38).
+    #
+    # Narrowed to the two shapes with no benign twin:
+    #
+    # * the shell is handed **no command at all** — an interactive shell whose
+    #   stdio the caller then wires somewhere, i.e. the reverse shell. Support
+    #   code always passes a command (`sh -c "npm run build"`, `powershell
+    #   -Command …`), so an absent or **empty** argv is what separates them —
+    #   empty, not short, because `next` passes a two-element one;
+    # * the command line carries a **payload**: a downloader (`cmd.exe /c curl …
+    #   && a.exe`) or, for PowerShell only, an encoded one (`-enc`,
+    #   `FromBase64String`). Reading past the first string literal to the rest of
+    #   the line is what catches `execFile('cmd.exe', ['/c', 'curl …'])`, which
+    #   the old first-literal-only pattern could not see.
+    #
+    # The union fires on zero of those 2,080 packages and on every malicious
+    # fixture, and costs nothing: 0.88s vs the old 1.07s over 23.5 MB of real
+    # bundles (see :data:`_PROCESS_CALL` for why the spelling matters).
     MalwarePattern(
-        r"(?:\.|\b)(?:exec|execSync|execFile|execFileSync|spawn|spawnSync)\s*\(\s*"
-        r"['\"`][^'\"`\n]*(?:/bin/(?:sh|bash|zsh)|cmd\.exe|powershell)",
+        _PROCESS_CALL + r"(?:"
+        # the shell IS the whole argument: no command, empty or absent argv
+        r"\s*(?:" + _SHELL_BINARY + r")\s*['\"`]\s*(?:\)|,\s*\[\s*\]\s*[,)])"
+        # or the command line carries a payload
+        r"|[^\n]{0,%d}?(?:" % SHELL_COMMAND_WINDOW
+        + r"(?:" + _SHELL_BINARY + r")[^\n]{0,%d}?(?:" % SHELL_COMMAND_WINDOW
+        + _SHELL_PAYLOAD + r")"
+        r"|" + _POWERSHELL + r"[^\n]{0,%d}?(?:" % SHELL_COMMAND_WINDOW
+        + _POWERSHELL_ENCODED + r")"
+        r")"
+        r")",
         "shell process spawned",
     ),
     # A command string that fetches and immediately executes. The install-script

