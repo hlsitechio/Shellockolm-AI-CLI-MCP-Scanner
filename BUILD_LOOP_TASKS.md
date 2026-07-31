@@ -2437,7 +2437,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   28% floor (`sandbox_deps.py` at 97.19%), CI self-scan gate exit 0.
   _(commit a5de32e)_
 
-- F37. [ ] **The install-hook danger table is flat, so "prints a URL" scores like
+- F37. [x] **The install-hook danger table is flat, so "prints a URL" scores like
   "pipes curl to sh"** — `INSTALL_SCRIPT_DANGER_PATTERNS` is a substring list
   with no severity tiers, and every hit is a full DANGER. That was tolerable
   when it ran against one package the user had explicitly named; F34 now applies
@@ -2457,6 +2457,66 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   Deleting your own `dist/` before rebuilding it is not an attack; a tiered table
   would rank it well below `curl | sh`. Expect the first real-world false danger
   from this pass to be a build script, not a payload.
+  Closed with two severities on one table. **The prediction held exactly, and
+  the measurement is the whole finding:** re-walked **175,127 installed
+  manifests** across **32,124 `node_modules` trees**, yielding **1,761 unique
+  install-hook bodies over 761 packages**. The flat table produced **six** DANGER
+  lines there and **all six are build scripts** — `remix-island`'s `rm -rf dist
+  && npm run build`, `http-call`'s `rm -rf lib && tsc`,
+  `@google-cloud/cloud-sql-connector`'s `rm -rf dist && npm run compile` (two
+  versions), `faiss-node`'s source build (the "External URL" line F37 named),
+  and `phenomenon`'s `$npm_execpath run test`, which matched **`exec` inside a
+  variable name**. Zero true positives. After tiering: **zero** dangers over the
+  same corpus, and **zero coverage lost** — every one of the twenty original
+  substrings still produces a line, one tier down, pinned by
+  `test_every_flat_table_substring_still_produces_a_line`.
+  The DANGER tier is five composite shapes, none of which has a reading in which
+  a package is merely building itself: a downloader piped to a shell (both
+  orders of the PowerShell `IEX`/`DownloadString` form), a downloaded file
+  executed, a decoded payload run (`base64 -d | sh`, `eval(Buffer.from(…,
+  'base64'))`, `powershell -enc <blob>`), a reverse shell (`/dev/tcp`, `nc -e`,
+  `ncat --exec`, `socat …EXEC:`, `sh -i >&`), and local data on an outbound
+  request (`curl -d "$(env | base64)"`). **The naive spelling of "downloaded
+  file executed" was wrong and measuring caught it:** a downloader followed by
+  any `./something` reads `curl -o deps.tgz … && ./scripts/unpack.sh` as an
+  attack, so the row back-references the *downloaded filename* instead — four
+  such benign shapes are fixtures. The warning tier is the original twenty,
+  demoted, with six word-anchored because the substring form matched across a
+  word boundary (`"nc "` matched `npm run sync`, `".bat"` matched `.batch`,
+  `"eval"` matched `retrieval`, `"curl"` `curly`, `"wget"` `widget`) and
+  `"rm -rf"` missed `rm -fr` and `rm -r` entirely. Warnings are carried through
+  `InstallScriptReport.warnings` → `InstalledPackageScripts.warnings` →
+  `SandboxFindings`, package-qualified the same way dangers are, so a
+  dependency's capability is reported and named without deciding the verdict.
+  Finding lines now quote the hook fragment that **matched** rather than the
+  rule that fired, which the regex table made unreadable otherwise.
+  The danger tier was then stress-tested on a far wider set of real command
+  lines — **104,467 unique `scripts` bodies over 6,207 packages and 5,450
+  distinct script names**, i.e. every build/test/release script in the same
+  trees. The flat table calls **3,434 of them (3.3%)** a DANGER — 2,213 for
+  `rm -rf`, 526 for `exec`, 140 for `"nc "`. The tiered one flags **one**:
+  `diff2html`'s `coverage:push`, which really is
+  `curl -Ls https://coverage.codacy.com/get.sh | bash`. Scoped honestly — those
+  scripts never auto-run, so that measures the patterns, not the production
+  surface; the install-hook corpus is the production surface.
+  **Turning a substring table into a regex table introduced a denial of service,
+  and only benchmarking found it.** A bounded `[^\n]{0,200}` window is retried at
+  every start position and the exfil row's three `[^\n]*` lookaheads each rescan
+  to end of line, so cost is quadratic in a body length the *package* chooses: a
+  43 KB hook body took **38 seconds**. Two fixes, both measured — the exfil row
+  is anchored to line starts (`(?m)^`), which cannot change what it matches
+  since each lookahead already scanned the whole line, and the table reads at
+  most `HOOK_BODY_SCAN_LIMIT` (4,000) characters. Worst case over the same
+  adversarial inputs at **10x the size**: 38,000 ms -> **4.7 ms**, and the
+  normal path got faster too (37 -> 20 us per body). 4,000 is ~7.5x the longest
+  real install hook in the corpus (**532** chars, `stacktrace-gps`; p99 102,
+  median 15), so nothing real is truncated — and a body that does exceed it is
+  reported and marks the phase **blind** rather than being silently half-read,
+  which is the F29 rule applied to the one input an attacker fully controls.
+  94 new tests; full suite **3431 passed / 2 skipped** (was 3317/2), `ruff` and
+  `mypy` clean, coverage **44.68%** over the 28% floor (`sandbox_check.py` at
+  99.25%, `sandbox_deps.py` at 97.35%), CI self-scan gate exit 0.
+  _(commit PENDING)_
 
 ## Open follow-ups (surfaced by the F35 corroboration pass, not yet worked)
 
@@ -2511,6 +2571,40 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   *every* run. Any fix needs the same expected-artifact filter `new_files`
   already has, extended to modifications, plus a decision about whether a
   *deleted* sandbox file is worth a line at all.
+
+## Open follow-ups (surfaced by the F37 install-hook tiering pass, not yet worked)
+
+- F41. [ ] **Every documented npm install-hook attack has an innocuous hook
+  body** — the table F37 just tiered reads the hook *string* and nothing else,
+  and that is a narrower surface than the pass presents. `eslint-scope` (2018)
+  shipped `postinstall: "node ./lib/build.js"`; `ua-parser-js` (2021) shipped
+  `preinstall: "start /B node preinstall.js & node preinstall.js"`; `coa` and
+  `rc` shipped `node compile.js`. Not one contains a pattern from either tier,
+  and every one of them stole credentials. The payload was in the *referenced
+  file*, which phase 5 does read — but only as part of a whole-package sweep,
+  with no link back to "this is the file the install hook executes", so a hit
+  there is one malware-pattern line among hundreds rather than the thing that
+  ran. Worth resolving a hook body's referenced script path (`node <path>`,
+  `sh <path>`, `./<path>`), scanning that file with the malware table, and
+  reporting it as hook-reachable code — plus a blind mark when the path cannot
+  be resolved, since "the hook runs something we could not find" is exactly the
+  case that must not print a pass. Note the honest scoping: this makes the
+  entry point *visible*, it does not make the payload detectable, and the
+  writeups are the evidence that a clean hook body means very little.
+
+- F42. [ ] **The warning tier is still substring-matched, and a tree-wide sweep
+  multiplies it** — F37 word-anchored the six entries with a measured
+  cross-word false match and deliberately left the rest literal, because
+  over-matching a warning costs a line rather than a verdict. That reasoning
+  holds per package and gets weaker per tree: `exec` matches inside
+  `npm_execpath` (measured), `socket` inside `websocket`, `base64` inside a
+  filename, and F34 runs the table over every installed dependency, so each
+  hooked package can contribute several such lines to one summary — which caps
+  its display at 10 and then prints "... and N more". Worth measuring how many
+  warning lines a real install of a large tree actually produces before
+  deciding between calibrating the tier and grouping the summary by
+  description. Do not guess at the number: the whole point of F37 was that the
+  base rate here is far lower than it looks.
 
 ---
 

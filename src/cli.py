@@ -4699,6 +4699,7 @@ def interactive_shell():
 
                     from sandbox_snapshot import compare_snapshots, snapshot_directory
                     from sandbox_check import (
+                        HOOK_BODY_SCAN_LIMIT,
                         SandboxFindings,
                         analyze_install_scripts,
                         build_verdict_summary,
@@ -4802,7 +4803,25 @@ def interactive_shell():
 
                                 # Check for install scripts in metadata
                                 script_report = analyze_install_scripts(pkg_data.get('scripts', {}))
-                                findings.extend(dangers=script_report.dangers)
+                                # Two tiers since F37: only the composite shapes
+                                # (download piped to a shell, decoded payload,
+                                # reverse shell) block the install. A hook that
+                                # merely prints a URL or deletes its own dist/
+                                # is reported as a warning and decides nothing.
+                                findings.extend(
+                                    dangers=script_report.dangers,
+                                    warnings=script_report.warnings,
+                                )
+                                # A hook body too long to read in full was read
+                                # in part, and "found nothing in the first 4,000
+                                # characters" is not a pass (the F29 rule).
+                                if script_report.truncated_hooks:
+                                    findings.mark_blind(
+                                        "Install-script analysis",
+                                        f"{', '.join(script_report.truncated_hooks)} hook "
+                                        f"body exceeds {HOOK_BODY_SCAN_LIMIT} characters "
+                                        f"- it was NOT read in full",
+                                    )
                                 metadata_scripts_analyzed = True
 
                                 if script_report.has_hooks:
@@ -5032,7 +5051,10 @@ def interactive_shell():
                                 console.print(f"    [dim]{format_hooked_package_line(entry)}[/dim]")
                             if len(dep_report.with_hooks) > 10:
                                 console.print(f"    [dim]... and {len(dep_report.with_hooks) - 10} more[/dim]")
-                            findings.extend(dangers=dep_report.dangers)
+                            findings.extend(
+                                dangers=dep_report.dangers,
+                                warnings=dep_report.warnings,
+                            )
 
                         # A pass that could not read the manifests never reports
                         # a clean dependency tree.

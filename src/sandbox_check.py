@@ -30,6 +30,32 @@ Design rules, all of which the tests pin:
   context signal. The uncalibrated table condemned lodash, chalk, axios,
   typescript, webpack, eslint, commander and bluebird; the current one produces
   zero dangers across a real install of 480 packages.
+
+  F37 applied the same rule to the **install-hook** table, which was still a
+  flat substring list where every hit was a full DANGER — so a hook that echoed
+  a documentation URL scored exactly like one that piped ``curl`` to ``sh``.
+  That was tolerable while it ran against one package the user had named; F34
+  applies it across the whole dependency tree, and F36 made a git-sourced
+  package's ``prepare`` genuinely execute — and the canonical ``prepare`` body
+  is a *build* step. Re-measured over 175,127 installed manifests (1,761 unique
+  hook bodies across 761 packages), the flat table produced **six** DANGER lines
+  and **all six were build scripts**: ``rm -rf dist && npm run build``,
+  ``rm -rf lib && tsc``, ``faiss-node``'s source build (reported as "External
+  URL"), and ``phenomenon``'s ``$npm_execpath run test``, which matched
+  ``exec`` *inside a variable name*. The table now has two tiers: composite
+  attacks (a downloader wired to a shell, a decoded payload run, a shell wired
+  to a socket) are dangers; the twenty original substrings are warnings, none
+  removed. Same corpus after tiering: **zero** dangers, zero coverage lost.
+
+  The danger tier was then stress-tested against a much wider set of real
+  command lines — **104,467 unique ``scripts`` bodies over 6,207 packages and
+  5,450 distinct script names**, i.e. every build, test and release script in
+  the same trees, not just the four install hooks. The flat table calls
+  **3,434 of them (3.3%)** a DANGER. The tiered one flags **one** — the genuine
+  ``curl -Ls https://coverage.codacy.com/get.sh | bash`` in ``diff2html``'s
+  ``coverage:push``. (Those scripts never auto-run, so this is a precision
+  measurement of the patterns, not of the production surface; the install-hook
+  corpus above is that.)
 * **The expected-location filter is anchored.** The inline filter asked
   ``any(pattern in path for pattern in expected)``, an unanchored substring test:
   a payload written to ``evil-package.json`` matched ``package.json`` and a
@@ -194,42 +220,249 @@ def installed_package_dirname(pkg_spec: str) -> str:
 #: npm lifecycle hooks that run automatically on `npm install`.
 INSTALL_SCRIPT_HOOKS: Tuple[str, ...] = ("preinstall", "install", "postinstall", "prepare")
 
-#: (substring, human description) pairs treated as dangerous inside a hook.
-INSTALL_SCRIPT_DANGER_PATTERNS: Tuple[Tuple[str, str], ...] = (
-    ("curl", "Downloads external content"),
-    ("wget", "Downloads external content"),
-    ("eval", "Dynamic code execution"),
-    ("exec", "Command execution"),
-    ("child_process", "Spawns processes"),
-    ("rm -rf", "Destructive file operation"),
-    ("base64", "Encoded payload"),
-    ("/dev/tcp", "Network backdoor"),
-    ("powershell", "PowerShell execution"),
-    ("cmd.exe", "Windows command execution"),
-    (".bat", "Batch script execution"),
-    ("nc ", "Netcat - reverse shell"),
-    ("netcat", "Netcat - reverse shell"),
-    ("/bin/sh", "Shell execution"),
-    ("/bin/bash", "Bash execution"),
-    ("socket", "Network socket"),
-    ("XMLHttpRequest", "HTTP request"),
-    ("fetch(", "HTTP fetch"),
-    ("https://", "External URL"),
-    ("http://", "External URL (insecure)"),
+class HookSeverity(str, Enum):
+    """How much a single install-hook pattern is allowed to claim.
+
+    :data:`DANGER` blocks the install on its own; :data:`WARNING` is reported
+    and shown, but never decides the verdict by itself.
+    """
+
+    DANGER = "danger"
+    WARNING = "warning"
+
+
+@dataclass(frozen=True)
+class InstallScriptPattern:
+    """One row of the install-hook table: what to look for, and how loudly."""
+
+    regex: str
+    description: str
+    severity: HookSeverity
+    ignore_case: bool = True
+
+
+# --- the DANGER tier -------------------------------------------------------
+#
+# Composite shapes only: a downloader *wired to* an execution sink, a payload
+# that is decoded and then run, or a shell wired to a socket. Each is a
+# complete attack in one command line, and none of them has a reading in which
+# an ordinary package is merely building itself.
+
+#: The commands that pull bytes off the network inside a hook body.
+_HOOK_DOWNLOADER = r"(?:curl|wget)"
+
+#: A shell being asked to interpret something, with or without an absolute path.
+_HOOK_SHELL = r"(?:sudo\s+)?(?:/(?:usr/)?bin/)?(?:ba|z|k|da)?sh\b"
+
+#: PowerShell's download primitives, which take the place of curl on Windows.
+_HOOK_PS_DOWNLOAD = r"(?:Invoke-WebRequest|Invoke-RestMethod|\biwr\b|Net\.WebClient|DownloadString|DownloadFile)"
+
+
+# --- the WARNING tier ------------------------------------------------------
+#
+# The original flat table, unchanged in coverage and demoted in severity. Every
+# one of these describes a *capability*: fetching a file, running a subprocess,
+# deleting a directory. Real install hooks do all of it — `node-gyp` shells
+# out, `prebuild-install` downloads a binary, and the canonical `prepare` body
+# is `rm -rf dist && npm run build`. Whether that is an attack is decided by
+# what the capability is wired to, which is what the DANGER tier asks.
+#
+# Six entries are word-anchored rather than raw substrings, each because the
+# substring form matched across a word boundary: `"nc "` matched `npm run
+# sync foo`, `".bat"` matched `.batch`, `"eval"` matched `retrieval`, `"curl"`
+# matched `curly`, `"wget"` matched `widget`, and `"rm -rf"` missed `rm -fr`
+# and `rm -r` entirely. The rest stay literal: over-matching costs a warning
+# line, and narrowing them would be a coverage loss for no gain.
+
+#: The install-hook table, ordered DANGER-first so a report leads with the
+#: strongest thing it found.
+INSTALL_SCRIPT_PATTERN_TABLE: Tuple[InstallScriptPattern, ...] = (
+    # curl … | sh — the crypto-miner dropper, and the shape every writeup opens
+    # with. On Windows the same thing is `DownloadString(...) | iex`.
+    InstallScriptPattern(
+        rf"{_HOOK_DOWNLOADER}\b[^\n]{{0,200}}\|\s*{_HOOK_SHELL}"
+        rf"|{_HOOK_PS_DOWNLOAD}[^\n]{{0,200}}(?:\biex\b|Invoke-Expression)"
+        # `IEX (New-Object Net.WebClient).DownloadString(…)` is the same command
+        # with the two halves swapped, and is the form every writeup quotes.
+        rf"|(?:\biex\b|Invoke-Expression)[^\n]{{0,200}}{_HOOK_PS_DOWNLOAD}",
+        "downloaded content piped to a shell",
+        HookSeverity.DANGER,
+    ),
+    # The two-statement form of the same attack: fetch to disk, then run it.
+    #
+    # The naive spelling — a downloader followed by any `./something` — reads
+    # `curl -o deps.tgz … && ./scripts/unpack.sh` as an attack, and that is a
+    # real build hook. So the executed path has to be *the file the downloader
+    # just wrote*, matched by back-reference. `chmod +x` after a download needs
+    # no back-reference: marking anything executable in the same breath as
+    # fetching it is the shape, whatever it is named.
+    InstallScriptPattern(
+        rf"{_HOOK_DOWNLOADER}\b[^\n]{{0,200}}?"
+        r"(?:--output-document=?|--output|-o|-O|>)\s*['\"]?([\w./\\-]+)['\"]?"
+        rf"[^\n]{{0,200}}(?:;|&&|\|\||\|)\s*(?:sudo\s+)?"
+        rf"(?:{_HOOK_SHELL}\s+|\./|chmod\s+[+0-7ugoa]*x\s+)['\"]?\1\b"
+        rf"|{_HOOK_DOWNLOADER}\b[^\n]{{0,200}}(?:;|&&|\|\|)\s*"
+        r"(?:sudo\s+)?chmod\s+[+0-7ugoa]*x\b",
+        "downloaded file executed",
+        HookSeverity.DANGER,
+    ),
+    # Decoding base64 is ordinary data handling; decoding it *into an
+    # interpreter* is the dropper cradle. `powershell -enc <blob>` is the same
+    # move with the encoding built into the flag.
+    InstallScriptPattern(
+        r"base64\s+-{1,2}[a-z]*d[a-z]*\b[^\n]{0,120}\|\s*" + _HOOK_SHELL
+        + r"|\|\s*base64\s+-{1,2}[a-z]*d[a-z]*\b[^\n]{0,120}\|\s*" + _HOOK_SHELL
+        + r"|(?:eval|exec|execSync|spawnSync|new\s+Function)\s*\(\s*[^;\n]{0,80}?"
+        r"(?:Buffer\.from\s*\([^)\n]*['\"]base64['\"]|\batob\s*\()"
+        r"|powershell[^\n]{0,60}?\s-e(?:nc(?:odedcommand)?)?\s+['\"]?[A-Za-z0-9+/]{20,}",
+        "encoded payload executed",
+        HookSeverity.DANGER,
+    ),
+    # A shell wired to a socket. `/dev/tcp` has no other use; `nc -e`, `ncat
+    # --exec` and `socat … EXEC:` are the same instruction spelled three ways.
+    InstallScriptPattern(
+        r"/dev/(?:tcp|udp)/"
+        r"|\bnc(?:\.exe)?\s+[^\n]{0,80}?-[a-zA-Z]*e[a-zA-Z]*\s"
+        r"|\bncat\b[^\n]{0,80}--(?:exec|sh-exec|lua-exec)"
+        r"|\bsocat\b[^\n]{0,120}(?:EXEC|SYSTEM):"
+        r"|(?:ba|z|k)?sh\s+-i\b[^\n]{0,80}(?:>&|<>|2>&1)",
+        "reverse shell",
+        HookSeverity.DANGER,
+    ),
+    # The exfil hook: an upload flag on a downloader, carrying the output of a
+    # command substitution or an environment read. This is how a dependency-
+    # confusion payload ships `$(env | base64)` or `$(whoami)` to its collector.
+    # Every part has to be on one line, so a multi-line build script that
+    # happens to use all three does not add up to a finding.
+    #
+    # Anchored to line starts (``(?m)^``) rather than left to float. Three
+    # unanchored ``[^\n]*`` lookaheads are retried at every character, and each
+    # one rescans to the end of the line — quadratic in the body length, which
+    # a hostile package controls. Anchoring makes it one attempt per line and
+    # changes nothing about what it matches, since every lookahead already
+    # scanned the whole line from wherever it started.
+    InstallScriptPattern(
+        r"(?m)^(?=[^\n]*(?:curl|wget|Invoke-RestMethod|Invoke-WebRequest))"
+        r"(?=[^\n]*(?:\s-d\b|--data\b|--data-binary\b|\s-F\b|--form\b|\s-T\b"
+        r"|--upload-file\b|-Method\s+Post))"
+        r"(?=[^\n]*(?:\$\(|\$\{?(?:HOME|USER|PWD|HOSTNAME|PATH|NPM_TOKEN)\b"
+        r"|%USERPROFILE%|%USERNAME%|process\.env))",
+        "local data sent to a remote endpoint",
+        HookSeverity.DANGER,
+    ),
+    InstallScriptPattern(r"\bcurl\b", "Downloads external content", HookSeverity.WARNING),
+    InstallScriptPattern(r"\bwget\b", "Downloads external content", HookSeverity.WARNING),
+    InstallScriptPattern(r"\beval", "Dynamic code execution", HookSeverity.WARNING),
+    InstallScriptPattern(r"exec", "Command execution", HookSeverity.WARNING),
+    InstallScriptPattern(r"child_process", "Spawns processes", HookSeverity.WARNING),
+    InstallScriptPattern(
+        r"\brm\s+-[a-zA-Z]*[rf]\b", "Destructive file operation", HookSeverity.WARNING
+    ),
+    InstallScriptPattern(r"base64", "Encoded payload", HookSeverity.WARNING),
+    InstallScriptPattern(r"/dev/tcp", "Network backdoor", HookSeverity.WARNING),
+    InstallScriptPattern(r"powershell", "PowerShell execution", HookSeverity.WARNING),
+    InstallScriptPattern(r"cmd\.exe", "Windows command execution", HookSeverity.WARNING),
+    InstallScriptPattern(r"\.bat\b", "Batch script execution", HookSeverity.WARNING),
+    InstallScriptPattern(r"\bnc\s", "Netcat - reverse shell", HookSeverity.WARNING),
+    InstallScriptPattern(r"netcat", "Netcat - reverse shell", HookSeverity.WARNING),
+    InstallScriptPattern(r"/bin/sh", "Shell execution", HookSeverity.WARNING),
+    InstallScriptPattern(r"/bin/bash", "Bash execution", HookSeverity.WARNING),
+    InstallScriptPattern(r"socket", "Network socket", HookSeverity.WARNING),
+    InstallScriptPattern(r"XMLHttpRequest", "HTTP request", HookSeverity.WARNING),
+    InstallScriptPattern(r"fetch\(", "HTTP fetch", HookSeverity.WARNING),
+    InstallScriptPattern(r"https://", "External URL", HookSeverity.WARNING),
+    InstallScriptPattern(r"http://", "External URL (insecure)", HookSeverity.WARNING),
 )
+
+#: Backwards-compatible ``(pattern, description)`` views, one per tier. The
+#: single flat ``INSTALL_SCRIPT_DANGER_PATTERNS`` used to hold both, which is
+#: exactly the conflation F37 removes: "prints a documentation URL" scored the
+#: same as "pipes curl to sh".
+INSTALL_SCRIPT_DANGER_PATTERNS: Tuple[Tuple[str, str], ...] = tuple(
+    (entry.regex, entry.description)
+    for entry in INSTALL_SCRIPT_PATTERN_TABLE
+    if entry.severity is HookSeverity.DANGER
+)
+INSTALL_SCRIPT_WARNING_PATTERNS: Tuple[Tuple[str, str], ...] = tuple(
+    (entry.regex, entry.description)
+    for entry in INSTALL_SCRIPT_PATTERN_TABLE
+    if entry.severity is HookSeverity.WARNING
+)
+
+_COMPILED_INSTALL_SCRIPT_PATTERNS: Tuple[Tuple[Any, InstallScriptPattern], ...] = tuple(
+    (
+        re.compile(entry.regex, re.IGNORECASE if entry.ignore_case else 0),
+        entry,
+    )
+    for entry in INSTALL_SCRIPT_PATTERN_TABLE
+)
+
+
+#: How much of a matched hook fragment a finding line quotes.
+HOOK_SNIPPET_LIMIT = 80
+
+#: How much of a hook body the pattern table reads.
+#:
+#: The table is regexes now, and several carry a bounded ``[^\n]{0,200}`` window
+#: that the engine retries at every start position — linear work per character,
+#: so quadratic in a body whose length a hostile package chooses. Measured: a
+#: 43 KB hook body took **38 seconds**, which is a denial of service against the
+#: scanner rather than a scan. The limit bounds that.
+#:
+#: 4,000 is ~7.5x the longest install hook in the corpus F37 measured: over
+#: 1,761 unique hook bodies from 175,127 installed manifests the maximum was
+#: **532** characters (``stacktrace-gps``), p99 was 102, and the median 15. No
+#: real package is truncated by this; a body that exceeds it is itself unusual,
+#: which is why exceeding it is reported rather than passed over.
+HOOK_BODY_SCAN_LIMIT = 4000
+
+
+def _matched_snippet(match: Any) -> str:
+    """The text a hook pattern actually matched, trimmed for one console line.
+
+    The old table quoted the *pattern* (``"rm -rf"``), which worked only
+    because every pattern was a literal substring. Quoting the match instead
+    stays readable now that the entries are regexes, and says more: it names
+    the fragment in *this* hook rather than the rule that fired.
+
+    A pure-lookahead pattern matches the empty string, so the head of the hook
+    body stands in — a finding whose evidence line is blank is not a finding.
+    """
+    text = " ".join((match.group(0) or "").split())
+    if not text:
+        text = " ".join((match.string or "").split())
+    if len(text) > HOOK_SNIPPET_LIMIT:
+        text = text[: HOOK_SNIPPET_LIMIT - 1].rstrip() + "…"
+    return text
 
 
 @dataclass
 class InstallScriptReport:
-    """Which lifecycle hooks a package declares, and what they contain."""
+    """Which lifecycle hooks a package declares, and what they contain.
+
+    ``dangers`` and ``warnings`` are the two tiers of
+    :data:`INSTALL_SCRIPT_PATTERN_TABLE`. Only ``dangers`` reaches
+    :meth:`SandboxFindings.verdict`; a warning is reported and never blocks.
+    """
 
     hooks: List[str] = field(default_factory=list)
     bodies: Dict[str, str] = field(default_factory=dict)
     dangers: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    #: Hooks whose body was longer than :data:`HOOK_BODY_SCAN_LIMIT`, so only
+    #: its head was matched against the table. Carried separately so a caller
+    #: can mark the phase blind: "we read the first 4,000 characters and found
+    #: nothing" is not the same claim as "this hook is clean".
+    truncated_hooks: List[str] = field(default_factory=list)
 
     @property
     def has_hooks(self) -> bool:
         return bool(self.hooks)
+
+    @property
+    def has_findings(self) -> bool:
+        """Whether the hooks matched anything at all, at either severity."""
+        return bool(self.dangers or self.warnings)
 
 
 def analyze_install_scripts(scripts: Any) -> InstallScriptReport:
@@ -251,10 +484,23 @@ def analyze_install_scripts(scripts: Any) -> InstallScriptReport:
             body = "" if body is None else str(body)
         report.hooks.append(hook)
         report.bodies[hook] = body
-        lowered = body.lower()
-        for pattern, description in INSTALL_SCRIPT_DANGER_PATTERNS:
-            if pattern.lower() in lowered:
-                report.dangers.append(f"🚨 {hook} script: {description} ({pattern})")
+        scanned = body
+        if len(body) > HOOK_BODY_SCAN_LIMIT:
+            scanned = body[:HOOK_BODY_SCAN_LIMIT]
+            report.truncated_hooks.append(hook)
+            report.warnings.append(
+                f"⚠️ {hook} script: body is {len(body)} characters - only the "
+                f"first {HOOK_BODY_SCAN_LIMIT} were analysed"
+            )
+        for compiled, entry in _COMPILED_INSTALL_SCRIPT_PATTERNS:
+            match = compiled.search(scanned)
+            if match is None:
+                continue
+            line = f"{hook} script: {entry.description} ({_matched_snippet(match)})"
+            if entry.severity is HookSeverity.DANGER:
+                report.dangers.append(f"🚨 {line}")
+            else:
+                report.warnings.append(f"⚠️ {line}")
     return report
 
 

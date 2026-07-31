@@ -45,6 +45,7 @@ from pathlib import Path
 import pytest
 
 import sandbox_deps
+from sandbox_check import HOOK_BODY_SCAN_LIMIT
 from sandbox_codescan import scan_installed_package_code
 from sandbox_deps import (
     AUTO_RUN_DEPENDENCY_HOOKS,
@@ -61,6 +62,7 @@ from sandbox_deps import (
     load_install_source_index,
     lockfile_key_to_package_dir,
     qualify_dependency_danger,
+    qualify_dependency_warning,
     scan_installed_dependency_scripts,
 )
 
@@ -373,6 +375,65 @@ def test_benign_install_hooks_produce_no_danger(tmp_path, body):
     assert report.blind_reason() is None
 
 
+def test_a_capability_in_a_dependency_hook_is_a_warning_not_a_danger(tmp_path):
+    """The tree-wide pass is where a flat table hurts most (F37).
+
+    Phase 1 ran the table against one package the user had explicitly named.
+    F34 applied it across every installed dependency, so a build script four
+    levels down could print DO NOT INSTALL for the whole install.
+    """
+    node_modules = tmp_path / "node_modules"
+    install_package(
+        node_modules, "builder", scripts={"postinstall": "rm -rf lib && tsc -p ."}
+    )
+
+    report = scan_installed_dependency_scripts(node_modules)
+
+    assert report.dangers == []
+    assert report.warnings
+    assert all("dependency builder@1.0.0" in w for w in report.warnings)
+
+
+def test_a_hook_body_too_long_to_read_makes_the_pass_blind(tmp_path):
+    """A dependency can choose its hook length; a partial read is not a pass."""
+    node_modules = tmp_path / "node_modules"
+    install_package(
+        node_modules,
+        "verbose",
+        scripts={"postinstall": "echo hi && " + "a" * (HOOK_BODY_SCAN_LIMIT * 2)},
+    )
+
+    report = scan_installed_dependency_scripts(node_modules)
+
+    assert report.truncated_count == 1
+    assert report.with_hooks[0].truncated_hooks == ["postinstall"]
+    reason = report.blind_reason()
+    assert reason is not None
+    assert str(HOOK_BODY_SCAN_LIMIT) in reason
+
+
+def test_an_ordinary_hook_length_leaves_the_pass_conclusive(tmp_path):
+    node_modules = tmp_path / "node_modules"
+    install_package(node_modules, "ordinary", scripts={"postinstall": "node-gyp rebuild"})
+
+    report = scan_installed_dependency_scripts(node_modules)
+
+    assert report.truncated_count == 0
+    assert report.blind_reason() is None
+
+
+def test_a_conditional_hook_contributes_no_warning_either(tmp_path):
+    """Warnings follow the same rule as dangers: only what actually ran."""
+    node_modules = tmp_path / "node_modules"
+    install_package(node_modules, "quiet", scripts={"prepare": "rm -rf dist"})
+
+    report = scan_installed_dependency_scripts(node_modules)
+
+    assert report.with_hooks[0].executed is False
+    assert report.warnings == []
+    assert report.dangers == []
+
+
 def test_a_package_with_no_hooks_is_scanned_and_silent(tmp_path):
     node_modules = tmp_path / "node_modules"
     install_package(node_modules, "quiet", scripts={"test": "jest", "build": "tsc"})
@@ -674,8 +735,12 @@ def test_the_f34_calibration_case_inverts_when_the_package_is_git_sourced(tmp_pa
     finding. That inversion IS F36: the hook body never decided this, the
     provenance did.
 
-    (The line it produces, "Destructive file operation (rm -rf)", is the flat
-    danger table F37 proposes to tier; F36 only decides whether it is consulted.)
+    **F37 then tiered the line it produces.** Under the flat table this body was
+    a full DANGER — "Destructive file operation (rm -rf)" — so installing
+    ``remix-island`` from a git URL printed DO NOT INSTALL for a package
+    deleting its own ``dist/`` before rebuilding it. It is now a warning: the
+    provenance inversion still holds (the finding exists for the git install and
+    not the registry one), and it no longer condemns the package.
     """
     hook = {"prepare": "rm -rf dist && npm run build"}
 
@@ -695,9 +760,15 @@ def test_the_f34_calibration_case_inverts_when_the_package_is_git_sourced(tmp_pa
         install_sources=load_install_source_index(git_root),
     )
 
+    # The inversion, on the tier the body actually earns.
+    assert registry.warnings == []
+    assert from_git.warnings
+    assert all("rm -rf" in warning for warning in from_git.warnings)
+    assert all("dependency remix-island@1.0.0" in w for w in from_git.warnings)
+
+    # Neither reading of a build script is a DO NOT INSTALL (F37).
     assert registry.dangers == []
-    assert from_git.dangers
-    assert all("rm -rf" in danger for danger in from_git.dangers)
+    assert from_git.dangers == []
 
 
 def test_git_provenance_applies_to_the_named_package_only(tmp_path):
@@ -1013,6 +1084,21 @@ def test_danger_lines_name_the_dependency():
 
 def test_danger_qualification_tolerates_an_unmarked_line():
     assert qualify_dependency_danger("x@1", "raw text") == "🚨 dependency x@1: raw text"
+
+
+def test_warning_lines_name_the_dependency_too():
+    """An unqualified warning in the summary reads as the target's own (F37)."""
+    qualified = qualify_dependency_warning(
+        "remix-island@1.0.0", "⚠️ prepare script: Destructive file operation (rm -rf)"
+    )
+
+    assert qualified.startswith("⚠️ ")
+    assert "dependency remix-island@1.0.0" in qualified
+    assert "prepare script" in qualified
+
+
+def test_warning_qualification_tolerates_an_unmarked_line():
+    assert qualify_dependency_warning("x@1", "raw text") == "⚠️ dependency x@1: raw text"
 
 
 def test_label_falls_back_to_the_installed_directory():

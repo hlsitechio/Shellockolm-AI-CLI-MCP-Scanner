@@ -33,6 +33,12 @@ Three things make it precise rather than noisy:
   records nothing about where the package came from (build-loop follow-up F36).
   Without the lockfile a malicious ``prepare`` in a git dependency executes and
   is then reported as "not run for a registry install".
+* The hook table has two severities since F37, and this pass carries both. A
+  tree-wide sweep is where a flat table hurts most: under it, one dependency
+  four levels down running ``rm -rf dist && npm run build`` printed DO NOT
+  INSTALL for the entire install. Capabilities now arrive as
+  :attr:`InstalledPackageScripts.warnings` and are reported without deciding
+  the verdict; only a composite attack in a hook body still blocks.
 * :meth:`DependencyScriptReport.blind_reason` applies the F29 rule — an
   unreadable manifest, an unparseable one, a directory that could not be listed,
   or a ``prepare`` hook whose install source could not be determined means the
@@ -52,7 +58,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import FrozenSet, List, Optional, Tuple
 
-from sandbox_check import analyze_install_scripts
+from sandbox_check import HOOK_BODY_SCAN_LIMIT, analyze_install_scripts
 
 #: The manifest filename npm reads a package's lifecycle hooks from.
 MANIFEST_NAME = "package.json"
@@ -69,6 +75,12 @@ MAX_UNREADABLE_EXAMPLES = 3
 
 #: Danger lines from ``analyze_install_scripts`` start with this marker.
 DANGER_PREFIX = "🚨 "
+
+#: Warning lines from ``analyze_install_scripts`` start with this one. The two
+#: tiers are carried separately all the way to the summary (F37): a dependency
+#: whose `prepare` runs `rm -rf dist && npm run build` is worth a line, and it
+#: is not worth a DO NOT INSTALL.
+WARNING_PREFIX = "⚠️ "
 
 #: The lifecycle hooks npm actually runs for a package installed as a
 #: **dependency** from a registry tarball — i.e. the ones that already executed
@@ -479,6 +491,13 @@ class InstalledPackageScripts:
     #: Package-qualified danger lines (see :func:`qualify_dependency_danger`).
     #: Only ever derived from :attr:`auto_run_hooks`.
     dangers: List[str] = field(default_factory=list)
+    #: Package-qualified warning lines — a capability this hook uses, reported
+    #: without claiming it is an attack (F37). Same derivation as
+    #: :attr:`dangers`: a hook that did not run contributes neither.
+    warnings: List[str] = field(default_factory=list)
+    #: Hooks whose body exceeded ``HOOK_BODY_SCAN_LIMIT``, so the table read
+    #: only its head. Makes the pass blind rather than clean.
+    truncated_hooks: List[str] = field(default_factory=list)
     #: Whether the lockfile records this package as built from a git checkout, in
     #: which case npm also ran :data:`GIT_SOURCE_HOOK`.
     git_sourced: bool = False
@@ -560,9 +579,19 @@ class DependencyScriptReport:
         return sum(1 for entry in self.with_hooks if entry.source_unverified)
 
     @property
+    def truncated_count(self) -> int:
+        """Packages with a hook body too long to have been read in full."""
+        return sum(1 for entry in self.with_hooks if entry.truncated_hooks)
+
+    @property
     def dangers(self) -> List[str]:
         """Every package-qualified danger line, flattened for ``SandboxFindings``."""
         return [danger for entry in self.with_hooks for danger in entry.dangers]
+
+    @property
+    def warnings(self) -> List[str]:
+        """Every package-qualified warning line, flattened the same way."""
+        return [warning for entry in self.with_hooks for warning in entry.warnings]
 
     def blind_reason(self) -> Optional[str]:
         """Why this pass could not see the installed dependencies, or ``None``.
@@ -583,6 +612,13 @@ class DependencyScriptReport:
             )
         if self.dir_errors:
             parts.append(f"{self.dir_errors} directory(s) could not be listed")
+        # A hook body too long to read in full is the same shape of gap: the
+        # table saw its head and nothing after it (F37).
+        if self.truncated_count:
+            parts.append(
+                f"{self.truncated_count} dependency(s) have a hook body longer than "
+                f"{HOOK_BODY_SCAN_LIMIT} characters, read only in part"
+            )
 
         if parts:
             detail = " and ".join(parts)
@@ -610,6 +646,12 @@ class DependencyScriptReport:
         return None
 
 
+def _qualify_dependency_line(prefix: str, label: str, line: str) -> str:
+    """Insert ``dependency <label>:`` after ``prefix``, preserving the marker."""
+    body = line[len(prefix) :] if line.startswith(prefix) else line
+    return f"{prefix}dependency {label}: {body}"
+
+
 def qualify_dependency_danger(label: str, danger: str) -> str:
     """Name the dependency in a danger line lifted from ``analyze_install_scripts``.
 
@@ -618,8 +660,16 @@ def qualify_dependency_danger(label: str, danger: str) -> str:
     the *target* declared it. Every line from this pass names the transitive
     dependency instead.
     """
-    body = danger[len(DANGER_PREFIX) :] if danger.startswith(DANGER_PREFIX) else danger
-    return f"{DANGER_PREFIX}dependency {label}: {body}"
+    return _qualify_dependency_line(DANGER_PREFIX, label, danger)
+
+
+def qualify_dependency_warning(label: str, warning: str) -> str:
+    """The :func:`qualify_dependency_danger` treatment for the warning tier.
+
+    Same reason, same ambiguity to remove: an unqualified ``"prepare script:
+    Destructive file operation"`` in the summary reads as the target's own.
+    """
+    return _qualify_dependency_line(WARNING_PREFIX, label, warning)
 
 
 def scan_installed_dependency_scripts(
@@ -713,6 +763,11 @@ def scan_installed_dependency_scripts(
         entry.dangers = [
             qualify_dependency_danger(entry.label, danger) for danger in executed.dangers
         ]
+        entry.warnings = [
+            qualify_dependency_warning(entry.label, warning)
+            for warning in executed.warnings
+        ]
+        entry.truncated_hooks = list(executed.truncated_hooks)
         report.with_hooks.append(entry)
 
     return report
