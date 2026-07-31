@@ -2589,6 +2589,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   baselines); full suite **3,469 passed / 2 skipped**
   (was 3,431/2), `ruff` and `mypy` clean, coverage **44.70%** over the 28% floor,
   CI self-scan gate exit 0.
+  _(commit 64290a1)_
 
 - F39. [ ] **`@types/node` is reported as a keylogger** — the third package in
   the post-F35 residue, and the cheapest of the three. `keylogger indicators`
