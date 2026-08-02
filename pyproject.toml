@@ -47,7 +47,10 @@ dependencies = [
     "typer[all]>=0.9.0",
     "rich>=13.0.0",
     "prompt_toolkit>=3.0.0",
-    "mcp>=1.0.0",
+    # Upper bound is load-bearing: mcp 2.0.0 (2026-07-28) removed the
+    # Server.list_resources / read_resource / list_tools / call_tool decorators
+    # that src/mcp_server.py and src/server.py are built on.
+    "mcp>=1.0.0,<2.0.0",
     "pydantic>=2.0.0",
     "packaging>=23.0",
     "aiofiles>=23.0.0",
