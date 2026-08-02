@@ -3019,7 +3019,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   call names and no more (`execa`, `respawn`). Full suite **3,788 passed /
   2 skipped** (was 3,764); ruff + mypy gates clean; no doc drift (the row is not
   named in RULES.md/THREAT_MODEL.md).
-  _(commit PENDING)_
+  _(commit 91a5669)_
 
 - F59. [ ] **The corpus sweep this repo keeps citing cannot actually be run on
   this machine** — F43 needed the 2,080-package re-measurement F38 established
