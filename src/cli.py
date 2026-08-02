@@ -4738,6 +4738,10 @@ def interactive_shell():
                         load_install_source_index,
                         scan_installed_dependency_scripts,
                     )
+                    from sandbox_integrity import (
+                        describe_tree_integrity,
+                        verify_installed_tree,
+                    )
 
                     # The menu accepts "name or URL"; normalize before anything
                     # is handed to npm (a registry URL never resolved before).
@@ -5064,6 +5068,42 @@ def interactive_shell():
                         node_modules_count = count_paths_under(new_files, "node_modules")
                         npm_cache_count = count_paths_under(new_files, ".npm-cache")
                         console.print(f"  [dim]Installed {node_modules_count} package files, {npm_cache_count} cache files[/dim]")
+
+                        # PHASE 4b: the tree npm RECORDED installing, vs. disk.
+                        # The three lists above cannot see a dependency sabotaged
+                        # by a sibling's postinstall: node_modules/ does not exist
+                        # in the baseline, so a file npm created and a hook then
+                        # deleted appears in none of new/modified/deleted (F47).
+                        # The lockfile is the only record of what npm meant to
+                        # leave behind, which is why the install keeps it (F36).
+                        console.print(f"[bright_cyan]━━━ PHASE 4b: Installed-Tree Integrity ━━━[/bright_cyan]")
+                        if install_failed:
+                            # A partial tree is the failed install's doing, not a
+                            # package's. Reporting it as sabotage would turn every
+                            # broken install into a wall of dangers.
+                            console.print(f"  [warning]⚠️ Install failed - the installed tree was NOT verified[/warning]")
+                            findings.mark_blind(
+                                "Installed-tree integrity",
+                                "the install failed, so a partial tree cannot be "
+                                "told apart from a sabotaged one",
+                            )
+                        else:
+                            tree_report = verify_installed_tree(Path(sandbox_dir))
+                            console.print(f"  [dim]{describe_tree_integrity(tree_report)}[/dim]")
+                            for rel_path, read_err in tree_report.unreadable_examples:
+                                console.print(f"  [dim]Unreadable manifest: {rel_path} ({read_err})[/dim]")
+                            tree_dangers = tree_report.dangers
+                            for line in tree_dangers:
+                                console.print(f"  [danger]🚨 {line}[/danger]")
+                                findings.add_danger(line)
+
+                            tree_blind_reason = tree_report.blind_reason()
+                            if tree_blind_reason:
+                                findings.mark_blind("Installed-tree integrity", tree_blind_reason)
+                                console.print(f"  [warning]⚠️ {tree_blind_reason}[/warning]")
+                            elif not tree_dangers and tree_report.expected_count:
+                                console.print(f"  [bright_green]✓ Every package npm recorded installing is intact[/bright_green]")
+                                findings.add_info("Installed tree matches package-lock.json")
 
                         # PHASE 5: Deep scan installed code
                         console.print(f"[bright_cyan]━━━ PHASE 5: Deep Code Analysis ━━━[/bright_cyan]")

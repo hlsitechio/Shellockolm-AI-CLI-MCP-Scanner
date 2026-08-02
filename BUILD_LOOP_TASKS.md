@@ -2748,7 +2748,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   stage-inside-your-own-package route is measured and deliberately uncovered
   (F48). _(commit bcf3551)_
 
-- F47. [ ] **A dependency wiping a *sibling* package is filtered out as npm's
+- F47. [x] **A dependency wiping a *sibling* package is filtered out as npm's
   own pruning** — `filter_unexpected_deletions` drops everything under
   `node_modules/`, because npm genuinely creates, dedupes and prunes that tree
   and every install would otherwise report dozens of deletions. But sabotaging
@@ -2760,6 +2760,47 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   the false-positive risk is high (npm's dedupe legitimately moves and removes
   nested copies), so this needs a measured FP count against real installs
   before any of it ships.
+
+  **Measuring first changed the task.** The deletion filter is not what hides
+  sibling sabotage — the **baseline** is. Phase 2 snapshots a temp directory
+  holding one `package.json` and the decoys, so `node_modules/` does not exist
+  in it; a file npm creates during the install and a hook deletes seconds later
+  is in *none* of `compare_snapshots`' three lists. Widening the deletion filter
+  would have detected exactly nothing, and
+  `test_sibling_sabotage_appears_in_no_snapshot_list` is the fail-first proof.
+
+  New `src/sandbox_integrity.py` reads the lockfile as the record of what npm
+  *meant* to leave behind and checks each package against disk — directory
+  present, `package.json` present and non-empty, declared entry point resolving
+  and non-empty — wired in as **PHASE 4b**. A failed install skips the pass
+  (blind, not a wall of dangers): a partial tree is the failure's doing.
+
+  Two calibrations, both measured, because a check that calls a healthy tree
+  sabotaged is worse than no check. *Which entries are expected on disk*: over
+  six real installs (161 lockfile entries) **44** named a legitimately absent
+  directory and every one carried `"optional": true` with an `os`/`cpu`
+  constraint — npm records a package's whole platform matrix and installs the
+  one that matches the host — so platform-conditional entries are excluded.
+  *What counts as an intact entry point*: measured over **679 installed
+  packages** from 18 real trees (451 declaring `main`, 230 declaring `exports`
+  across 1,292 targets), reading `main` alone reports **2** healthy packages as
+  gutted (`@humanfs/core` and `@humanfs/node`, both eslint dependencies, ship a
+  `main` pointing into a directory holding only `.d.ts` — their real entry is an
+  `exports` target), and requiring *every* `exports` target to exist is worse at
+  **10** (`@babel/helper-*` and `yargs` list `.d.ts` files they never publish).
+  Deferring to `exports` when present and requiring **one** target to resolve
+  reports **zero**.
+
+  Verified against real `npm install` runs, not fixtures alone: four purpose-
+  built saboteurs — packed as real tarballs, whose `postinstall` unlinks,
+  `rm -rf`s, truncates or de-manifests its hoisted sibling `left-pad` — are all
+  four caught, and the same pass finds **zero** findings across 224 packages in
+  12 real dependency trees (left-pad, chalk, express, typescript, esbuild,
+  @babel/core, react, lodash, axios, eslint, vite, sharp). 75 new tests, full
+  suite green (3,724), ruff + mypy clean on the new module. Honest scope, stated
+  in the module docstring: a sibling file that is neither the manifest nor an
+  entry point can still be deleted invisibly, and a sibling *rewritten* with
+  attacker code passes every check here (F52). _(commit CHASH)_
 
 ## Open follow-ups (surfaced by the F37 install-hook tiering pass, not yet worked)
 
@@ -2962,6 +3003,49 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   leave the package), which is why it is its own pass rather than an addition.
   Bound it first: measure how many of the 263 real hook targets require a
   relative sibling at all before deciding the resolver is worth its surface.
+
+## Open follow-ups (surfaced by the F47 installed-tree pass, not yet worked)
+
+- F52. [ ] **A sibling *rewritten* passes every check the sibling *wiped* fails**
+  — F47 verifies that each package the lockfile names still has a directory, a
+  manifest and a resolving entry point. Replacing `node_modules/left-pad/index.js`
+  with a credential stealer satisfies all three: the file exists and is
+  non-empty. So does deleting any file that is neither the manifest nor an entry
+  point. The lockfile records `integrity` per *tarball*, not per file, so it
+  cannot answer this; a per-file record of the reified tree can. Two candidate
+  sources, both cheap to test before either is built: npm's own hidden lockfile
+  `node_modules/.package-lock.json`, and a second install of the same spec with
+  `--ignore-scripts` whose tree is diffed against the scripts-enabled one — the
+  latter gives a true per-file baseline and costs one extra install. Measure the
+  wall-clock of the second install on a `next`-sized tree before committing to
+  it, and note that phase 5's malware sweep reads only the **target** package's
+  code, so a rewritten sibling is currently unread by anything.
+
+- F53. [ ] **The mirror image: a package npm never installed, sitting in
+  `node_modules/`** — phase 4's `filter_suspicious_new_files` drops everything
+  under `node_modules/` as an expected install artifact, so a `postinstall` that
+  *plants* a package directory there (the classic way to shadow a dependency an
+  application later requires) creates no new-file finding, and phase 5b reports
+  it as one more installed dependency rather than as one npm has no record of.
+  F47 now loads the source of truth that answers this — `ExpectedTree` is the
+  set of paths npm recorded — so the check is a set difference against the
+  installed manifests `collect_installed_manifests` already walks. The FP work
+  is on the npm-owned side of the tree, not the packages: `.bin/`,
+  `.package-lock.json` and `.modules.yaml` are npm's and must be excluded, and
+  the count of genuinely-extraneous entries in a real tree needs measuring
+  before this ships, exactly as F47's did.
+
+- F54. [ ] **A version-1 lockfile makes phase 4b blind** —
+  `load_expected_install_tree` deliberately refuses to interpret the nested
+  `dependencies` tree of `lockfileVersion` 1, because that layout predates the
+  hoisting the pass has to resolve against and a guess would invent findings.
+  Correct, but it means a sandbox run on a machine with npm 6 (EOL since 2022)
+  now marks a phase blind on every install. Either resolve the v1 tree properly
+  — measurable, since npm 6 can still be installed to generate real fixtures —
+  or narrow the blindness to "the lockfile npm wrote is one this pass does not
+  read", which is what the summary line already says. Low value unless npm 6
+  turns up in real usage; recorded so the blind phase is a decision rather than
+  an oversight.
 
 ---
 
