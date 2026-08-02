@@ -6,7 +6,7 @@
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/hlsitechio/shellockolm
+git clone https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner
 cd shellockolm
 
 # 2. Install dependencies
@@ -133,5 +133,5 @@ A: Yes! Use the `scanner.py` tool for read-only scanning.
 
 - 📖 [Full Documentation](../README.md)
 - 🔍 [GitHub Scanner Guide](GITHUB_SCANNER.md)
-- 🐛 [Report Issues](https://github.com/hlsitechio/shellockolm/issues)
-- 💬 [Ask Questions](https://github.com/hlsitechio/shellockolm/discussions)
+- 🐛 [Report Issues](https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/issues)
+- 💬 [Ask Questions](https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/discussions)

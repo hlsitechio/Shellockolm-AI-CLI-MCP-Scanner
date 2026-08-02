@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "analytics": {
+      "type": "sse",
+      "url": "http://mcp.analytics-vendor.com:8080/sse",
+      "headers": {
+        "Authorization": "Bearer ${ANALYTICS_TOKEN}"
+      }
+    }
+  }
+}

@@ -18,7 +18,7 @@
 
 ### 🪟 Windows
 ```powershell
-iex (irm https://raw.githubusercontent.com/hlsitechio/shellockolm/main/scripts/install.ps1)
+iex (irm https://raw.githubusercontent.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/main/scripts/install.ps1)
 ```
 **Or:** [Download ZIP](https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/archive/refs/heads/main.zip) → Double-click `scripts/setup.bat`
 
@@ -26,30 +26,61 @@ iex (irm https://raw.githubusercontent.com/hlsitechio/shellockolm/main/scripts/i
 
 ### 🐧 Ubuntu / Debian / Mint
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/scripts/install-debian.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/main/scripts/install-debian.sh | bash
 ```
 
 ---
 
 ### 🏔️ Arch / Manjaro
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/scripts/install-arch.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/main/scripts/install-arch.sh | bash
 ```
 
 ---
 
 ### 🍎 macOS
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/main/scripts/install.sh | bash
 ```
 
 ---
 
 </div>
 
-**Then run:** `python src/cli.py scan .` → ✅ **Instant security audit**
+### ⏱️ 60 seconds, three commands, one real finding
 
-🤖 **Want AI integration?** `python src/configure_mcp.py` → Use Shellockolm inside Claude/Copilot!
+Prefer a manual install? From a clone, these three commands take you from zero to
+a real CVE — every command below is exercised by `tests/test_quickstart.py`, so
+it works exactly as written:
+
+```bash
+# 1. Install — exposes the `shellockolm` command
+pip install -e .
+
+# 2. Scan the bundled, intentionally-vulnerable demo project
+shellockolm scan examples/vulnerable-demo
+
+# 3. Dig into the finding it reports
+shellockolm info CVE-2025-29927
+```
+
+Step 2 prints the finding and exits non-zero (findings gate the build):
+
+```
+🚨 VULNERABILITIES DETECTED
+
+┌─ CVE-2025-29927: Next.js Middleware Authorization Bypass
+│  File: examples/vulnerable-demo/package.json
+│  Package: next @ 15.2.2
+│  Fix: 15.2.3
+│  CVSS: 9.1 | Difficulty: Trivial
+│  Production code - ACTION REQUIRED
+└─ Upgrade next to 15.2.3
+```
+
+▶️ **Replay it:** [`docs/quickstart.cast`](docs/quickstart.cast) (asciinema — `asciinema play docs/quickstart.cast`) · 📁 demo: [`examples/vulnerable-demo/`](examples/vulnerable-demo/)
+
+🤖 **Want AI integration?** Add Shellockolm's MCP server to Claude/Cursor/Windsurf — see [Add Shellockolm to your AI agent](#-add-shellockolm-to-your-ai-agent-mcp).
 
 <div align="center">
 
@@ -60,7 +91,8 @@ curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/scripts
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
 [![MCP Server](https://img.shields.io/badge/MCP-AI%20Agent%20Ready-success)](docs/MCP_SETUP.md)
 [![Claude Compatible](https://img.shields.io/badge/Claude-Desktop%20%26%20Code%20CLI-blueviolet)](docs/CLAUDE_CODE_CLI.md)
-[![MIT License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![License: PolyForm Strict](https://img.shields.io/badge/license-PolyForm%20Strict-red)](LICENSE)
+[![Commercial license available](https://img.shields.io/badge/commercial-license%20available-blueviolet)](COMMERCIAL-LICENSE.md)
 [![One-Line Install](https://img.shields.io/badge/install-one%20line-success)](docs/INSTALL.md)
 [![v3.0.0](https://img.shields.io/badge/version-3.0.0-orange)](https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/releases/latest)
 
@@ -124,9 +156,10 @@ curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/scripts
 ┌─────────────────────────────────────────────────────────────┐
 │  Shellockolm - Security Detective v1.0                      │
 ├─────────────────────────────────────────────────────────────┤
-│  1   Full Scan           → All 7 scanners, 32 CVEs          │
+│  1   Full Scan           → All 8 scanners, 32 CVEs          │
 │  2   React Scanner       → Server Components RCE            │
 │  3   Next.js Scanner     → Middleware bypass                │
+│  7a  Agent Scanner       → Vet skills/MCP before install   │
 │  17  Deep Malware Scan   → RCE payloads, cryptominers       │
 │  23  Scan for Secrets    → 50+ patterns, high entropy       │
 │  X   QuickFix            → Auto-patch all vulnerabilities   │
@@ -136,20 +169,35 @@ curl -fsSL https://raw.githubusercontent.com/hlsitechio/shellockolm/main/scripts
 ### CLI One-Liners
 ```bash
 # Full security audit
-python src/cli.py scan .
+shellockolm scan .
 
-# Scan before installing npm package
-python src/cli.py scan --scanner npm ./suspicious-package
+# Try it now: scan the bundled intentionally-vulnerable demo (finds CVE-2025-29927)
+shellockolm scan examples/vulnerable-demo
+
+# Scan before installing npm package (-s is short for --scanner)
+shellockolm scan -s npm ./suspicious-package
 
 # Export to JSON for CI/CD
-python src/cli.py scan . -o security-report.json
+shellockolm scan . -o security-report.json
+
+# Machine-readable JSON to stdout (CI mode) — pipe straight to jq
+shellockolm scan -s agent --json ./skills | jq '.summary'
 
 # Live probe a URL for exploits
-python src/cli.py live https://target.com
+shellockolm live https://target.com
 
 # Hunt for a specific CVE
-python src/cli.py info CVE-2025-55182
+shellockolm info CVE-2025-55182
+
+# List CVEs in one category (-c is short for --category)
+shellockolm cves -c nextjs
+
+# Launch the interactive shell (also opens when run with no args)
+shellockolm shell
 ```
+
+> 💡 Running from a clone without `pip install -e .`? Swap `shellockolm` for
+> `python src/cli.py` in any command above.
 
 ---
 
@@ -169,7 +217,7 @@ python src/cli.py info CVE-2025-55182
 ## 🛠️ Complete Features
 
 <details>
-<summary><strong>📊 7 Specialized Scanners</strong></summary>
+<summary><strong>📊 8 Specialized Scanners</strong></summary>
 
 | Scanner | What It Detects | CVEs Covered |
 |---------|----------------|--------------|
@@ -180,8 +228,443 @@ python src/cli.py info CVE-2025-55182
 | **n8n** | Ni8mare unauthenticated RCE, expression injection | CVE-2026-21858, CVE-2025-68613, CVE-2025-68668 |
 | **Supply Chain** | Shai-Hulud worm, eslint-config-prettier compromise | CVE-2025-54313 + 10 campaign CVEs |
 | **Clawdbot/Moltbot** | AI gateway credential leaks, OAuth piggybacking | 4 critical auth bypass patterns |
+| **🤖 Agent Supply Chain** | Prompt injection, secret-exfiltration & tool-poisoning in `SKILL.md` skills, MCP configs, n8n workflows, slash commands, subagent definitions & `settings.json` hooks; unpinned (rug-pull) MCP servers; auto-running hook RCE/exfil; disabled tool-call confirmation prompts; invisible-char / Unicode-Tags ASCII smuggling | Agentic-era threat model (offline, pattern-based) |
 
-**Total: 32 unique CVEs tracked**
+**Total: 32 unique CVEs tracked — plus the AI-agent coding supply chain**
+
+</details>
+
+<details>
+<summary><strong>🤖 Agent Supply-Chain Scanner — vet a skill before you install it</strong></summary>
+
+Traditional scanners check *your dependencies*. The **agent scanner** checks the artifacts that feed
+**instructions and tools to your AI coding agent** — where the new attack surface lives:
+
+- **Agent skills** — `SKILL.md` / `*.skill.md` (Claude Code, Cursor, Windsurf, OpenClaw)
+- **MCP servers** — `mcp.json` / `*.mcp.json` / `claude_desktop_config.json`
+- **n8n workflows** — exported workflow JSON (Code/Function nodes, `eval`, hardcoded creds)
+- **Slash commands** — `.claude/commands/**/*.md` (the prompt files an agent runs on demand)
+- **Subagents** — `.claude/agents/**/*.md` (the body becomes a delegated agent's system prompt)
+- **Settings** — `.claude/settings.json` / `settings.local.json`: `hooks` blocks (shell commands the agent auto-runs on lifecycle events) and the `permissions` block (a blanket grant that turns off the per-call confirmation prompt)
+- **Bundled scripts** — the executable payload files a skill ships beside its `SKILL.md`, and the ones a Claude Code **plugin** ships at its root beside `.claude-plugin/plugin.json` (`scripts/*.sh`, `hooks/*.py`, `*.ps1`, `*.js`, …). Skills use *progressive disclosure*, so the prose you review can be clean while the payload sits in the file that prose tells the agent to run; a plugin's executables are referenced by its commands, agents and hook registry the same way. Generated content (a minified bundle, an embedded blob) is reported as **partially scanned**, never silently passed as clean
+
+Detections: prompt injection / instruction override, hidden conditional triggers, **secret-exfiltration
+instructions**, tool poisoning / remote-script execution, **rug-pull (unpinned) MCP servers**,
+invisible-character and **Unicode-Tags ASCII smuggling**, hardcoded credentials, and **auto-running
+hook commands that download-and-execute, run obfuscated payloads, or exfiltrate to out-of-band sinks** —
+the same three payload shapes are also caught in a skill's **bundled scripts**, so a benign-looking
+`SKILL.md` can't hide them in the file it tells the agent to run. The hardcoded-credential rules
+reach **every** artifact class above, bundled scripts included, and skip published documentation
+placeholders (AWS's `AKIAIOSFODNN7EXAMPLE`, `YOUR_API_KEY`, …) — those are provider-issued values
+nobody can mint, so excluding them cannot hide a live key.
+100% offline.
+
+```bash
+# Vet an untrusted skill or MCP config BEFORE you install it
+python src/cli.py scan -s agent ./some-skill/SKILL.md
+python src/cli.py scan -s agent ./claude_desktop_config.json
+```
+
+Also exposed through the MCP server as the dedicated **`scan_agent_artifacts`** tool — the
+flagship "agents scanning agents" feature — so an agent can vet a skill, MCP server, or repo
+mid-session and get back **structured findings** (rule id, severity, confidence, attack class,
+`file:line`, remediation) plus a stable JSON document. Pro rules are respected through the MCP
+path exactly as on the CLI; the free tier still returns every free finding. Supports
+`recursive`, `max_depth`, `min_confidence` (`low|medium|high`), `quick_mode`, and `time_budget`
+arguments. **Rate/size safety:** the walk is bounded by a `time_budget` (default **120 s** over MCP;
+`0` = unbounded; the CLI stays unbounded) so a huge or looping tree can't hang the call — on timeout
+it returns **partial results** flagged with `summary.partial` and a warning instead of blocking.
+
+The companion **`explain_finding`** MCP tool turns any finding into a why/impact/remediation
+write-up: pass it a rule ID (`AGENT-PI-013`, from an agent-artifact scan) **or** a CVE ID
+(`CVE-2025-29927`, from a dependency/malware scan) and it returns the severity/tier/confidence/
+attack-class, the full description, a concrete **example attack**, and the fix — plus a stable JSON
+document — so an agent can understand a finding mid-session before acting on it. The ID is
+case-insensitive; this is the MCP analog of the `shellockolm rules explain <id>` CLI command.
+
+The **`scan_text`** MCP tool is the in-memory sibling of `scan_agent_artifacts`: it scans a raw
+artifact **string** the agent is **about to install or paste** — a skill / `SKILL.md`, an MCP
+config (`mcp.json`), an instruction file (`CLAUDE.md` / `AGENTS.md` / `.cursorrules`), an n8n
+workflow export, a `settings.json` hooks block, or a slash command — **without ever writing it to
+disk**, and returns the same structured findings + JSON document. `artifact_type` selects the
+detection path; the default `auto` infers it from an optional `filename` hint, then from the
+content shape (JSON with `mcpServers` → MCP, with `nodes`+`connections` → n8n, otherwise prose →
+skill). Use it to vet untrusted content in the moment, before it lands anywhere. Input is capped at
+1,000,000 characters — a larger string is truncated (head still scanned) and the result is flagged
+`summary.partial` with a warning, so an oversized paste can't hang the scan.
+
+The **`check_mcp_config`** MCP tool audits the agent's **own** installed MCP setup: it scans the
+well-known config locations per OS (Claude Desktop, Claude Code's `~/.claude.json`, Cursor,
+Windsurf, VS Code — plus this project's `.mcp.json` / `.cursor/mcp.json` / `.vscode/mcp.json`) for a
+poisoned server entry — code fetched from a raw-paste URL or public IP, a broad host credential
+forwarded to an unrelated server, or a `curl|bash` launcher. It reports which configs exist, which
+were scanned, and any structured findings + JSON document. It's **read-only** — it never modifies a
+config — and any matched secret is redacted in the output. Use it to check whether the agent's own
+MCP wiring has been tampered with.
+
+### 🔌 Add Shellockolm to your AI agent (MCP)
+
+Installing the package ships a **`shellockolm-mcp`** command that speaks the
+[Model Context Protocol](https://modelcontextprotocol.io) over stdio, so any MCP-capable agent
+can call all 12 tools (`scan_agent_artifacts`, `scan_text`, `explain_finding`, `check_mcp_config`,
+`scan_directory`, `quick_scan`, `scan_live`, …). Every client below uses the **same** one-paste
+server block — no clone path, no `PYTHONPATH`:
+
+```json
+{
+  "mcpServers": {
+    "shellockolm": {
+      "command": "shellockolm-mcp"
+    }
+  }
+}
+```
+
+> **Prerequisite:** `pip install -e .` (from a clone) or `pipx install shellockolm` so the
+> `shellockolm-mcp` command is on your `PATH`.
+
+**Claude Code** — one command, no file editing:
+
+```bash
+claude mcp add shellockolm -- shellockolm-mcp                # this project
+claude mcp add --scope user shellockolm -- shellockolm-mcp   # all your projects
+```
+
+…or commit a `.mcp.json` at the repo root with the server block above so the whole team gets it.
+
+**Claude Desktop** — Settings → Developer → *Edit Config*, then add the server block to:
+
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+
+(a ready-to-copy `claude_desktop_config_EXAMPLE.json` ships in the repo root.)
+
+**Cursor** — add the server block to `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (this
+project), then enable **shellockolm** under Settings → MCP.
+
+**Windsurf** — add the server block to `~/.codeium/windsurf/mcp_config.json` (or Settings →
+Cascade → *Add Server* → paste), then hit refresh.
+
+<details>
+<summary>No global install? Run it straight from a clone</summary>
+
+If you didn't `pip install`, point the client's `command`/`args` at the server script with an
+absolute path instead — the `mcpServers` shape is otherwise identical:
+
+```json
+{
+  "mcpServers": {
+    "shellockolm": {
+      "command": "python",
+      "args": ["/absolute/path/to/Shellockolm-Scanner/src/mcp_server.py"]
+    }
+  }
+}
+```
+</details>
+
+Then just ask your agent: *"use shellockolm to scan this skill before I install it."* See
+[docs/MCP_SETUP.md](docs/MCP_SETUP.md) for the full per-tool reference and troubleshooting.
+
+**Suppressing accepted findings.** Drop a `.shellockolmignore` at your repo root to allowlist
+findings your team has reviewed and accepted — by rule ID, optionally scoped to a path glob
+(gitignore-style). Suppressed findings are removed from results and reported as a count, so the
+allowlist is never silent:
+
+```gitignore
+# .shellockolmignore
+AGENT-PI-013                 # suppress this rule everywhere
+AGENT-PI-016 docs/skills/**  # suppress it only under a path glob
+AGENT-MCP-004,AGENT-HOOK-001 vendor/**  # several rules, one shared path scope
+```
+
+Path-pattern lines (e.g. `node_modules/`, `*.min.js`) keep working exactly as before — only lines
+whose first token is an uppercase rule ID are read as suppressions.
+
+**Tuning by detection confidence.** Every finding carries a `confidence` of `high`, `medium`, or
+`low` — *separate from* its severity. `high` means a structural / signature / decoded-secret match (a
+deterministic true positive: Unicode-Tags smuggling, a hardcoded key, a forged role token, a paste/
+webhook sink). `medium`/`low` mark the broader natural-language heuristics that match the real attack
+phrasing but can also fire on benign prose (e.g. a generic "when the user does X…" trigger is `low`).
+Filter with `--min-confidence`:
+
+```bash
+python src/cli.py scan -s agent ./skills                      # low (default): every finding
+python src/cli.py scan -s agent ./skills --min-confidence medium  # drop the broadest heuristics
+python src/cli.py scan -s agent ./skills --min-confidence high     # structural/signature matches only — a high-signal CI gate
+```
+
+Findings hidden by the threshold are reported as a count (never silently dropped), `confidence`
+appears in the JSON report (`-o report.json`) and is shown inline for any non-`high` finding. Other
+scanners' findings (CVE/secret matches) are deterministic and default to `high`, so a threshold never
+hides them.
+
+**Table output (`--table`).** Render the findings as a polished table **grouped by file** instead of the
+default per-finding cards: one compact table per artifact (rows colored by severity, with the rule ID,
+line, CVSS and detection confidence), closed by a severity-tally summary footer. It **degrades
+gracefully when stdout is not a TTY** — a redirected or piped stream gets an ASCII box (no Unicode frame
+glyphs), no ANSI color, and the bare severity word instead of an emoji — so it stays readable in a log or
+`tee` capture. `--json` (CI mode) suppresses the table entirely; stdout stays a single JSON document.
+
+```bash
+shellockolm scan -s agent --table ./skills          # grouped-by-file table, colored by severity
+shellockolm scan -s agent --table ./skills | tee scan.txt   # clean ASCII when piped
+```
+
+**Machine-readable JSON (`--json`, CI mode).** `--json` writes **one** JSON document to *stdout* and
+suppresses every other line (no banner, progress, panels, or summary — errors go to *stderr*), so it
+pipes straight into `jq` or a CI step. The exit code follows the contract below (default: any finding
+exits `1`). The schema is a stable contract: within a `schema_version` major, fields are only **added**,
+never renamed or removed.
+
+**Coverage is reported, not assumed.** A JSON agent config that does not parse (a `//` comment or a
+trailing comma in an `mcp.json` / `settings.json` / n8n export) cannot be read by the structural
+checks — so instead of scoring zero and looking clean, it sets `summary.partial` to `true` and lands
+in `summary.warnings` naming the checks that could not run. The human output prints the same thing as
+a **⚠️ PARTIAL COVERAGE** block under the verdict. Gate on it in CI (`jq -e '.summary.partial == false'`)
+if "we scanned everything" is part of what you need to prove — *unscanned* is not *clean*.
+
+**Exit codes (`scan`).** Documented and stable, so CI can branch on them:
+
+| Code | Meaning |
+|------|---------|
+| `0`  | Clean — no findings, or no finding at/above the `--fail-on` threshold |
+| `1`  | Findings gate the build (default: **any** finding; or per `--fail-on`) |
+| `2`  | Usage/operational error — bad path, unknown scanner, or unknown flag value |
+
+`--fail-on critical|high|medium|low|info` gates the build on severity: it exits `1` only when a finding
+at or **above** that level is present (so `--fail-on high` fails on HIGH/CRITICAL but passes on
+MEDIUM/LOW). `--fail-on none` is report-only — findings are still reported but never fail the build.
+With no `--fail-on`, any finding exits `1`. A finding present but below the gate is announced (never
+silently passed). Invalid input always exits `2`, never `1`, so a flag typo can't masquerade as a clean
+run.
+
+```bash
+shellockolm scan -s agent --fail-on high ./skills   # fail the build only on HIGH+ findings
+shellockolm scan -s agent --fail-on none ./skills   # report findings but always exit 0
+```
+
+**Diff mode (`--diff` / `--diff-ref`, pre-commit & CI).** Restrict reported findings to the files
+**changed in git**, so a pre-commit hook or a PR check only flags what your change actually touched —
+not pre-existing findings elsewhere in the tree.
+
+- `--diff` scans the **staged** set (`git diff --cached`) — the exact content a commit will introduce.
+- `--diff-ref <ref>` scans everything that differs from a ref (working tree vs `<ref>`), e.g.
+  `origin/main` in CI. It implies `--diff`.
+
+Findings on files outside the changed set are dropped and the count is announced (never silent) and
+surfaced as `summary.findings_diff_filtered` in `--json`. When nothing relevant changed, the scan
+exits `0` immediately. Diff mode composes with every other flag (`--json`, `--sarif`, `--fail-on`,
+`--min-confidence`). A path that is not inside a git work tree (or an unknown ref) is a usage error
+(exit `2`).
+
+```bash
+shellockolm scan -s agent --diff .                       # only files staged for commit
+shellockolm scan -s agent --diff-ref origin/main .       # only files changed vs origin/main (CI)
+shellockolm scan -s agent --diff --fail-on high .        # pre-commit: block the commit on new HIGH+
+```
+
+**Baseline mode (`--baseline` / `--write-baseline`, fail only on NEW findings).** Adopt Shellockolm on
+a codebase that already has findings without drowning CI in pre-existing noise: snapshot the findings
+you currently accept into a baseline file, commit it, and from then on only **new** findings gate the
+build.
+
+- `--write-baseline <file>` runs a scan and writes every current finding into `<file>` (a report-only
+  run that **never** fails the build, even with HIGH findings present). Commit the file.
+- `--baseline <file>` runs a scan and drops every finding already in the baseline; only findings **not**
+  in it are reported and can gate the exit code (composes with `--fail-on`). A missing or corrupt
+  baseline is a usage error (exit `2`) — it can never silently pass.
+
+A finding's baseline identity is a SHA-256 over `rule/CVE id | repo-relative path | package | version`,
+deliberately **excluding the line number** — so editing a file (shifting a finding up or down) does not
+make a known finding look new and spuriously fail the build. The hidden count is announced (never
+silent) and surfaced as `summary.findings_baselined` in `--json`. Re-run `--write-baseline` to refresh
+the accepted set. Use either flag, not both (using both is a usage error, exit `2`).
+
+```bash
+shellockolm scan -s agent --write-baseline baseline.json ./skills   # accept current findings
+git add baseline.json && git commit -m "chore: shellockolm baseline"
+shellockolm scan -s agent --baseline baseline.json --fail-on high ./skills   # CI: fail only on NEW HIGH+
+```
+
+**Config file (`shellockolm.toml` / `[tool.shellockolm]`).** Pin your scan defaults in a committed file
+so every contributor and CI runs the same scan without retyping flags. Shellockolm reads the **nearest**
+of these at or above the scan path (walking up like `.gitignore`):
+
+- a dedicated **`shellockolm.toml`** — keys at the top level or under a `[tool.shellockolm]` table, or
+- a **`pyproject.toml`** with a `[tool.shellockolm]` table (the standard place for Python tool config).
+
+A `shellockolm.toml` is preferred over a `pyproject.toml` in the same directory; a `pyproject.toml`
+**without** a `[tool.shellockolm]` table is left alone. Config supplies a **default** for any flag you
+don't pass — **an explicit flag always wins** — so it never overrides what you typed.
+
+```toml
+# shellockolm.toml  (or [tool.shellockolm] in pyproject.toml)
+[tool.shellockolm]
+scanner        = "agent"          # default scanner (-s)
+min_confidence = "medium"         # --min-confidence floor
+fail_on        = "high"           # exit-code gate (--fail-on)
+max_depth      = 8                # directory-walk depth (-d); `depth` also accepted
+recursive      = true             # --recursive / --no-recursive
+ignore         = [                # drop matching findings (rule IDs and/or path globs)
+  "AGENT-PI-012",                 #   a rule/CVE id (uppercase, hyphen-segmented)
+  "vendor/**",                    #   a gitignore-style path glob
+]
+```
+
+Supported keys: `path`, `scanner`, `recursive`, `max_depth` (alias `depth`), `min_confidence`,
+`fail_on`, `ignore`. The hidden `ignore` count is announced (never silent) and surfaced as
+`summary.findings_config_ignored` in `--json`. Point at a specific file with `--config <path>` (a
+missing/invalid file exits `2`), or disable config entirely with `--no-config`. A malformed config
+(bad value/type, invalid TOML) is a usage error (exit `2`) — it can never produce a silently-wrong scan.
+
+```bash
+shellockolm scan ./skills              # uses shellockolm.toml defaults if present
+shellockolm scan --fail-on critical .  # explicit flag overrides the config's fail_on
+shellockolm scan --no-config ./skills  # ignore any config file
+```
+
+**Pre-commit hook (`.pre-commit-hooks.yaml`).** Shellockolm ships [pre-commit](https://pre-commit.com)
+hooks so a clone can vet every commit. Add to your repo's `.pre-commit-config.yaml`:
+
+```yaml
+repos:
+  - repo: https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner
+    rev: v3.0.0                 # pin to a released tag
+    hooks:
+      - id: shellockolm-agent   # AI agent supply-chain scan (recommended)
+      # - id: shellockolm       # full scan: deps + secrets + malware + agent
+```
+
+then run `pre-commit install`. Both hooks scan only the **staged** set (`scan --diff`) and block the
+commit on HIGH+ findings; they exit `0` instantly when nothing relevant is staged. `shellockolm-agent`
+fires only when an agent artifact (`SKILL.md`, `mcp.json`, `.claude/`, `CLAUDE.md`/`AGENTS.md`, …) is
+staged. Tune the gate by overriding `args:` in your config — `args: ['--fail-on', 'critical']` (looser)
+or `args: ['--fail-on', 'medium', '--min-confidence', 'medium']` (stricter); `--diff` lives in the
+hook's `entry`, so it survives an `args:` override.
+
+```jsonc
+{
+  "schema_version": "1.0",
+  "tool":    { "name": "shellockolm", "version": "3.0.0" },
+  "scan": {
+    "time": "2026-06-13T12:08:49",   // ISO-8601, local time
+    "target": "/abs/path/scanned",
+    "min_confidence": "low",          // the --min-confidence in effect
+    "scanners": ["agent"],            // scanner names that ran
+    "duration_seconds": 0.0139
+  },
+  "summary": {
+    "total_findings": 1,
+    "by_severity": { "critical": 0, "high": 1, "medium": 0, "low": 0, "info": 0 },
+    "items_scanned": 12,               // total artifacts/units examined (skills, mcp configs, packages, …)
+    "scanners_run": 1,                 // number of scanners that ran
+    "findings_suppressed": 0,          // dropped by a .shellockolmignore rule allowlist
+    "findings_below_confidence": 0,    // hidden by --min-confidence
+    "findings_diff_filtered": 0,       // dropped because the file is outside --diff scope
+    "findings_baselined": 0,           // hidden because already present in --baseline
+    "findings_config_ignored": 0,      // hidden by a config-file `ignore` rule/glob
+    "partial": false,                  // true when some artifact could NOT be fully scanned
+    "warnings": []                     // [{ "scanner": "...", "message": "..." }] — the coverage gaps
+  },
+  "findings": [                        // sorted CRITICAL → INFO
+    {
+      "id": "AGENT-PI-007",            // CVE id, or AGENT-* rule id for agent findings
+      "title": "ASCII smuggling via Unicode Tags block",
+      "severity": "HIGH",              // CRITICAL | HIGH | MEDIUM | LOW | INFO
+      "confidence": "high",            // high | medium | low
+      "cvss_score": 8.2,
+      "scanner": "agent",
+      "file_path": "…/SKILL.md:3",
+      "package": "agent-skill",
+      "version": "n/a",
+      "patched_version": null,
+      "description": "…",
+      "remediation": "…"
+    }
+  ],
+  "errors": [ /* { "scanner": "...", "message": "..." } */ ]
+}
+```
+
+Add `-o report.json` alongside `--json` to also persist the identical document to a file.
+
+**SARIF export (`--sarif`, GitHub Code Scanning).** `--sarif <path>` writes a SARIF 2.1.0
+document covering **every** finding — dependency CVEs, secrets, malware, **and** the agent
+`AGENT-*` supply-chain rules — so GitHub Code Scanning and the VS Code SARIF viewer surface
+agent-scan findings inline in the Security tab / editor. It is a file artifact independent of
+the stdout mode, so it composes with both the human and `--json` paths (it never writes to
+stdout). Each finding becomes a SARIF rule (severity → `error`/`warning`/`note`,
+`security-severity` score for GitHub, agent rules tagged `agent`/`supply-chain` + attack class)
+and a result with a repo-relative `uri`, `startLine`, and a `confidence` property. Secrets are
+already redacted in finding text, so the SARIF never carries a live credential.
+
+```yaml
+# GitHub Actions — upload agent-scan findings to the Security tab
+- name: Scan agent skills/MCP
+  run: python src/cli.py scan -s agent --sarif results.sarif ./skills || true
+- name: Upload SARIF
+  uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: results.sarif
+```
+
+**Rule reference (`rules list`).** `shellockolm rules list` prints the full catalog of agent
+supply-chain detection rules — each rule's **ID**, severity, **tier** (free / Pro), confidence,
+attack class, and a one-line description — so you can see exactly what the agent scanner looks for
+without reading source. Filter with `--tier free|pro` or `--severity critical|high|medium|low|info`.
+`--json` emits one stable JSON document (the same catalog that feeds `RULES.md` and CI tooling);
+an unknown filter value is a usage error (exit `2`). Pro rules are listed for reference but only
+run with an active Shellockolm Pro license.
+
+```bash
+shellockolm rules list                 # full catalog as a table
+shellockolm rules list --tier pro      # Pro-only rules
+shellockolm rules list -s critical     # critical-severity rules
+shellockolm rules list --json | jq '.rules[] | {id, severity, tier}'
+```
+
+The same catalog is committed as a browsable reference in **[RULES.md](RULES.md)** — every
+rule's ID, severity, tier, confidence, attack class, full description, an example attack, and
+remediation. It is **auto-generated** from the rule catalog by `scripts/generate_rules_md.py`
+(`--check` drift-gates it in CI), so it never falls out of sync with the code.
+
+**Threat model (`THREAT_MODEL.md`).** For the bigger picture — the agentic supply-chain attack
+surface, what the attacker is after, and **exactly which rule covers which attack class** — see
+**[THREAT_MODEL.md](THREAT_MODEL.md)**. It frames the trust boundary your agent crosses when it
+auto-loads skills / MCP servers / instruction files / hooks, then maps every attack class to its
+covering rules and states the tool's honest scope and limits. Like `RULES.md`, the rule-coverage
+section is **auto-generated** from the live catalog by `scripts/generate_threat_model.py`
+(`--check` drift-gates it in CI), so the coverage claims can never over-state what ships.
+
+**Explain one rule (`rules explain`).** `shellockolm rules explain <RULE-ID>` is the deep-dive
+companion to `rules list`: it prints a single rule's severity, tier, confidence, attack class and
+CVSS, then the **full description**, a concrete **example attack**, and the **remediation** — the
+"what does this rule actually catch, and what does the attack look like?" view. The rule ID is
+case-insensitive; an unknown ID is a usage error (exit `2`). `--json` emits one stable document
+(`schema_version` 1.0) for docs/tooling.
+
+```bash
+shellockolm rules explain AGENT-PI-013        # full explainer + example attack
+shellockolm rules explain agent-mcp-004       # case-insensitive
+shellockolm rules explain AGENT-PRO-003 --json
+```
+
+**Environment self-check (`doctor`).** `shellockolm doctor` verifies the tool can scan on your
+machine before you rely on it: the Python runtime meets the supported floor (`>=3.10`), the bundled
+CVE database and the agent supply-chain rule catalog load and are populated, the config
+(`~/.shellockolm`, where a Pro license is stored) and session/log directories are writable, `git`
+(needed by `scan --diff` and the pre-commit hook) is on `PATH`, and the active license tier resolves.
+Each check is `ok` / `warn` / `fail` / `info` with an actionable hint; only a hard **fail** (old
+Python, a corrupt install) makes the command exit non-zero — a missing `git` or an unwritable log dir
+is a `warn` that still passes. Exit codes mirror the scan contract (**0** healthy / **1** a check
+failed), and `--json` emits one stable document for CI. Runs **fully offline** unless a license key
+is configured.
+
+```bash
+shellockolm doctor                      # human table + actionable fixes
+shellockolm doctor --json | jq .healthy # CI-friendly self-check
+```
 
 </details>
 
@@ -193,7 +676,7 @@ python src/cli.py info CVE-2025-55182
 - **Backdoors** - Reverse shells, command injection
 - **Data exfiltration** - Suspicious HTTP requests
 - **Typosquatting** - Packages mimicking popular libraries
-- **100+ detection patterns** hand-tuned for JavaScript/Node.js
+- **70+ detection patterns** hand-tuned for JavaScript/Node.js
 
 </details>
 
@@ -227,25 +710,65 @@ Finds leaked credentials in code, configs, and environment files:
 <details>
 <summary><strong>🔄 CI/CD Integration</strong></summary>
 
+**GitHub Action (recommended).** The repo ships a composite [`action.yml`](action.yml)
+that runs the scan and uploads findings as SARIF to your Security tab in one step:
+
 ```yaml
-# GitHub Actions
-- name: Security Scan
-  run: |
-    pip install -r requirements.txt
-    python src/cli.py scan . -o results.json
+# .github/workflows/security.yml
+permissions:
+  contents: read
+  security-events: write   # required so the action can upload SARIF
+jobs:
+  shellockolm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hlsitechio/Shellockolm-AI-CLI-MCP-Scanner@v1
+        with:
+          path: .
+          fail-on: high           # critical|high|medium|low|info|none (default: high)
+          # scanner: agent        # leave empty to run ALL scanners (the default)
+          # min-confidence: high  # low|medium|high (default: low)
+          # upload-sarif: 'false' # set to skip the Security-tab upload
 ```
 
+The action fails the build per the [exit-code contract](#) (`--fail-on`), writes a
+stable JSON report and a SARIF 2.1.0 document, and exposes `report`, `sarif`,
+`findings`, and `exit-code` step outputs. Leave `scanner` empty to run every scanner
+(passing `scanner: all` is **not** valid — empty means all).
+
+Prefer a hand-rolled step? The CLI is the same either way:
+
+```yaml
+- name: Vet agent skills/MCP (fails the build on any finding)
+  run: |
+    pip install -r requirements.txt
+    python src/cli.py scan -s agent --json --min-confidence high ./skills | tee results.json
+```
+
+- **GitHub Action** — checkout → scan → SARIF upload, with `fail-on` gating
+- **`--json` stdout mode** — one stable, documented JSON document for `jq`/CI piping
 - **SARIF export** for GitHub Code Scanning
-- **JSON reports** for automated processing
-- **Exit codes** for build failures on criticals
+- **JSON reports** (`-o results.json`) for automated processing
+- **Exit codes** — `0` clean / `1` findings / `2` error, with `--fail-on <severity>` to gate the build by severity (`none` = report-only)
 - **Watch mode** for continuous monitoring
+
+**Dogfooding — we scan ourselves.** This repo's own CI has a build-blocking
+[`self-scan`](.github/workflows/ci.yml) job that runs the agent supply-chain
+scanner against this very repository on every run and fails on any **HIGH+**
+finding in a real agent artifact. The deliberate detection corpus under
+`tests/fixtures/` is excluded via the committed [`shellockolm.toml`](shellockolm.toml)
+(it's intentionally malicious test data, not a real threat), and the excluded
+count is always announced — never silently dropped. Agent-only keeps the gate
+deterministic and fully offline, so a red build always means a genuine
+regression in our own artifacts.
 
 </details>
 
 <details>
 <summary><strong>📋 60+ Interactive Commands</strong></summary>
 
-**Scanning**: Full scan, React, Next.js, npm, Node.js, n8n, supply chain, custom  
+**Scanning**: Full scan, React, Next.js, npm, Node.js, n8n, supply chain, agent skills/MCP, custom  
 **Malware**: Deep scan, quarantine, package removal, code cleaning  
 **Secrets**: Scan all files, .env targeting, high-entropy detection  
 **Live Probing**: Test URLs for exploitable vulnerabilities  
@@ -275,6 +798,13 @@ python src/cli.py scan ~/my-nextjs-app --scanner nextjs
 python src/cli.py shell
 > 1b  # Pre-Download Check
 > suspicious-package-name
+```
+
+### 🤖 Vet an AI agent skill / MCP server before installing it
+```bash
+# Point it at a SKILL.md, an mcp.json, or an exported n8n workflow
+python src/cli.py scan -s agent ./some-skill/SKILL.md
+python src/cli.py scan -s agent ./claude_desktop_config.json
 ```
 
 ### 🚨 Hunt for a specific CVE
@@ -319,7 +849,7 @@ The scanner sits **outside the blast radius** of the ecosystem it's auditing.
 - **No Upload** — Your code never leaves your system
 - **No Telemetry** — Zero data collection
 - **No API Keys** — Works completely offline
-- **Open Source** — Full transparency (MIT License)
+- **Source-Available** — Full transparency; audit exactly what it does (PolyForm Strict License; commercial license required for business use)
 
 ---
 
@@ -332,7 +862,7 @@ The scanner sits **outside the blast radius** of the ecosystem it's auditing.
 
 | Command | Name | What It Does |
 |---------|------|-------------|
-| `1` | Full Scan | Runs all 7 scanners on a directory to detect 32 CVEs across React, Next.js, Node.js, npm, n8n, supply chain, and Clawdbot/Moltbot. |
+| `1` | Full Scan | Runs all 8 scanners on a directory to detect 32 CVEs across React, Next.js, Node.js, npm, n8n, supply chain, and Clawdbot/Moltbot — plus the AI-agent supply chain. |
 | `1a` | Scan ALL npm | Auto-discovers and scans every npm project on your system by finding all `package.json` files. |
 | `1b` | Pre-Download Check | Sandbox-installs an npm package to a temp directory, scans it for malware and vulns, then destroys the sandbox. |
 | `1c` | Deep Scan | Version checks + code pattern analysis + config inspection — shows step-by-step HOW each vulnerability is detected. |
@@ -344,6 +874,7 @@ The scanner sits **outside the blast radius** of the ecosystem it's auditing.
 | `5` | Node.js Runtime | Scan for Node.js runtime vulnerabilities from the January 2026 security release. |
 | `6` | n8n Scanner | Scan for n8n workflow automation vulns including Ni8mare unauthenticated RCE. |
 | `7` | Supply Chain | Detect Shai-Hulud worm campaign, eslint-config-prettier compromise, malicious install scripts. |
+| `7a` | 🤖 Agent Supply Chain | Vet `SKILL.md` skills, MCP configs, and n8n workflows **before you install them** — prompt injection, secret-exfiltration instructions, tool poisoning, rug-pull (unpinned) MCP servers, and invisible-char / Unicode-Tags ASCII smuggling. 100% offline. |
 
 ### Live Probing
 
@@ -361,7 +892,7 @@ The scanner sits **outside the blast radius** of the ecosystem it's auditing.
 | `12` | Critical Only | Filter to show only CRITICAL severity CVEs (CVSS 9.0+). |
 | `13` | Bug Bounty | List CVEs that are high-value bug bounty targets — critical severity or with public PoCs. |
 | `14` | CVE Details | Get full details on a specific CVE: description, affected versions, patches, references. |
-| `15` | List Scanners | Show all 7 scanners with their descriptions, CVE coverage, and capabilities. |
+| `15` | List Scanners | Show all 8 scanners with their descriptions, CVE coverage, and capabilities. |
 
 ### Malware Analysis
 
@@ -444,9 +975,21 @@ Found a bug? Have a feature request? Want to add CVE coverage?
 
 ## 📝 License
 
-MIT License — See [LICENSE](LICENSE)
+Shellockolm is **source-available, not open source**.
+
+- **Source code:** [PolyForm Strict License 1.0.0](LICENSE) — free for **personal,
+  hobby, research, and nonprofit** use. You may read and audit the source, but you
+  may **not** copy, redistribute, fork, modify, or use it commercially.
+- **Commercial / business use** requires a paid license — see
+  [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md) or
+  [shellockolm.netlify.app](https://shellockolm.netlify.app).
+
+Transparency for trust; a real license for protection. Copyright © 2025–2026
+HLS iTech (Hubert Larose-Surprenant). All rights reserved.
 
 **📚 More Documentation:**
+- [🤖 Agent Supply-Chain Scanner Guide](docs/AGENT_SCANNER.md)
+- [⚡ Performance & Benchmark](docs/PERFORMANCE.md)
 - [Installation Guide](docs/INSTALL.md)
 - [Quick Start](docs/QUICKSTART.md)
 - [Fast Install Reference](docs/FAST_INSTALL.md)

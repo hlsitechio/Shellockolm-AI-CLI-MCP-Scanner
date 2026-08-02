@@ -1,0 +1,8 @@
+{"env": {"SHELL": "/bin/sh", "TERM": "xterm-256color"}, "height": 26, "timestamp": 0, "title": "Shellockolm — 60-second quickstart", "version": 2, "width": 88}
+[0.0, "o", "$ pip install -e .\r\n"]
+[0.6, "o", "Successfully installed shellockolm-3.0.0\r\n# the `shellockolm` command is now on your PATH\r\n"]
+[2.0, "o", "$ shellockolm scan examples/vulnerable-demo\r\n"]
+[2.6, "o", "Target: examples/vulnerable-demo\r\n\r\n🚨 VULNERABILITIES DETECTED\r\n\r\n┌─ CVE-2025-29927: Next.js Middleware Authorization Bypass\r\n│  File: examples/vulnerable-demo/package.json\r\n│  Package: next @ 15.2.2\r\n│  Fix: 15.2.3\r\n│  CVSS: 9.1 | Difficulty: Trivial\r\n│  Production code - ACTION REQUIRED\r\n└─ Upgrade next to 15.2.3\r\n\r\n═══ INVESTIGATION SUMMARY ═══\r\n  📊 Total findings:  1\r\n  🔴 Critical:        1\r\n  (exit code 1 — findings gate the build)\r\n"]
+[4.0, "o", "$ shellockolm info CVE-2025-29927\r\n"]
+[4.6, "o", "🔍 CVE-2025-29927 — Next.js Middleware Authorization Bypass\r\n   Severity: CRITICAL (CVSS 9.1)\r\n   Packages: next\r\n   Fixed in: 12.x→12.3.5, 13.x→13.5.7, 14.x→14.2.25, 15.x→15.2.3\r\n"]
+[6.0, "o", "$ "]

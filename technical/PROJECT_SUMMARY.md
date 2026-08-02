@@ -3,7 +3,7 @@
 **Date**: December 6, 2025
 **Version**: 1.1.0
 **Status**: Production-Ready, Fully Tested, Ready for Viral Growth
-**Repository**: https://github.com/hlsitechio/shellockolm
+**Repository**: https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner
 
 ---
 
@@ -199,7 +199,7 @@ Status:             CLEAN
 
 ### GitHub Release
 - **Version**: v1.1.0
-- **URL**: https://github.com/hlsitechio/shellockolm/releases/tag/v1.1.0
+- **URL**: https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/releases/tag/v1.1.0
 - **Status**: Published
 - **Assets**: Downloadable source code
 - **Release Notes**: Complete feature list and metrics
@@ -534,7 +534,7 @@ This project successfully delivers:
 
 ---
 
-**Repository**: https://github.com/hlsitechio/shellockolm
+**Repository**: https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner
 **Release**: v1.1.0
 **Status**: 🚀 READY FOR LAUNCH
 **License**: MIT

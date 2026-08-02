@@ -111,6 +111,29 @@ python src/cli.py scan ./test_data
 
 **Bonus points:** Add tests if you're adding major features.
 
+### Changing a detection rule? Measure it.
+
+A malware/supply-chain pattern is only as good as its false-positive rate on
+real code, so a rule change ships with a before/after measurement over installed
+packages — not an estimate. `scripts/corpus_sweep.py` is that measurement:
+
+```bash
+# Walk your machine's node_modules trees once (the slow half — reusable).
+python scripts/corpus_sweep.py inventory --root /path/to/projects -o corpus.inv.jsonl
+
+# Sweep before your change, and again after.
+python scripts/corpus_sweep.py sweep -i corpus.inv.jsonl -o before.jsonl
+python scripts/corpus_sweep.py sweep -i corpus.inv.jsonl -o after.jsonl
+
+# What actually moved.
+python scripts/corpus_sweep.py diff before.jsonl after.jsonl --fail-on-new-dangers
+```
+
+The sweep is resumable (`--resume`), caps per-file reads (`--max-file-bytes`),
+and *counts* everything it could not read — a package it never opened is never
+part of a "zero false positives over N packages" claim. Paste the `diff` totals
+into your PR.
+
 ## 🐛 Found a Bug?
 
 **Open an issue with:**

@@ -1,0 +1,46 @@
+# Shellockolm pre-commit hooks — scan staged changes for AI-agent supply-chain
+# attacks, leaked secrets, and vulnerable dependencies BEFORE they are committed.
+#
+# Add to YOUR repository's .pre-commit-config.yaml:
+#
+#   repos:
+#     - repo: https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner
+#       rev: v3.0.0                 # pin to a released tag
+#       hooks:
+#         - id: shellockolm-agent   # AI agent supply-chain scan (recommended)
+#         # - id: shellockolm       # full scan (deps + secrets + malware + agent)
+#
+# Then: pre-commit install
+#
+# Both hooks scan ONLY the staged set (`scan --diff`), so they flag what your
+# commit introduces — not pre-existing findings elsewhere in the tree — and exit
+# 0 instantly when nothing relevant is staged. They block the commit on HIGH+
+# findings by default. Tune the gate by overriding `args:` in your config, e.g.
+#   args: ['--fail-on', 'critical']                      # looser
+#   args: ['--fail-on', 'medium', '--min-confidence', 'medium']   # stricter
+# (`--diff` lives in `entry`, so it survives an `args:` override.)
+
+- id: shellockolm-agent
+  name: Shellockolm — AI agent supply-chain scan (staged)
+  description: >-
+    Scan staged AI-agent artifacts (Claude SKILL.md, MCP configs, n8n workflows,
+    .claude hooks/commands, CLAUDE.md / AGENTS.md instruction files) for prompt
+    injection, tool poisoning, secret exfiltration, and supply-chain risks.
+  entry: shellockolm scan --diff -s agent
+  args: ['--fail-on', 'high']
+  language: python
+  pass_filenames: false
+  require_serial: true
+  files: '(^|/)(SKILL\.md|\.?mcp\.json|claude_desktop_config[^/]*\.json|CLAUDE\.md|AGENTS\.md|GEMINI\.md|\.cursorrules)$|(^|/)\.claude/|(^|/)\.github/copilot-instructions\.md$'
+
+- id: shellockolm
+  name: Shellockolm — full security scan (staged)
+  description: >-
+    Run the full Shellockolm scanner (vulnerable dependencies, leaked secrets,
+    malware, AND the AI agent supply-chain rules) over the files staged for the
+    commit.
+  entry: shellockolm scan --diff
+  args: ['--fail-on', 'high']
+  language: python
+  pass_filenames: false
+  require_serial: true

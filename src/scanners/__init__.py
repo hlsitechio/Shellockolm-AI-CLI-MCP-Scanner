@@ -3,6 +3,8 @@ Shellockolm Modular Scanner Architecture
 Each scanner is independent and can be used standalone or combined
 """
 
+from typing import Callable, Dict, List
+
 from .base import BaseScanner, ScanResult, ScanFinding
 from .react_rsc import ReactRSCScanner
 from .nextjs import NextJSScanner
@@ -11,6 +13,7 @@ from .nodejs import NodeJSScanner
 from .n8n import N8NScanner
 from .supply_chain import SupplyChainScanner
 from .clawdbot import ClawdbotScanner
+from .agent_supply_chain import AgentSupplyChainScanner
 
 __all__ = [
     'BaseScanner',
@@ -23,10 +26,13 @@ __all__ = [
     'N8NScanner',
     'SupplyChainScanner',
     'ClawdbotScanner',
+    'AgentSupplyChainScanner',
 ]
 
-# Scanner registry for CLI
-SCANNER_REGISTRY = {
+# Scanner registry for CLI. Typed as factory callables (each value is a concrete
+# BaseScanner subclass) rather than Type[BaseScanner] so the calls below don't trip
+# mypy's "cannot instantiate abstract class" check on the abstract base.
+SCANNER_REGISTRY: Dict[str, Callable[[], BaseScanner]] = {
     'react': ReactRSCScanner,
     'nextjs': NextJSScanner,
     'npm': NPMPackageScanner,
@@ -34,13 +40,14 @@ SCANNER_REGISTRY = {
     'n8n': N8NScanner,
     'supply-chain': SupplyChainScanner,
     'clawdbot': ClawdbotScanner,
+    'agent': AgentSupplyChainScanner,
 }
 
-def get_all_scanners():
+def get_all_scanners() -> List[BaseScanner]:
     """Get instances of all available scanners"""
     return [scanner_class() for scanner_class in SCANNER_REGISTRY.values()]
 
-def get_scanner(name: str):
+def get_scanner(name: str) -> BaseScanner:
     """Get a specific scanner by name"""
     if name not in SCANNER_REGISTRY:
         raise ValueError(f"Unknown scanner: {name}. Available: {list(SCANNER_REGISTRY.keys())}")

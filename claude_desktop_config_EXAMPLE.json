@@ -1,11 +1,9 @@
 {
   "mcpServers": {
     "shellockolm": {
-      "command": "python",
-      "args": ["G:\\shellockholm\\src\\mcp_server.py"],
-      "env": {
-        "PYTHONPATH": "G:\\shellockholm\\src"
-      }
+      "command": "shellockolm-mcp",
+      "args": [],
+      "env": {}
     }
   }
 }

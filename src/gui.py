@@ -6,6 +6,7 @@ Your Security Detective with a graphical interface
 🔍 Elementary security for complex codebases
 """
 
+import io
 import sys
 import tkinter as tk
 
@@ -726,7 +727,8 @@ class ShellockolmGUI:
 def main():
     """Launch the Shellockolm GUI"""
     root = tk.Tk()
-    app = ShellockolmGUI(root)
+    # Widgets register themselves on root; no further reference is needed.
+    ShellockolmGUI(root)
 
     # Center window on screen
     root.update_idletasks()

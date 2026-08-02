@@ -1,5 +1,18 @@
 # 🚀 Promotion Guide - Get the Word Out!
 
+> ⚠️ **CREDIBILITY WARNING — DO NOT PUBLISH AS-IS.** A monetization/credibility audit
+> (2026-06-10) flagged claims below that will damage trust on the exact channels you'd
+> launch on (HN, r/netsec fact-check instantly). Verify with a source or remove each:
+>
+> - **"100% success rate" / "100% patch success rate"** — no honest scanner claims this. Remove or reword to "patched every project it flagged, in our testing."
+> - **"Zero false positives"** — indefensible for any scanner. Remove.
+> - **"Scanned 2,665 projects"** — keep only if it's real, reproducible test data; otherwise reword to "in our testing" with a true number.
+> - **"Actively exploited by state-nexus APT groups"** — drop the attribution unless you can cite a public source. Unverified threat-intel claims backfire hard.
+> - **CVE-2025-55182 specifics** (CVSS 10.0, affected versions) — verify against OSV/GHSA before repeating as fact.
+>
+> Honest launch copy (and the "honest-numbers" angle that actually converts in
+> security) is drafted in `growth/SHOW_HN_DRAFT.md`.
+
 This guide helps you promote the CVE-2025-55182 Security Tools and grow the community.
 
 ---
@@ -51,7 +64,7 @@ All open-source, MIT licensed.
 Protect your apps in 2 minutes:
 
 ```bash
-git clone https://github.com/hlsitechio/shellockolm
+git clone https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner
 cd shellockolm
 pip install -r requirements.txt
 python auto_fix.py /your/projects
@@ -94,7 +107,7 @@ Battle-tested. Ready for your team.
 ```
 ⭐ Star the repo if you find this useful!
 
-🔗 https://github.com/hlsitechio/shellockolm
+🔗 https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner
 
 Help other devs discover these tools.
 Share this thread to protect the community.
@@ -152,7 +165,7 @@ All tools are:
 ✓ Well-documented
 ✓ CI/CD ready
 
-🔗 GitHub: https://github.com/hlsitechio/shellockolm
+🔗 GitHub: https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner
 
 If you're running React 19 or Next.js 15+, I highly recommend checking your applications immediately. This vulnerability is severe and actively exploited.
 
@@ -195,7 +208,7 @@ I built 9 professional security tools (all MIT licensed):
 ## Quick Start
 
 ```bash
-git clone https://github.com/hlsitechio/shellockolm
+git clone https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner
 cd shellockolm
 pip install -r requirements.txt
 python auto_fix.py /your/projects
@@ -226,7 +239,7 @@ Tested on my own projects:
 ✅ Production-tested
 ✅ Zero false positives
 
-GitHub: https://github.com/hlsitechio/shellockolm
+GitHub: https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner
 
 If you're running React 19 or Next.js 15+, **please check your applications immediately**. This is actively exploited and severe.
 
@@ -274,7 +287,7 @@ Built a complete automation suite:
 **Community Impact:**
 Making this free and open-source so the entire development community can protect their applications. Security should be accessible to everyone.
 
-🔗 https://github.com/hlsitechio/shellockolm
+🔗 https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner
 
 MIT licensed. Contributions welcome.
 ```
@@ -314,7 +327,7 @@ CVE-2025-55182 is a maximum-severity vulnerability affecting React Server Compon
 ## Try It Yourself
 
 ```bash
-git clone https://github.com/hlsitechio/shellockolm
+git clone https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner
 cd shellockolm
 pip install -r requirements.txt
 python auto_fix.py /your/projects
@@ -322,7 +335,7 @@ python auto_fix.py /your/projects
 
 ⭐ Star the repo if you find it useful!
 
-🔗 https://github.com/hlsitechio/shellockolm
+🔗 https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner
 ```
 
 ---
@@ -331,7 +344,7 @@ python auto_fix.py /your/projects
 
 **Title:** CVE-2025-55182 Security Toolkit – Automated React RCE patching (100% success rate)
 
-**URL:** https://github.com/hlsitechio/shellockolm
+**URL:** https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner
 
 **Optional Comment:**
 ```
@@ -406,7 +419,7 @@ Key points:
 - Bonus NPM malware detector
 - Complete documentation + CI/CD integration
 
-https://github.com/hlsitechio/shellockolm
+https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner
 
 Would you be interested in sharing this with your audience? I think it could help a lot of developers protect their applications.
 

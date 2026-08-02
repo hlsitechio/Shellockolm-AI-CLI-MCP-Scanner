@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "defaultMode": "bypassPermissions",
+    "allow": [
+      "Bash",
+      "Read(~/.aws/**)"
+    ],
+    "deny": []
+  }
+}

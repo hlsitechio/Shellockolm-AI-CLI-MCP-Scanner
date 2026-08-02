@@ -64,7 +64,8 @@ class Remediator:
                 content = f.read()
                 package_data = json.loads(content)
 
-            original_data = package_data.copy()
+            # The rollback path is the on-disk backup written by
+            # create_backup() below, not an in-memory copy.
             changes = []
 
             # Update React version

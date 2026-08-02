@@ -19,6 +19,53 @@ except ImportError:
     pass
 
 
+# A rule/finding identifier as used in `.shellockolmignore` rule-suppression lines
+# (and emitted as a finding's `cve_id`): an uppercase, hyphen-segmented token such
+# as AGENT-PI-013, AGENT-MCP-004, AGENT-SECRET-002, or CVE-2021-42574. Requiring
+# all-uppercase segments (and at least two of them) keeps ordinary lowercase path
+# patterns — `node_modules/`, `*.min.js`, `important-notes` — from ever being
+# mistaken for a rule ID, so existing path-only ignore files are unaffected.
+_RULE_ID_RE = re.compile(r"^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$")
+
+
+@dataclass
+class RuleSuppression:
+    """A `.shellockolmignore` directive that suppresses a specific finding rule.
+
+    Syntax (one per line; `#` comments and blanks ignored):
+        AGENT-PI-013                 # suppress this rule everywhere in the tree
+        AGENT-PI-013 docs/skills/**  # suppress it only under a path glob
+        AGENT-PI-016,AGENT-MCP-004 vendor/**  # several rules, one path scope
+
+    The optional path glob reuses the same gitignore-style matcher as path ignores
+    (`IgnorePattern`), matched against the artifact path relative to the ignore
+    file's directory. With no glob, the suppression applies to the whole tree.
+    """
+    rule_id: str
+    path_pattern: Optional["IgnorePattern"] = None
+
+
+def _parse_rule_suppression(line: str) -> Optional[List[RuleSuppression]]:
+    """Parse a line as one or more rule suppressions, or return None.
+
+    Returns None when the line's first whitespace-delimited token is not a
+    comma-list of rule IDs — in that case the caller treats the line as an
+    ordinary path pattern, preserving backward compatibility.
+    """
+    parts = line.split(None, 1)
+    if not parts:
+        return None
+    head, rest = parts[0], (parts[1].strip() if len(parts) > 1 else "")
+    rule_ids = head.split(",")
+    if not all(_RULE_ID_RE.match(rid) for rid in rule_ids if rid):
+        return None
+    rule_ids = [rid for rid in rule_ids if rid]
+    if not rule_ids:
+        return None
+    path_pattern = IgnorePattern(rest) if rest else None
+    return [RuleSuppression(rid, path_pattern) for rid in rule_ids]
+
+
 @dataclass
 class IgnorePattern:
     """Represents a single ignore pattern"""
@@ -51,20 +98,33 @@ class IgnorePattern:
             self.is_rooted = True
             pattern = pattern[1:]
 
-        # Escape special regex characters (except * and ?)
-        regex_special = ".^$+{}[]|()\\"
-        for char in regex_special:
-            pattern = pattern.replace(char, "\\" + char)
-
-        # Convert gitignore wildcards to regex
-        # ** matches any number of directories
-        pattern = pattern.replace("\\*\\*", "<<<DOUBLE_STAR>>>")
-        # * matches anything except /
-        pattern = pattern.replace("\\*", "[^/]*")
-        # ? matches single character except /
-        pattern = pattern.replace("\\?", "[^/]")
-        # Restore **
-        pattern = pattern.replace("<<<DOUBLE_STAR>>>", ".*")
+        # Convert the gitignore glob into a regex.
+        #
+        # The glob metacharacters (**, *, ?) must NOT be passed through
+        # re.escape, while every other character must be escaped exactly once
+        # so it is treated as a literal. We split the pattern on the glob
+        # tokens, re.escape each literal segment, then substitute the glob
+        # tokens with their regex equivalents.
+        #   **  ->  .*        (matches across directory separators)
+        #   *   ->  [^/]*     (matches anything except a separator)
+        #   ?   ->  [^/]      (matches a single non-separator character)
+        token_regex = re.compile(r"\*\*|\*|\?")
+        out_parts = []
+        last_end = 0
+        for m in token_regex.finditer(pattern):
+            # Escape the literal text preceding this glob token.
+            out_parts.append(re.escape(pattern[last_end:m.start()]))
+            token = m.group(0)
+            if token == "**":
+                out_parts.append(".*")
+            elif token == "*":
+                out_parts.append("[^/]*")
+            else:  # "?"
+                out_parts.append("[^/]")
+            last_end = m.end()
+        # Escape the trailing literal text.
+        out_parts.append(re.escape(pattern[last_end:]))
+        pattern = "".join(out_parts)
 
         # Add anchors based on pattern type
         if self.is_rooted:
@@ -97,6 +157,7 @@ class IgnoreFile:
     """Represents a loaded ignore file"""
     path: Path
     patterns: List[IgnorePattern] = field(default_factory=list)
+    rule_suppressions: List[RuleSuppression] = field(default_factory=list)
     base_dir: Path = field(default_factory=Path)
 
     def __post_init__(self):
@@ -118,6 +179,13 @@ class IgnoreFile:
                 if not line.strip():
                     continue
 
+                # A line whose first token is a rule ID (or comma-list of rule
+                # IDs) is a finding suppression, not a path pattern.
+                suppressions = _parse_rule_suppression(line.strip())
+                if suppressions is not None:
+                    self.rule_suppressions.extend(suppressions)
+                    continue
+
                 self.patterns.append(IgnorePattern(line))
 
     def should_ignore(self, path: str, is_directory: bool = False) -> bool:
@@ -136,6 +204,25 @@ class IgnoreFile:
                 ignored = not pattern.is_negation
 
         return ignored
+
+    def rule_should_ignore(self, rule_id: str, path: str) -> bool:
+        """True if a finding of `rule_id` at `path` is suppressed by this file."""
+        if not self.rule_suppressions:
+            return False
+
+        try:
+            rel_path_str = str(Path(path).relative_to(self.base_dir)).replace("\\", "/")
+        except ValueError:
+            rel_path_str = str(path).replace("\\", "/")
+
+        for sup in self.rule_suppressions:
+            if sup.rule_id != rule_id:
+                continue
+            if sup.path_pattern is None:
+                return True
+            if sup.path_pattern.matches(rel_path_str):
+                return True
+        return False
 
 
 class IgnoreHandler:
@@ -287,6 +374,21 @@ class IgnoreHandler:
 
         return (False, "")
 
+    def is_rule_suppressed(self, rule_id: str, path: str) -> Tuple[bool, str]:
+        """Check whether a finding (rule_id at path) is suppressed.
+
+        Honors rule-suppression lines in the global ignore file and any project
+        ignore files (most specific first). Returns (suppressed, reason).
+        """
+        if self.global_ignore and self.global_ignore.rule_should_ignore(rule_id, path):
+            return (True, f"global ignore: {rule_id}")
+
+        for ignore_file in reversed(self.ignore_files):
+            if ignore_file.rule_should_ignore(rule_id, path):
+                return (True, f"ignore file: {ignore_file.path}")
+
+        return (False, "")
+
     def filter_paths(self, paths: List[str], base_path: str = "") -> List[str]:
         """Filter a list of paths, removing ignored ones"""
         result = []
@@ -314,6 +416,11 @@ class IgnoreHandler:
             "#   *.log             - Ignore by extension",
             "#   /config.local.js  - Ignore specific file at root",
             "#   !important.js     - Don't ignore this file",
+            "#",
+            "# Suppress accepted agent-scan findings by rule ID (per path):",
+            "#   AGENT-PI-013               - suppress this rule everywhere",
+            "#   AGENT-PI-016 docs/**       - suppress it only under a path glob",
+            "#   AGENT-MCP-004,AGENT-HOOK-001 vendor/**  - several rules, one scope",
             "#",
             "",
         ]
@@ -408,12 +515,16 @@ class IgnoreHandler:
         total_patterns = len(self.default_patterns)
         project_patterns = sum(len(f.patterns) for f in self.ignore_files)
         global_patterns = len(self.global_ignore.patterns) if self.global_ignore else 0
+        rule_suppressions = sum(len(f.rule_suppressions) for f in self.ignore_files)
+        if self.global_ignore:
+            rule_suppressions += len(self.global_ignore.rule_suppressions)
 
         return {
             "default_patterns": len(self.default_patterns),
             "global_patterns": global_patterns,
             "project_patterns": project_patterns,
             "total_patterns": total_patterns + project_patterns + global_patterns,
+            "rule_suppressions": rule_suppressions,
             "ignore_files": len(self.ignore_files),
             "has_global": self.global_ignore is not None,
         }
