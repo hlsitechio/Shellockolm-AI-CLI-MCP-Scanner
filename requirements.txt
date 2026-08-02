@@ -1,4 +1,6 @@
-mcp>=1.0.0
+# Upper bound is load-bearing: mcp 2.0.0 (2026-07-28) removed the
+# Server.list_resources/read_resource/list_tools/call_tool decorators.
+mcp>=1.0.0,<2.0.0
 packaging>=21.0
 semver>=3.0.0
 pydantic>=2.0.0
