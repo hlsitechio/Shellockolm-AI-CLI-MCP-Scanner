@@ -2905,7 +2905,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   known-benign hook body — the property, not the one entry). Full suite
   **3,759 passed / 2 skipped** (was 3,726 collected); ruff + mypy gates clean;
   no doc drift (the row is not named in RULES.md/THREAT_MODEL.md).
-  _(commit PENDING)_
+  _(commit 640afa0)_
 
 ## Open follow-ups (surfaced by the F38 shell-narrowing pass, not yet worked)
 
@@ -3078,3 +3078,50 @@ each is a separate rule family with its own calibration burden. Ranked by severi
 
 Completed prior to this backlog (context): AGENT-PI-001…010, MCP structured scan,
 webhook/paste exfil, server-authoritative licensing, CLI menu/README agent-scan surfacing.
+
+## Open follow-ups (surfaced by the F42 warning-tier measurement, not yet worked)
+
+- F55. [ ] **The left-anchor leaves `execute` and `evaluate` matching, and
+  neither was measured** — `\bexec` and `\beval` are anchored on the left only,
+  which is what keeps `execSync`/`execFile`/`execa` firing. The same choice
+  keeps `execute`, `executable`, `execution`, `executor`, `evaluate` and
+  `evaluation` matching, and unlike `npm_execpath` those are ordinary English
+  words a build script can legitimately use — `node ./scripts/execute-build.js`
+  reports "Command execution" today. F42's corpus contains none of them, so
+  this is an *unmeasured* shape rather than a known false positive, and the
+  fix is not obviously a right-anchor: `\bexec\b` would drop `execSync` and
+  `execa`, which are the two spellings that matter most. The tractable form is
+  an explicit exclusion of the English suffixes (`execut*`, `evaluat*`) while
+  leaving every API spelling intact. Measure the base rate over hook bodies
+  *and* over the wider `scripts` corpus F37 used (104,467 bodies) before
+  touching it — the whole lesson of F37 and F42 is that this rate is lower than
+  it looks, and a narrowing that costs `execSync` to save a word nobody writes
+  is a bad trade.
+
+- F56. [ ] **The warning tier is nearly inert on the population that actually
+  runs** — F42's measurement says more about the tier than about its anchoring:
+  across the 48 unique auto-run hook bodies in 54,656 installed manifests, all
+  twenty rows together fire **once**. The reason is visible in the bodies —
+  real auto-run hooks are `node install.js`, `node-gyp rebuild`,
+  `prebuild-install || node-gyp rebuild`, `opencollective || exit 0`. The
+  capability words live in the *script the hook invokes*, which is exactly what
+  F41's hook-reachable-code pass follows. So phase 1's warning tier is now a
+  cheap first look that almost never sees anything, and the question worth
+  answering is whether it still earns its place in the summary or whether its
+  twenty rows should be re-pointed at the hook's *target file* the way F41
+  already resolves it. This is not a bug and nothing should be removed on
+  suspicion: measure what the tier contributes to real summaries alongside the
+  F41 findings first, and note that the tier is also the only thing that reads
+  a hook body that invokes no file at all (`curl … | sh` inline), which is the
+  case it must keep.
+
+- F57. [ ] **The F42 corpus is 301 trees, not the disk** — the measurement was
+  bounded by wall-clock: a full walk of all 1,149 `node_modules` trees on the
+  same machine did not finish inside the run, so the reported figures (229
+  declared bodies, 48 auto-run, 4 warning lines, 1 cross-word) are from the 301
+  trees that completed. That is a large sample and the conclusion is unlikely
+  to invert — the per-package maximum was one line, not several — but "no
+  package produces two warning lines" is the claim most sensitive to a wider
+  corpus, and it is the claim that rules out grouping the summary. Re-run
+  `measure_f42_full.py` over the full tree list as a background pass and either
+  confirm the number or re-open the grouping question with the real one.
