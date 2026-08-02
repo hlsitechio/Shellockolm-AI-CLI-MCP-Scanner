@@ -2953,7 +2953,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   risk — and stay clean. **7 new test cases**; full suite **3,764 passed /
   2 skipped** (was 3,759); ruff + mypy gates clean; no doc drift (the row is not
   named in RULES.md/THREAT_MODEL.md).
-  _(commit CO_MMIT)_
+  _(commit 746b3fb)_
 
 ## Open follow-ups (surfaced by the F43 formatted-argv pass, not yet worked)
 
