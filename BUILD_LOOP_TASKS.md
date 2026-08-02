@@ -2866,7 +2866,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   nothing. 76 new tests, full suite green, ruff + mypy clean on the new module.
   _(commit 860284c)_
 
-- F42. [ ] **The warning tier is still substring-matched, and a tree-wide sweep
+- F42. [x] **The warning tier is still substring-matched, and a tree-wide sweep
   multiplies it** — F37 word-anchored the six entries with a measured
   cross-word false match and deliberately left the rest literal, because
   over-matching a warning costs a line rather than a verdict. That reasoning
@@ -2879,6 +2879,33 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   deciding between calibrating the tier and grouping the summary by
   description. Do not guess at the number: the whole point of F37 was that the
   base rate here is far lower than it looks.
+  **Done — and the premise is measured false.** Over **301 real `node_modules`
+  trees / 54,656 installed manifests**, the four lifecycle hooks hold **229
+  unique bodies**, **48** of them in the auto-run set the F34 sweep actually
+  classifies. The entire twenty-row warning tier fires **once** across those 48
+  (`https://` in `faiss-node`'s source build) and **4 times** across all 229 —
+  `faiss-node`, `phenomenon`, `remix-island`, `http-call`, **one line each**.
+  No package produces two, so the multiplication the task expected does not
+  happen and the 10-line display cap hides nothing: **grouping the summary by
+  description is unwarranted and was not done.** The two shapes the task
+  predicted, `socket` inside `websocket` and `base64` inside a filename, do not
+  occur in the corpus at all.
+  What the measurement *did* confirm is the one row F37 named and left: `exec`
+  is the only cross-word match in the whole corpus, in `phenomenon@1.6.0`'s real
+  `prepare` body `$npm_execpath run test`. With the base rate now known, the
+  calibration is a one-character fix, so `exec` joins the anchored set as
+  `\bexec` — left-side only, exactly like `\beval`, so `execSync`, `execFile`,
+  `execa`, `exec(`, `.bin/exec-bin` and `sh -c 'exec node …'` all still fire
+  while `npm_execpath`, `run_exec_helper` and `preexec` no longer do. Verified
+  against the real installed package, not a fixture: `phenomenon`'s manifest at
+  `suna/frontend/node_modules/phenomenon` went from one warning line to a clean
+  report. **35 new test cases** (4 identifier-interior negatives, 7
+  real-spelling positives, the corpus FP itself, and a 23-case **tier-wide
+  lock** asserting that *no* warning row may match inside a larger word on any
+  known-benign hook body — the property, not the one entry). Full suite
+  **3,759 passed / 2 skipped** (was 3,726 collected); ruff + mypy gates clean;
+  no doc drift (the row is not named in RULES.md/THREAT_MODEL.md).
+  _(commit PENDING)_
 
 ## Open follow-ups (surfaced by the F38 shell-narrowing pass, not yet worked)
 

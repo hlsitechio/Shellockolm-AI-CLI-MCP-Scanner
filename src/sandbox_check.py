@@ -267,12 +267,35 @@ _HOOK_PS_DOWNLOAD = r"(?:Invoke-WebRequest|Invoke-RestMethod|\biwr\b|Net\.WebCli
 # is `rm -rf dist && npm run build`. Whether that is an attack is decided by
 # what the capability is wired to, which is what the DANGER tier asks.
 #
-# Six entries are word-anchored rather than raw substrings, each because the
+# Seven entries are word-anchored rather than raw substrings, each because the
 # substring form matched across a word boundary: `"nc "` matched `npm run
 # sync foo`, `".bat"` matched `.batch`, `"eval"` matched `retrieval`, `"curl"`
-# matched `curly`, `"wget"` matched `widget`, and `"rm -rf"` missed `rm -fr`
-# and `rm -r` entirely. The rest stay literal: over-matching costs a warning
-# line, and narrowing them would be a coverage loss for no gain.
+# matched `curly`, `"wget"` matched `widget`, `"exec"` matched `$npm_execpath`,
+# and `"rm -rf"` missed `rm -fr` and `rm -r` entirely. The rest stay literal:
+# over-matching costs a warning line, and narrowing them would be a coverage
+# loss for no gain.
+#
+# `exec` was the one F37 measured and deliberately left, on the reasoning that
+# a stray warning line is cheap. F42 asked whether the F34 tree-wide sweep
+# multiplies that cost — `socket` inside `websocket`, `base64` inside a
+# filename, several lines per hooked package, all of it compressed by a summary
+# that shows ten and then says "... and N more" — and told this pass not to
+# guess the number. Measured over **301 real `node_modules` trees / 54,656
+# installed manifests**: the four lifecycle hooks hold **229 unique bodies**, of
+# which **48** are in the auto-run set the F34 sweep actually classifies, and
+# the entire twenty-row warning tier fires **once** across them (`https://` in
+# `faiss-node`'s source build). The declared ceiling — every hook, as if each
+# package were git-sourced and its `prepare` ran — is **4 lines across 4
+# packages**, one line each. No package produces two, so there is nothing for a
+# summary to group and the display cap hides nothing.
+#
+# Exactly **one** of those four is a cross-word match, and it is this row:
+# `exec` inside `phenomenon`'s real `prepare` body, `$npm_execpath run test`.
+# `socket`/`websocket` and `base64`-in-a-filename, the two the task expected to
+# find, do not occur in the corpus at all. So the calibration is a one-character
+# fix and the summary regrouping is unwarranted. The anchor is left-side only,
+# exactly like `\beval`: `execSync`, `execFile` and `execa` all still fire,
+# while `npm_execpath` and `preexec` no longer do.
 
 #: The install-hook table, ordered DANGER-first so a report leads with the
 #: strongest thing it found.
@@ -353,7 +376,7 @@ INSTALL_SCRIPT_PATTERN_TABLE: Tuple[InstallScriptPattern, ...] = (
     InstallScriptPattern(r"\bcurl\b", "Downloads external content", HookSeverity.WARNING),
     InstallScriptPattern(r"\bwget\b", "Downloads external content", HookSeverity.WARNING),
     InstallScriptPattern(r"\beval", "Dynamic code execution", HookSeverity.WARNING),
-    InstallScriptPattern(r"exec", "Command execution", HookSeverity.WARNING),
+    InstallScriptPattern(r"\bexec", "Command execution", HookSeverity.WARNING),
     InstallScriptPattern(r"child_process", "Spawns processes", HookSeverity.WARNING),
     InstallScriptPattern(
         r"\brm\s+-[a-zA-Z]*[rf]\b", "Destructive file operation", HookSeverity.WARNING

@@ -613,6 +613,110 @@ def test_the_danger_tier_leads_the_table():
 
 
 # ---------------------------------------------------------------------------
+# The warning tier's cross-word base rate (F42)
+#
+# F37 word-anchored six of the twenty warning rows and left the rest literal,
+# on the reasoning that over-matching a warning costs a line rather than a
+# verdict. F42 asked whether the F34 tree-wide sweep multiplies that cost —
+# every installed dependency runs the same table, and the summary shows ten
+# lines and then says "... and N more" — and refused to guess the number.
+#
+# Measured over 301 real `node_modules` trees / 54,656 installed manifests: the
+# whole twenty-row tier fires once across the 48 unique auto-run hook bodies,
+# and 4 times across all 229 declared ones — one line per package, never two.
+# So there is nothing for a summary to group. Exactly one of the four is a
+# cross-word match: `exec` inside `phenomenon`'s real `prepare` body,
+# `$npm_execpath run test`, which makes the calibration a one-character fix.
+#
+# The anchor is left-side only, exactly like `\beval`: the capability spellings
+# that matter all *begin* with `exec`.
+# ---------------------------------------------------------------------------
+
+#: Hook bodies where `exec` appears only inside a larger identifier. None of
+#: these runs a subprocess, and the first is a real published `prepare`.
+EXEC_INSIDE_A_WORD = [
+    "$npm_execpath run test",
+    "${npm_execpath} run build",
+    "node ./scripts/run_exec_helper.js",
+    "node ./build/preexec-shim.js",
+]
+
+#: The spellings that genuinely name a subprocess API or command. Every one
+#: must survive the anchor.
+REAL_EXEC_SPELLINGS = [
+    "node -e \"require('child_process').execSync('echo hi')\"",
+    "node -e \"require('child_process').exec('echo hi')\"",
+    "node -e \"require('child_process').execFile('sh')\"",
+    "execa node ./scripts/build.js",
+    "sh -c 'exec node server.js'",
+    "./node_modules/.bin/exec-bin --run",
+    "node scripts/exec-tests.js",
+]
+
+
+@pytest.mark.parametrize("body", EXEC_INSIDE_A_WORD)
+def test_exec_inside_an_identifier_is_not_command_execution(body):
+    """`exec` as a substring of a variable name is not a capability."""
+    report = analyze_install_scripts({"prepare": body})
+
+    assert not any("Command execution" in line for line in report.warnings), (
+        f"{body!r} still reports a subprocess it never runs"
+    )
+
+
+@pytest.mark.parametrize("body", REAL_EXEC_SPELLINGS)
+def test_every_real_exec_spelling_still_warns(body):
+    """The anchor must not be a coverage loss: these all run something."""
+    report = analyze_install_scripts({"postinstall": body})
+
+    assert any("Command execution" in line for line in report.warnings), (
+        f"anchoring `exec` dropped {body!r}"
+    )
+
+
+def test_the_measured_corpus_false_positive_is_gone_entirely():
+    """`phenomenon`'s real `prepare` produced the corpus's only cross-word line."""
+    report = analyze_install_scripts({"prepare": "$npm_execpath run test"})
+
+    assert report.hooks == ["prepare"]
+    assert report.dangers == []
+    assert report.warnings == []
+    assert report.has_findings is False
+
+
+def _word_interior_match(body: str, pattern: str):
+    """A match of ``pattern`` in ``body`` that sits inside a larger word.
+
+    Both edges are checked: a match is only *interior* when the character
+    outside it and the character inside it are both word characters, which is
+    what makes `exec` in `npm_execpath` different from `exec` in `execSync`.
+    """
+    match = re.search(pattern, body, re.IGNORECASE)
+    if match is None or match.start() == match.end():
+        return None
+    start, end = match.start(), match.end()
+    word = re.compile(r"[A-Za-z0-9_]")
+    left = start > 0 and word.match(body[start - 1]) and word.match(body[start])
+    right = end < len(body) and word.match(body[end - 1]) and word.match(body[end])
+    return match if (left or right) else None
+
+
+@pytest.mark.parametrize("body", BENIGN_HOOK_BODIES)
+def test_no_warning_row_fires_from_inside_a_word_on_a_real_hook(body):
+    """The corpus lock: the whole tier, over every known-benign hook body.
+
+    This is the property F42 measured rather than the one entry it found. A row
+    that starts matching identifier interiors again fails here, whichever row
+    it is.
+    """
+    for pattern, description in INSTALL_SCRIPT_WARNING_PATTERNS:
+        match = _word_interior_match(body, pattern)
+        assert match is None, (
+            f"{description!r} matched {match.group(0)!r} inside a word in {body!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Expected-location filter
 # ---------------------------------------------------------------------------
 
