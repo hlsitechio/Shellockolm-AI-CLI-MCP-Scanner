@@ -3088,6 +3088,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   2; the extra skip is the symlink test where the OS forbids creating one);
   ruff + mypy gates clean. CONTRIBUTING.md gains the before/after workflow and
   CHANGELOG.md an Unreleased entry.
+  _(commit 510294c)_
 
 - F44. [ ] **A reverse shell whose binary is a variable is invisible** — arm 1
   requires the shell name as a string literal (`spawn('/bin/sh', [])`). The same
