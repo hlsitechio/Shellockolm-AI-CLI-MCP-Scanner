@@ -3021,7 +3021,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   named in RULES.md/THREAT_MODEL.md).
   _(commit 91a5669)_
 
-- F59. [ ] **The corpus sweep this repo keeps citing cannot actually be run on
+- F59. [x] **The corpus sweep this repo keeps citing cannot actually be run on
   this machine** — F43 needed the 2,080-package re-measurement F38 established
   as the bar and could not get it: two full sweeps over the 7,576 installed
   packages on `G:` failed, one on `MemoryError` reading a >8 MB bundle, one on
@@ -3033,6 +3033,61 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   and writes a machine-readable old-vs-new diff. Cheap to build, and it turns
   "measured over N packages" from a claim each pass has to re-earn into a
   command anyone can re-run.
+  **Done — and building it was the easy half; running it for real is what made
+  it correct.** `scripts/corpus_sweep.py` has three subcommands: `inventory`
+  walks the roots and persists every scannable file with its size, `sweep` runs
+  the shipped `scan_text_for_malware_patterns` table over that inventory, and
+  `diff` joins two reports into a per-package delta. Both file formats are JSONL
+  with a header AND a **trailer**, so a file that ends without one was
+  interrupted and is *refused* rather than measured — a short corpus silently
+  read as a complete one is how a calibration claim goes wrong.
+  **Every design choice is one of the three failures F43 hit.** The walk uses
+  `os.scandir` (the size comes from the directory entry, not a second `stat` per
+  file) and does not descend symlinks or Windows junctions — pnpm's virtual
+  store is built from them, and a junction is not an `os.walk`-visible symlink,
+  so following them is an unbounded walk rather than a bigger one. Packages are
+  flushed as the walk leaves them, so memory is the `node_modules` nesting depth
+  rather than the corpus. `sweep` streams the inventory and accumulates totals
+  incrementally, holding no result list. The per-file cap defaults to 2 MB and
+  is re-checked at read time (a stale inventory size cannot smuggle a truncated
+  read into a coverage claim); oversize, unreadable, sliced and never-scanned
+  packages are each **counted and named** in the report.
+  **Three bugs were found only by running it against the real machine, and each
+  is now pinned by a test.** (1) With the root spelled `G:/` — already ending in
+  a separator — recovering a child's relative path by stripping the root prefix
+  produced keys like `G://G:/node_modules/x`, which no sweep could open; the
+  walk now carries the relative path instead of re-deriving it. (2) The first
+  `sweep` died on `MemoryError` **inside this harness**: `read_jsonl`
+  materialised all 143,010 inventory records (168 MB of JSON). Streaming is not
+  an optimisation here, it is the whole point. (3) `MemoryError` was guarded
+  around the *scan* but not the 2 MB *read*, and under machine-wide memory
+  pressure it is the read that raises — one file ended a 25-minute run. Resume
+  also now **appends** rather than rewrites, so a second interruption cannot
+  discard the work the first one survived.
+  **Measured end to end on this machine, which is the acceptance criterion:**
+  `inventory --root G:/` completed in **8m19s** — 143,010 packages (135,493 with
+  scannable code), 3,731,591 files, 28.7 GB, 1,023,339 directories, 0 unreadable
+  directories, 13,873 linked directories not descended. The two ad-hoc sweeps
+  this task exists because of never finished. A `sweep --limit 3000` then ran
+  **73,132 files / 431 MB in 25m08s**: 2 danger occurrences, 4,309 warning
+  occurrences, 18 files over the cap, 0 unreadable, 11 incomplete packages, 24
+  packages with nothing scannable. Killing it at package 1,200 and re-running
+  with `--resume` reproduced that report **exactly** (1,200 reused) in 13m49s,
+  and `diff` over the two returned **0 gained, 0 lost, 0 descriptions moved, all
+  totals delta 0** in 0.58s — so the harness is stable and the gate
+  (`--fail-on-new-dangers`) exits 0 on it.
+  **The 3,000-package slice already paid for itself**: both danger verdicts are
+  the same false positive, recorded as F62 below.
+  **47 new test cases** across four properties — attribution (nested packages,
+  scoped packages, `.bin`, codeless packages, drive-root keys, symlinks), no
+  silent caps (cap/stale-size/unreadable/blow-up/slice each counted and named),
+  the inventory really being the walk (a sweep that touches `_scandir_walk` or
+  `read_jsonl` fails), and the harness measuring the product (per-package hits
+  and the danger/warning split must equal `sandbox_codescan` +
+  `classify_malware_hits`). Full suite **3,834 passed / 3 skipped** (was 3,788 /
+  2; the extra skip is the symlink test where the OS forbids creating one);
+  ruff + mypy gates clean. CONTRIBUTING.md gains the before/after workflow and
+  CHANGELOG.md an Unreleased entry.
 
 - F44. [ ] **A reverse shell whose binary is a variable is invisible** — arm 1
   requires the shell name as a string literal (`spawn('/bin/sh', [])`). The same
@@ -3271,3 +3326,56 @@ webhook/paste exfil, server-authoritative licensing, CLI menu/README agent-scan 
   `exec`/`execSync`/`execFile`/`execFileSync`/`spawn`/`spawnSync` and reject
   `execa`/`respawn`), so hit counts cannot move and the measurement to re-run is
   purely throughput. If it lands, the two constants should collapse into one.
+
+## Open follow-ups (surfaced by the F59 corpus-harness pass, not yet worked)
+
+- F62. [ ] **`@supabase/supabase-js` is DO NOT INSTALL because Web3 sign-in says
+  "wallet"** — the first real run of `corpus_sweep.py` produced **2 danger
+  occurrences over 3,000 installed packages, and both are the same false
+  positive**: `dist/umd/supabase.js` carries a `Function(` (a capability) and
+  the word `wallet` (`cryptocurrency references`, a CONTEXT_DESCRIPTION), so the
+  capability is escalated and the package is condemned. The matches are its
+  Solana sign-in feature — `const {chain, wallet, statement, options} = e`, `No
+  compatible Solana wallet interface on the window object`, `Prefer passing the
+  wallet interface object directly to signInWithWeb3(...)`. This is the F35
+  shape exactly: an *import-or-vocabulary* signal standing in for behaviour.
+  `cryptocurrency references` was measured at zero pairings over F31's 480
+  packages and has been a context signal ever since; a corpus with a Web3 SDK in
+  it falsifies that, and every crypto library, wallet adapter and exchange
+  client on npm is the same shape. Note before reaching for the fix: unlike
+  F35's `require('http')`, the vocabulary arm has real value against a *clipper*
+  (malware that rewrites wallet addresses in the clipboard), so the answer is
+  probably to keep the pattern as a warning and drop it from
+  `CONTEXT_DESCRIPTIONS`, not to delete it. Re-measure the pairing rate over the
+  full inventory first — the harness now makes that a command, and the
+  `--fail-on-new-dangers` diff is the gate for the change.
+
+- F63. [ ] **The sweep is disk-bound at ~50 files/s, and a full-corpus run is
+  still a day** — F59's harness makes the sweep survivable (streamed, resumable,
+  capped) but not fast: 73,132 files took 25m08s, and the machine's inventory
+  holds 3,731,591. Two cheap levers, both measurable with the harness itself:
+  (1) a **byte prefilter** — F58 already used one ad hoc (`exec|spawn` before
+  the structural scan) and it cut the candidate set from 72,949 files to 4,950;
+  the same idea generalises to a single precompiled "any pattern could match"
+  alternation checked once per file, and the anti-drift test writes itself (the
+  prefilter must never reject a file the full table would hit). (2) **A worker
+  pool** — the work is embarrassingly parallel per package and the bottleneck is
+  `read()`, so even 4 threads should help on a contended disk. Measure which one
+  matters before building both; the prefilter changes CPU, and the 2 packages/s
+  figure suggests this corpus is I/O-bound, in which case the prefilter buys
+  almost nothing and the pool buys most of it.
+
+- F64. [ ] **The inventory counts 143,010 "packages" on a machine with far fewer
+  installs** — walking `G:/` whole picks up pnpm's content-addressable store
+  (`.pnpm-store/v10/projects/<hash>/node_modules/...`), archived project copies
+  and build outputs, so the corpus is real but wildly duplicated: the same
+  `typescript` appears hundreds of times. Every number measured on it is
+  therefore weighted by whatever happens to be duplicated most, which is a
+  worse denominator than the 2,080 F38 used. The fix is a **dedup key** —
+  `name@version` from each package's `package.json` — reported alongside the
+  raw count, so a claim can name both the unique-package figure and the install
+  figure instead of conflating them. Cheap: the walk already visits every
+  package directory, and
+  reading one small JSON per package is a rounding error against the 25 minutes
+  the sweep already spends. Until then, a sweep over this machine should be
+  described as installs, not packages.

@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`scripts/corpus_sweep.py` — the false-positive measurement, as a command you
+  can re-run.** Every calibration change in this project claims a number
+  ("measured over N installed packages, zero false dangers"), and until now each
+  one was earned with a throwaway script. This one is checked in: `inventory`
+  walks your `node_modules` trees once and persists the file list, `sweep` runs
+  the shipped malware-pattern table over it (resumable, with a per-file size cap
+  so one multi-megabyte bundle cannot kill the run), and `diff` prints a
+  machine-readable old-vs-new delta — which packages gained a danger, which lost
+  one, and how every pattern's hit count moved. `--fail-on-new-dangers` makes it
+  a gate. Oversize, unreadable and never-scanned packages are counted and named
+  rather than dropped, so a coverage claim can't quietly exclude what the sweep
+  didn't look at. See CONTRIBUTING.md for the before/after workflow.
+
 - **`sandbox <pkg>` now plants decoy credentials, so a package that goes hunting
   for your secrets has something to be caught taking.** The check redirects
   `HOME` into the throwaway sandbox so a thief cannot reach the real one — which
