@@ -2800,7 +2800,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   suite green (3,724), ruff + mypy clean on the new module. Honest scope, stated
   in the module docstring: a sibling file that is neither the manifest nor an
   entry point can still be deleted invisibly, and a sibling *rewritten* with
-  attacker code passes every check here (F52). _(commit CHASH)_
+  attacker code passes every check here (F52). _(commit 8f04d5b)_
 
 ## Open follow-ups (surfaced by the F37 install-hook tiering pass, not yet worked)
 
