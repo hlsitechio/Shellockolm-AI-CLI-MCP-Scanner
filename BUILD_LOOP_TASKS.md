@@ -3090,7 +3090,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   CHANGELOG.md an Unreleased entry.
   _(commit 510294c)_
 
-- F44. [ ] **A reverse shell whose binary is a variable is invisible** — arm 1
+- F44. [x] **A reverse shell whose binary is a variable is invisible** — arm 1
   requires the shell name as a string literal (`spawn('/bin/sh', [])`). The same
   attack written `const bin = process.env.SHELL; spawn(bin, [])` matches nothing
   — measured end to end, the full reverse-shell file (net.connect, the spawn,
@@ -3105,6 +3105,7 @@ each is a separate rule family with its own calibration burden. Ranked by severi
   env var (`process.env.SHELL`/`ComSpec`) within a short window of the spawn,
   which is a small dataflow step rather than a wider pattern. Measure the
   assignment form's base rate over the corpus first.
+  _Done: `_shell_variable_spawned_bare` (structural reader on `shell process spawned`) follows a name assigned a shell literal or `process.env.SHELL`/`ComSpec` to a bare `spawn(name[, []])` within 800 chars, plus the inline `spawn(process.env.SHELL, [])` form. Base rate: 0 hits over 16,379 installed `.js` files (~130 MB) in local node_modules trees; opaque `spawn(cmd, args)`, commanded spawns and unrelated names stay silent (fixtures in tests/test_sandbox_check.py). Full suite 3,853 passed / 3 skipped; ruff+mypy clean._ _(commit 0575c51)_
 
 ## Open follow-ups (surfaced by the F39 keylog-narrowing pass, not yet worked)
 
