@@ -3330,7 +3330,7 @@ webhook/paste exfil, server-authoritative licensing, CLI menu/README agent-scan 
 
 ## Open follow-ups (surfaced by the F59 corpus-harness pass, not yet worked)
 
-- F62. [x] (HASH) **`@supabase/supabase-js` is DO NOT INSTALL because Web3 sign-in says
+- F62. [x] (c626947) **`@supabase/supabase-js` is DO NOT INSTALL because Web3 sign-in says
   "wallet"** — the first real run of `corpus_sweep.py` produced **2 danger
   occurrences over 3,000 installed packages, and both are the same false
   positive**: `dist/umd/supabase.js` carries a `Function(` (a capability) and
