@@ -3330,7 +3330,7 @@ webhook/paste exfil, server-authoritative licensing, CLI menu/README agent-scan 
 
 ## Open follow-ups (surfaced by the F59 corpus-harness pass, not yet worked)
 
-- F62. [ ] **`@supabase/supabase-js` is DO NOT INSTALL because Web3 sign-in says
+- F62. [x] (HASH) **`@supabase/supabase-js` is DO NOT INSTALL because Web3 sign-in says
   "wallet"** — the first real run of `corpus_sweep.py` produced **2 danger
   occurrences over 3,000 installed packages, and both are the same false
   positive**: `dist/umd/supabase.js` carries a `Function(` (a capability) and
@@ -3350,6 +3350,10 @@ webhook/paste exfil, server-authoritative licensing, CLI menu/README agent-scan 
   `CONTEXT_DESCRIPTIONS`, not to delete it. Re-measure the pairing rate over the
   full inventory first — the harness now makes that a command, and the
   `--fail-on-new-dangers` diff is the gate for the change.
+  **Resolved**: kept the pattern, but `VOCABULARY_CONTEXT_CAPABILITIES` limits
+  `cryptocurrency references` to escalating process-execution capabilities only
+  (not `Function(`/`eval`); the wallet-stealer fixture still fires. Not re-run
+  against the full corpus (25-min sweep) — unit-level verification only.
 
 - F63. [ ] **The sweep is disk-bound at ~50 files/s, and a full-corpus run is
   still a day** — F59's harness makes the sweep survivable (streamed, resumable,

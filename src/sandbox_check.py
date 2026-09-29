@@ -1257,6 +1257,23 @@ CAPABILITY_DESCRIPTIONS: frozenset = frozenset(
 #: ``network I/O wired to …`` patterns, which require the network call and the
 #: execution sink to be within :data:`NETWORK_EXEC_WINDOW` of each other. Both
 #: import patterns remain in the table, as warnings.
+#: F62: a vocabulary signal (the *word* ``wallet``) may only corroborate a
+#: capability that can act on a wallet from outside the JS engine. The first
+#: corpus sweep condemned ``@supabase/supabase-js`` because ``Function(`` shared
+#: a file with its Solana sign-in text ("No compatible Solana wallet interface");
+#: every Web3 SDK has that shape. A clipper/stealer needs a process or a shell
+#: (``cp.exec('bitcoin-cli dumpwallet …')``), so it still escalates; dynamic code
+#: alone no longer does.
+VOCABULARY_CONTEXT_CAPABILITIES: Dict[str, frozenset] = {
+    "cryptocurrency references": frozenset(
+        {
+            "child_process - command execution",
+            "exec() - command execution",
+            "spawn() - process spawning",
+        }
+    ),
+}
+
 CONTEXT_DESCRIPTIONS: frozenset = frozenset(
     {
         "hex-encoded string blob (possible obfuscation)",
@@ -1353,8 +1370,11 @@ def corroborated_capabilities(hits: Sequence[Tuple[str, str]]) -> List[str]:
 
     escalated: set = set()
     for descriptions in per_file.values():
-        if descriptions & CONTEXT_DESCRIPTIONS:
-            escalated |= descriptions & CAPABILITY_DESCRIPTIONS
+        for context in descriptions & CONTEXT_DESCRIPTIONS:
+            allowed = VOCABULARY_CONTEXT_CAPABILITIES.get(
+                context, CAPABILITY_DESCRIPTIONS
+            )
+            escalated |= descriptions & allowed
     return sorted(escalated)
 
 

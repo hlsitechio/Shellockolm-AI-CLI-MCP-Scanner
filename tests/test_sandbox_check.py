@@ -2334,3 +2334,34 @@ def test_module_is_pure_no_io_imports():
 
     for forbidden in ("import subprocess", "import shutil", "from rich", "import os"):
         assert forbidden not in source, forbidden
+
+
+# ---------------------------------------------------------------------------
+# F62 — the word "wallet" is not a reason to condemn dynamic code
+#
+# The first corpus sweep flagged @supabase/supabase-js: Function( plus its Solana
+# sign-in text. The vocabulary signal now corroborates process execution only.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "capability",
+    ["Function constructor - dynamic code", "eval() - dynamic code execution"],
+)
+def test_wallet_vocabulary_does_not_escalate_dynamic_code(capability):
+    hits = [("supabase.js", "cryptocurrency references"), ("supabase.js", capability)]
+    assert corroborated_capabilities(hits) == []
+
+
+@pytest.mark.parametrize(
+    "capability",
+    ["child_process - command execution", "exec() - command execution", "spawn() - process spawning"],
+)
+def test_wallet_vocabulary_still_escalates_process_execution(capability):
+    hits = [("a.js", "cryptocurrency references"), ("a.js", capability)]
+    assert corroborated_capabilities(hits) == [capability]
+
+
+def test_other_context_signals_still_escalate_dynamic_code():
+    hits = [("a.js", "shell process spawned"), ("a.js", "eval() - dynamic code execution")]
+    assert corroborated_capabilities(hits) == ["eval() - dynamic code execution"]
