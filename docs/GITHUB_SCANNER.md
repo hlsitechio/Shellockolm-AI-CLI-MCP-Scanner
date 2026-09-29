@@ -360,8 +360,8 @@ A: Absolutely! See CI/CD Integration section above.
 ## Support
 
 - 📧 Email: hlarosesurprenant@gmail.com
-- 🐛 Issues: https://github.com/hlsitechio/shellockolm/issues
-- 💬 Discussions: https://github.com/hlsitechio/shellockolm/discussions
+- 🐛 Issues: https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/issues
+- 💬 Discussions: https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/discussions
 
 ## License
 

@@ -414,7 +414,7 @@ Check `PYTHONPATH` in config:
 
 - **[Complete MCP Setup Guide](MCP_SETUP.md)** - All details
 - **[README](../README.md)** - Main documentation  
-- **[GitHub Issues](https://github.com/hlsitechio/shellockolm/issues)** - Report problems
+- **[GitHub Issues](https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/issues)** - Report problems
 
 ---
 

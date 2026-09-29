@@ -268,19 +268,19 @@ class WatchMode:
             findings = []
             for scanner in get_all_scanners():
                 try:
-                    result = scanner.scan(str(self.watcher.root_path))
+                    result = scanner.scan_directory(str(self.watcher.root_path), quick_mode=True)
                     if result and result.findings:
                         for finding in result.findings:
                             findings.append({
-                                "scanner": scanner.name,
+                                "scanner": scanner.NAME,
                                 "cve": finding.cve_id,
                                 "severity": finding.severity.value,
                                 "file": finding.file_path,
-                                "line": finding.line_number,
+                                "line": getattr(finding, "line_number", 0),
                                 "message": finding.description
                             })
                 except Exception as e:
-                    self.console.print(f"[dim]Scanner {scanner.name} error: {e}[/dim]")
+                    self.console.print(f"[dim]Scanner {scanner.NAME} error: {e}[/dim]")
 
             self._last_findings = findings
 

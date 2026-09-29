@@ -1,15 +1,15 @@
 {
   "name": "shellockolm",
   "displayName": "Shellockolm - AI Security Scanner",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "CLI & MCP Security Scanner for AI Agents - Fast CVE detection (0.1s), malware scanning, supply chain attack detection. Integrates with Claude, Copilot, Gemini.",
   "homepage": "https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner",
   "repository": "https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner",
   "author": "hlsitechio",
-  "license": "MIT",
+  "license": "LicenseRef-PolyForm-Strict-1.0.0",
   "server": {
-    "command": "python",
-    "args": ["src/mcp_server.py"],
+    "command": "shellockolm-mcp",
+    "args": [],
     "env": {}
   },
   "capabilities": {

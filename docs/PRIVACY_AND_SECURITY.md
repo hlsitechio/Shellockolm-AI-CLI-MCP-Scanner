@@ -403,7 +403,7 @@ Run this monthly audit:
 ## 📞 Privacy Questions?
 
 - 📖 Check `.gitignore` file for full list of protected patterns
-- 🐛 Report privacy concerns: https://github.com/hlsitechio/shellockolm/security
+- 🐛 Report privacy concerns: https://github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner/security
 - 📧 Email: hlarosesurprenant@gmail.com
 
 **Remember: Your security is our priority. When in doubt, don't commit it!**

@@ -10,7 +10,7 @@ Detects vulnerabilities in popular npm packages:
 """
 
 from pathlib import Path
-from typing import List, Set
+from typing import Any, Dict, List, Set
 from datetime import datetime
 
 from .base import BaseScanner, ScanResult, ScanFinding
@@ -34,7 +34,7 @@ class NPMPackageScanner(BaseScanner):
     ]
 
     # Package name -> CVE mapping with version checks
-    PACKAGE_VULNERABILITIES = {
+    PACKAGE_VULNERABILITIES: Dict[str, Dict[str, Any]] = {
         "mysql2": {
             "cves": ["CVE-2024-21508"],
             "vulnerable_below": "3.9.4",
@@ -95,7 +95,7 @@ class NPMPackageScanner(BaseScanner):
 
     def _scan_package(self, package_json: Path) -> List[ScanFinding]:
         """Scan a single package.json for npm package vulnerabilities"""
-        findings = []
+        findings: List[ScanFinding] = []
 
         data = self.parse_package_json(package_json)
         if not data:

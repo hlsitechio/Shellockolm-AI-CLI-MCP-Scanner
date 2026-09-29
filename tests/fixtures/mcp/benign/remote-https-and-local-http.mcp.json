@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "remote-api": {
+      "type": "http",
+      "url": "https://api.example.com/mcp"
+    },
+    "remote-sse": {
+      "type": "sse",
+      "url": "https://mcp.vendor.io/v1/sse"
+    },
+    "local-dev": {
+      "url": "http://localhost:3000/sse"
+    },
+    "local-ip": {
+      "endpoint": "http://127.0.0.1:9000/mcp"
+    },
+    "docker-host": {
+      "url": "http://host.docker.internal:7000/sse"
+    }
+  }
+}

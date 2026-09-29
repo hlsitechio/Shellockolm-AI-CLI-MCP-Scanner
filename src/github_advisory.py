@@ -13,6 +13,7 @@ Features:
 import json
 import hashlib
 import subprocess
+import tempfile
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Set
@@ -107,7 +108,7 @@ class GitHubAdvisoryDB:
 
     GRAPHQL_ENDPOINT = "https://api.github.com/graphql"
     REST_ENDPOINT = "https://api.github.com/advisories"
-    CACHE_DIR = Path("/tmp/shellockolm/github_advisory_cache")
+    CACHE_DIR = Path(tempfile.gettempdir()) / "shellockolm" / "github_advisory_cache"
     CACHE_TTL_HOURS = 24  # Cache validity in hours
 
     # GraphQL query for security advisories
@@ -168,6 +169,9 @@ class GitHubAdvisoryDB:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._advisories_by_cve: Dict[str, GitHubAdvisory] = {}
         self._advisories_by_ghsa: Dict[str, GitHubAdvisory] = {}
+        # Failed API lookups. A failure returns None, which downstream reads as
+        # "no advisories" — keep the reason so that is not mistaken for clean.
+        self.request_errors: List[str] = []
 
     def _get_token_from_env(self) -> Optional[str]:
         """Try to get GitHub token from environment"""
@@ -255,7 +259,11 @@ class GitHubAdvisoryDB:
 
             with urllib.request.urlopen(req, context=ctx, timeout=30) as response:
                 return json.loads(response.read().decode())
-        except Exception as e:
+        except Exception as exc:
+            # A failed lookup yields "no advisories", which is indistinguishable
+            # from "package is clean". Record why so a rate-limit or network
+            # error can be told apart from a genuinely unaffected package.
+            self.request_errors.append(f"GraphQL request failed: {type(exc).__name__}: {exc}")
             return None
 
     def _make_rest_request(self, endpoint: str) -> Optional[Dict[str, Any]]:

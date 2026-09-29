@@ -1,0 +1,31 @@
+{
+  "name": "Order Sync",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Get Orders",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [400, 300],
+      "credentials": {
+        "httpHeaderAuth": { "id": "3", "name": "Shop API" }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.internal.example.com/v1/orders/sync",
+        "options": {}
+      },
+      "name": "Push To Warehouse",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [700, 300]
+    }
+  ],
+  "connections": {
+    "Get Orders": {
+      "main": [[{ "node": "Push To Warehouse", "type": "main", "index": 0 }]]
+    }
+  }
+}

@@ -4,7 +4,8 @@ Shellockolm - Run ALL Scans & Generate Full Report
 Executes every non-destructive, non-interactive scan command
 and writes consolidated output to full_report.txt
 """
-import sys, os
+import os
+import sys
 
 # Fix Windows encoding
 if sys.platform == "win32":

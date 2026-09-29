@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import List, Optional, Dict, Any, Set, Generator
+from typing import List, Optional, Dict, Any, Set, Generator, Union
 
 # Import vulnerability database
 import sys
@@ -49,6 +49,14 @@ class ScanFinding:
     references: List[str] = field(default_factory=list)
     remediation: Optional[str] = None
     detection_method: str = "lockfile"  # lockfile, live, manifest
+    # Detection certainty, distinct from severity (impact). "high" = a structural /
+    # signature / decoded-secret match that is a deterministic true positive;
+    # "medium"/"low" = a broader natural-language heuristic that can occasionally
+    # match benign prose. Defaults to "high" so non-agent findings (CVE matches,
+    # secrets, etc.) — which are deterministic — are never filtered by a confidence
+    # threshold. Surfaced in output and filterable via the agent scanner's
+    # min_confidence / the CLI's --min-confidence.
+    confidence: str = "high"
     raw_data: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -62,7 +70,17 @@ class ScanResult:
     end_time: Optional[datetime] = None
     findings: List[ScanFinding] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
-    stats: Dict[str, int] = field(default_factory=dict)
+    # Non-fatal partial-scan notices, distinct from `errors` (which are per-file read
+    # failures). A warning means the scan SUCCEEDED but was deliberately bounded — an
+    # over-cap in-memory input truncated, or a directory walk stopped at its time
+    # budget — so the result is partial rather than wrong. Surfaced (never silent) in
+    # CLI/MCP output so a caller knows coverage was limited.
+    warnings: List[str] = field(default_factory=list)
+    # Free-form per-scan metadata bag. Most values are integer unit counts
+    # (keys ending in `_scanned`, summed by aggregate_scan_stats), but the agent
+    # scanner also records string metadata (`min_confidence`, `artifact_type`)
+    # and booleans, so the value type is intentionally Any.
+    stats: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def duration_seconds(self) -> float:
@@ -107,11 +125,13 @@ class ScanResult:
                     "file_path": f.file_path,
                     "description": f.description,
                     "exploit_difficulty": f.exploit_difficulty,
+                    "confidence": f.confidence,
                     "remediation": f.remediation,
                 }
                 for f in self.findings
             ],
             "errors": self.errors,
+            "warnings": self.warnings,
             "stats": self.stats,
         }
 
@@ -161,7 +181,7 @@ class BaseScanner(ABC):
         "System Volume Information",
     }
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.db = VulnerabilityDatabase
 
     @abstractmethod
@@ -234,7 +254,7 @@ class BaseScanner(ABC):
                 name.startswith(".")
             )
 
-        def walk_dir(current: Path, depth: int):
+        def walk_dir(current: Path, depth: int) -> Generator[Path, None, None]:
             if depth > max_depth:
                 return
 
@@ -273,7 +293,10 @@ class BaseScanner(ABC):
         """Parse a package.json file"""
         try:
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                return json.load(f)
+                data = json.load(f)
+            # A package.json is an object; a top-level array/scalar is malformed
+            # for our purposes — return None rather than a wrongly-typed value.
+            return data if isinstance(data, dict) else None
         except (json.JSONDecodeError, IOError):
             return None
 
@@ -364,14 +387,14 @@ class BaseScanner(ABC):
         version: str
     ) -> List[Vulnerability]:
         """Check if a package version is vulnerable"""
-        return self.db.check_version(package, version)
+        return list(self.db.check_version(package, version))
 
     def create_finding(
         self,
         vuln: Vulnerability,
         package: str,
         version: str,
-        file_path: str,
+        file_path: Union[str, Path],
         detection_method: str = "lockfile"
     ) -> ScanFinding:
         """Create a ScanFinding from a Vulnerability"""

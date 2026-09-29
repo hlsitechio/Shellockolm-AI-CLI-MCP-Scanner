@@ -7,49 +7,31 @@
 ## 🎯 What You Get
 
 AI assistants can now:
-- ✅ **Scan projects** for 32 CVEs automatically
-- ✅ **Live probe** URLs for exploits
-- ✅ **Auto-fix** vulnerabilities with one command
-- ✅ **Check CVE details** in real-time
-- ✅ **List all CVEs** with filters
+- ✅ **Vet agent artifacts** (skills, `mcp.json`, n8n workflows, `CLAUDE.md`) for prompt injection, tool poisoning & secret exfiltration **before** you trust them
+- ✅ **Scan raw text** in-memory before you paste or install it (no disk I/O)
+- ✅ **Scan projects** for 32 tracked CVEs (React/Next/Node/npm) plus malware & secrets
+- ✅ **Live probe** URLs for exploitable vulnerabilities
+- ✅ **Explain any finding** (an `AGENT-*` rule or a `CVE-*`) with impact & remediation
 
 ---
 
 ## ⚡ Quick Setup
 
-### 1️⃣ For Claude Desktop (Anthropic)
+**Prerequisite:** install the package so the `shellockolm-mcp` command is on your `PATH`:
 
-**Windows:**
-```powershell
-# Copy config to Claude Desktop settings
-$claudeConfig = "$env:APPDATA\Claude\claude_desktop_config.json"
-$config = Get-Content .mcp-config.json | ConvertFrom-Json
-$config.mcpServers.shellockolm.cwd = $PWD.Path
-$config | ConvertTo-Json -Depth 10 | Set-Content $claudeConfig
-Write-Host "✅ Shellockolm MCP configured for Claude Desktop"
-```
-
-**macOS/Linux:**
 ```bash
-# Copy config to Claude Desktop settings
-CLAUDE_CONFIG="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
-jq --arg cwd "$PWD" '.mcpServers.shellockolm.cwd = $cwd' .mcp-config.json > "$CLAUDE_CONFIG"
-echo "✅ Shellockolm MCP configured for Claude Desktop"
+pip install -e .          # from a clone of this repo
+# or
+pipx install shellockolm  # isolated global install
 ```
 
-**Manual Setup:**
-1. Open Claude Desktop settings
-2. Go to "Developer" → "Edit Config"
-3. Add:
+Every client below uses the **same** one-paste server block — no clone path, no `PYTHONPATH`:
+
 ```json
 {
   "mcpServers": {
     "shellockolm": {
-      "command": "python",
-      "args": ["/path/to/shellockolm/src/mcp_server.py"],
-      "env": {
-        "PYTHONPATH": "/path/to/shellockolm/src"
-      }
+      "command": "shellockolm-mcp"
     }
   }
 }
@@ -57,79 +39,69 @@ echo "✅ Shellockolm MCP configured for Claude Desktop"
 
 ---
 
-### 2️⃣ For GitHub Copilot CLI
+### 1️⃣ For Claude Code
 
-**Setup:**
+One command — no file editing:
+
 ```bash
-# Add to Copilot CLI config
-gh copilot config set mcp.servers.shellockolm \
-  '{"command":"python","args":["src/mcp_server.py"],"cwd":"'$PWD'"}'
+claude mcp add shellockolm -- shellockolm-mcp                # this project
+claude mcp add --scope user shellockolm -- shellockolm-mcp   # all your projects
 ```
 
-**Usage:**
-```bash
-# Ask Copilot to scan your project
-gh copilot suggest "scan this project for vulnerabilities using shellockolm"
+…or commit a `.mcp.json` at the repo root containing the server block above so the whole team
+gets it automatically. Verify with `claude mcp list`.
 
-# Or in chat mode
-gh copilot chat
-> Use shellockolm to scan for React CVEs
-```
+---
+
+### 2️⃣ For Claude Desktop (Anthropic)
+
+1. Open Claude Desktop → **Settings → Developer → Edit Config**.
+2. Paste the server block into the config file:
+   - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+   - **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+3. Restart Claude Desktop.
+
+A ready-to-copy `claude_desktop_config_EXAMPLE.json` ships in the repo root.
 
 ---
 
 ### 3️⃣ For Cursor IDE
 
-**Setup:**
-1. Open Cursor Settings (⌘, or Ctrl+,)
-2. Search for "MCP Servers"
-3. Click "Add MCP Server"
-4. Enter:
-   - **Name:** `shellockolm`
-   - **Command:** `python`
-   - **Args:** `["src/mcp_server.py"]`
-   - **Working Directory:** `/path/to/shellockolm`
+Add the server block to **`~/.cursor/mcp.json`** (global) or **`.cursor/mcp.json`** (this project),
+then enable **shellockolm** under **Settings → MCP**.
 
 **Usage:**
 ```
 # In Cursor chat
 @shellockolm scan this directory for CVEs
-@shellockolm check CVE-2025-55182
-@shellockolm fix this vulnerability
+@shellockolm scan this SKILL.md before I install it
+@shellockolm explain AGENT-PI-013
 ```
 
 ---
 
-### 4️⃣ For Continue.dev
+### 4️⃣ For Windsurf
 
-**Setup:**
-Add to `~/.continue/config.json`:
-```json
-{
-  "mcpServers": [
-    {
-      "name": "shellockolm",
-      "command": "python",
-      "args": ["src/mcp_server.py"],
-      "cwd": "/path/to/shellockolm"
-    }
-  ]
-}
-```
+Add the server block to **`~/.codeium/windsurf/mcp_config.json`** (or **Settings → Cascade → Add
+Server** → paste), then hit the refresh button so Cascade picks up the new server.
 
 ---
 
 ### 5️⃣ For Any MCP-Compatible Client
 
-**Generic stdio configuration:**
+**Generic stdio configuration** (after `pip install`):
+```json
+{
+  "command": "shellockolm-mcp",
+  "args": []
+}
+```
+
+**Without a global install** — point at the server script directly:
 ```json
 {
   "command": "python",
-  "args": ["src/mcp_server.py"],
-  "cwd": "/absolute/path/to/shellockolm",
-  "env": {
-    "PYTHONPATH": "/absolute/path/to/shellockolm/src"
-  }
+  "args": ["/absolute/path/to/Shellockolm-Scanner/src/mcp_server.py"]
 }
 ```
 
@@ -137,99 +109,88 @@ Add to `~/.continue/config.json`:
 
 ## 🧪 Test Your Setup
 
-### Start MCP Server Manually
+The MCP server speaks JSON-RPC over **stdio** — launched directly it stays silent and waits for a
+client, so there is no banner to look for. Confirm the install with the bundled self-check instead:
+
 ```bash
-cd /path/to/shellockolm
-python src/mcp_server.py
+shellockolm doctor   # verifies Python, the CVE database, the rule catalog, git, and license
 ```
 
-You should see:
-```
-Shellockolm MCP Server v2.0
-Listening on stdio...
-Ready for requests
-```
+**Claude Code:** `claude mcp list` should show `shellockolm` connected.
 
-### Test with MCP Inspector (Development Tool)
+### Inspect interactively (optional)
 ```bash
-npm install -g @modelcontextprotocol/inspector
-mcp-inspector python src/mcp_server.py
+npx @modelcontextprotocol/inspector shellockolm-mcp
 ```
 
 ---
 
 ## 🛠️ Available MCP Tools
 
-### 1. **scan_directory**
-Scan a directory for all 32 tracked CVEs.
+The server exposes **12 tools**. Run `shellockolm rules list` / `list_cves` for the full catalogs.
 
-**Example (in AI chat):**
+### Agent supply-chain (the differentiator)
+
+#### **scan_agent_artifacts**
+Scan a path of agent artifacts (skills, `mcp.json`, n8n exports, `CLAUDE.md`/`AGENTS.md`,
+`.claude/` hooks & commands) for prompt injection, tool poisoning, and secret exfiltration.
+
 ```
-Scan /path/to/my-react-app for vulnerabilities
-```
-
-**Parameters:**
-- `path` (required): Directory to scan
-- `recursive` (default: true): Scan subdirectories
-- `scanner` (optional): Specific scanner (react, nextjs, npm, etc.)
-
----
-
-### 2. **scan_live**
-Probe a live URL for exploitable vulnerabilities.
-
-**Example:**
-```
-Check if https://my-app.com is vulnerable to CVE-2025-55182
+Use shellockolm to scan ./my-skill before I install it
 ```
 
-**Parameters:**
-- `url` (required): URL to probe
-- `scanner` (default: "all"): nextjs, n8n, or all
-- `timeout` (default: 10): Request timeout
+**Parameters:** `path` (required), `recursive`, `max_depth`, `min_confidence` (low|medium|high), `quick_mode`
 
----
+#### **scan_text**
+Scan a **raw artifact string in-memory** — no disk I/O — for content you're about to paste/install.
 
-### 3. **fix_vulnerability**
-Automatically patch a vulnerability with backup.
+**Parameters:** `text` (required), `artifact_type` (auto|skill|instructions|command|mcp|n8n|settings), `min_confidence`, `filename`
 
-**Example:**
+#### **explain_finding**
+Explain any finding — an `AGENT-*` rule **or** a tracked `CVE-*` — with severity, impact, an
+example attack, and remediation.
+
+**Parameters:** `finding_id` (required)
+
+#### **check_mcp_config**
+Audit the agent's **own** installed MCP configs — the well-known per-OS locations (Claude Desktop,
+Claude Code's `~/.claude.json`, Cursor, Windsurf, VS Code; plus this project's `.mcp.json` /
+`.cursor/mcp.json` / `.vscode/mcp.json`) — for a poisoned server entry (raw-URL/IP launcher, a host
+credential forwarded to an unrelated server, `curl|bash`). Read-only; secrets are redacted.
+
 ```
-Fix CVE-2025-55182 in /path/to/package.json
-```
-
-**Parameters:**
-- `path` (required): Path to package.json
-- `cve_id` (required): CVE to fix
-- `backup` (default: true): Create backup before patching
-
----
-
-### 4. **check_cve**
-Get detailed information about a specific CVE.
-
-**Example:**
-```
-What is CVE-2025-55182?
+Use shellockolm to check my MCP config for tampering
 ```
 
-**Parameters:**
-- `cve_id` (required): CVE identifier
+**Parameters:** `path` (project root, optional), `include_user`, `include_project`, `min_confidence`
 
----
+### CVEs, malware & secrets
 
-### 5. **list_cves**
-List all tracked CVEs with filters.
+#### **scan_directory**
+Deep scan of a directory for tracked CVEs, malware, secrets, **and** agent rules.
+**Parameters:** `path` (required), `recursive`, `scanner` (react, nextjs, npm, …).
 
-**Example:**
-```
-Show all critical React CVEs
-```
+#### **quick_scan**
+Fast CVE scan of `package.json` only. **Parameters:** `path` (required).
 
-**Parameters:**
-- `severity` (optional): CRITICAL, HIGH, MEDIUM, LOW
-- `package` (optional): Filter by package (react, next, node, etc.)
-- `exploitable` (optional): Only show exploitable CVEs
+#### **find_packages**
+Fast (~0.1s) discovery of npm packages in a tree. **Parameters:** `path` (required).
+
+#### **scan_live**
+Probe a live URL for exploitable vulnerabilities (Next.js, n8n).
+**Parameters:** `url` (required), `scanner` (default `all`), `timeout` (default 10).
+
+#### **get_cve_info**
+Details for a specific CVE. **Parameters:** `cve_id` (required).
+
+#### **list_cves**
+List the 32 tracked CVEs with filters. **Parameters:** `severity`, `package`, `exploitable` (all optional).
+
+#### **list_scanners**
+List the available vulnerability scanners and their CVE coverage.
+
+#### **generate_report**
+Generate a comprehensive JSON vulnerability report. **Parameters:** `path` (required).
 
 ---
 
@@ -259,7 +220,7 @@ python -c "import sys; sys.path.insert(0, 'src'); from mcp_server import server;
 **Verify config path:**
 - Claude Desktop: `%APPDATA%\Claude\claude_desktop_config.json` (Windows)
 - Claude Desktop: `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
-- Check that `cwd` is an **absolute path**
+- Confirm `shellockolm-mcp` runs from a normal shell (`pip install -e .` if the command isn't found)
 
 **Check logs:**
 - Claude Desktop: Help → Show Logs
@@ -269,7 +230,7 @@ python -c "import sys; sys.path.insert(0, 'src'); from mcp_server import server;
 
 **Test with MCP Inspector:**
 ```bash
-mcp-inspector python src/mcp_server.py
+npx @modelcontextprotocol/inspector shellockolm-mcp
 # Try calling scan_directory from the inspector
 ```
 

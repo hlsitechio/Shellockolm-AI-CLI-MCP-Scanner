@@ -1,0 +1,21 @@
+# Shellockolm scan configuration for this repository (dogfooding).
+#
+# Consumed by the `self-scan` CI job (build-loop task #43): shellockolm runs its
+# own flagship agent supply-chain scanner against this repo on every CI run and
+# BLOCKS the build on any HIGH/CRITICAL finding in a real agent artifact.
+#
+# The ONLY thing excluded is the deliberate detection corpus under tests/fixtures/
+# — those files are intentionally malicious (and intentionally-benign) test data
+# that the detection suite asserts on, NOT real threats in this repository. Every
+# other agent artifact (the root mcp.json, docs, the website, ...) is scanned.
+# The excluded count is always announced by the CLI ("N finding(s) ignored by
+# config"), never silently dropped.
+#
+# This file sets ONLY `ignore`: it deliberately does not pin `scanner`/`fail_on`,
+# so a contributor's plain `shellockolm scan .` still runs the full scanner set;
+# the self-scan job passes `-s agent --fail-on high` explicitly. Config values are
+# applied only as defaults for flags you did not pass (an explicit flag always
+# wins), and `--no-config` disables this file entirely.
+ignore = [
+    "tests/fixtures/",   # deliberate malicious + legit detection corpus (tasks #39/#40)
+]

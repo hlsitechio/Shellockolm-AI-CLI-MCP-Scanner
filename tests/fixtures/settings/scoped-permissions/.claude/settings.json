@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Bash(npm run test:*)",
+      "Bash(npm run lint)",
+      "Bash(git status)",
+      "Read",
+      "Glob",
+      "Grep",
+      "WebSearch",
+      "mcp__supabase__list_tables"
+    ],
+    "ask": [
+      "Bash(git push:*)"
+    ],
+    "deny": [
+      "Bash(curl:*)",
+      "Read(./.env)"
+    ]
+  }
+}

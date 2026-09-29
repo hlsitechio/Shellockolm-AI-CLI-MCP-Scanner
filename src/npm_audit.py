@@ -15,6 +15,7 @@ Features:
 import json
 import subprocess
 import shutil
+import tempfile
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple
@@ -122,11 +123,14 @@ class NpmAuditWrapper:
     Enhanced npm audit wrapper with beautiful output
     """
 
-    HISTORY_DIR = Path("/tmp/shellockolm/npm_audit_history")
+    # Use the platform temp dir so this resolves correctly on Windows
+    # (the old hardcoded "/tmp/..." mapped onto the current drive root).
+    HISTORY_DIR = Path(tempfile.gettempdir()) / "shellockolm" / "npm_audit_history"
 
     def __init__(self):
+        # mkdir is deferred until we actually write history (see save_report),
+        # so merely constructing the wrapper does not create directories.
         self.history_dir = self.HISTORY_DIR
-        self.history_dir.mkdir(parents=True, exist_ok=True)
 
     def _get_npm_version(self) -> str:
         """Get npm version"""

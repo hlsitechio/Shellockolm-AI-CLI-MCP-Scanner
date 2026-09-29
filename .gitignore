@@ -14,8 +14,12 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# NOTE: root-anchored on purpose. An unanchored `lib/` matches at ANY depth and
+# silently swallowed `website/src/lib/` — the marketing site's own source dir —
+# so a clone could not build the site. Python build artifacts only ever land in
+# a root-level lib/ (setuptools' build/lib/ is already covered by `build/`).
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -235,6 +239,19 @@ __cache__/
 .vulnerability_cache/
 node_modules_cache/
 
+# Frontend dependencies (website/) — the installed tree, never the lockfile.
+# `node_modules_cache/` above does NOT match `node_modules/`, so without this
+# rule a `git add -A` stages the whole installed dependency tree (6.5k files)
+# into a security scanner's repo. `website/package-lock.json` is deliberately
+# TRACKED, so a clone installs the exact pinned versions via `npm ci`.
+node_modules/
+
+# Local agent/editor tooling for the website workspace (dev-server launch
+# config). Anchored to website/ on purpose: a blanket `.claude/` would swallow
+# the tracked detection corpus under tests/fixtures/**/.claude/ — the same
+# class of bug the unanchored `lib/` rule caused for website/src/lib/.
+website/.claude/
+
 # User-specific configuration
 config.local.json
 config.user.json
@@ -351,3 +368,7 @@ TODO.md
 TASKS.md
 .notes/
 
+
+# ...but the committed detection-test corpus under tests/ must be tracked.
+!tests/fixtures/
+!tests/fixtures/**

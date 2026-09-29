@@ -14,7 +14,7 @@
 │  React • Next.js • Node.js • n8n • npm • Supply Chain • Clawdbot            │
 │                                                                             │
 │  ✓ 32 CVEs  ✓ 7 Scanners  ✓ Malware  ✓ Secrets  ✓ Auto-Fix                  │
-│  🔗 github.com/hlsitechio/shellockolm                                       │
+│  🔗 github.com/hlsitechio/Shellockolm-AI-CLI-MCP-Scanner                    │
 │  ────────────────────────────────────────────────────────────────────       │
 │  💡 Tip: Calculate your security grade with [27] Score                      │
 └─────────────────────────────────────────────────────────────────────────────┘

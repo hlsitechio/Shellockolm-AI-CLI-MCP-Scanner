@@ -78,9 +78,12 @@ class MCPConfigurator:
             if "mcpServers" not in config:
                 config["mcpServers"] = {}
             
-            # Add shellockolm server
+            # Add shellockolm server.
+            # Use sys.executable (the interpreter currently running this
+            # configurator) rather than a bare "python", which may resolve to a
+            # Windows Store shim or a Python without the `mcp` package installed.
             config["mcpServers"]["shellockolm"] = {
-                "command": "python",
+                "command": sys.executable,
                 "args": [str(self.shellockolm_root / "src" / "mcp_server.py")],
                 "env": {
                     "PYTHONPATH": str(self.shellockolm_root / "src")
@@ -102,7 +105,7 @@ class MCPConfigurator:
             import subprocess
             
             config_json = json.dumps({
-                "command": "python",
+                "command": sys.executable,
                 "args": [str(self.shellockolm_root / "src" / "mcp_server.py")],
                 "cwd": str(self.shellockolm_root),
                 "env": {
@@ -137,14 +140,14 @@ class MCPConfigurator:
             if not any(s.get("name") == "shellockolm" for s in config["mcpServers"]):
                 config["mcpServers"].append({
                     "name": "shellockolm",
-                    "command": "python",
+                    "command": sys.executable,
                     "args": [str(self.shellockolm_root / "src" / "mcp_server.py")],
                     "cwd": str(self.shellockolm_root)
                 })
-            
+
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=2)
-            
+
             return True
         except Exception as e:
             print(f"❌ Error configuring Cursor: {e}")
@@ -165,14 +168,14 @@ class MCPConfigurator:
             if not any(s.get("name") == "shellockolm" for s in config["mcpServers"]):
                 config["mcpServers"].append({
                     "name": "shellockolm",
-                    "command": "python",
+                    "command": sys.executable,
                     "args": [str(self.shellockolm_root / "src" / "mcp_server.py")],
                     "cwd": str(self.shellockolm_root)
                 })
-            
+
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=2)
-            
+
             return True
         except Exception as e:
             print(f"❌ Error configuring Continue.dev: {e}")

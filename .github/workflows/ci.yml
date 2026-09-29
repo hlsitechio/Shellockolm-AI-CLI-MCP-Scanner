@@ -14,8 +14,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ['3.10', '3.11', '3.12']
+        os: [ubuntu-latest, windows-latest]
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
 
     steps:
     - name: Checkout code
@@ -27,88 +27,31 @@ jobs:
         python-version: ${{ matrix.python-version }}
         cache: 'pip'
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
+    - name: Upgrade pip tooling
+      run: python -m pip install --upgrade pip setuptools wheel
 
-    - name: Install dev dependencies
-      continue-on-error: true
-      run: |
-        pip install pytest pytest-cov black flake8 mypy
+    - name: Install package and dev dependencies
+      run: pip install .[dev]
 
-    - name: Lint with flake8 (warnings only)
-      continue-on-error: true
-      run: |
-        pip list | grep flake8 && flake8 . --count --exit-zero --max-complexity=10 --max-line-length=88 --statistics --exclude=.git,__pycache__,venv,env || echo "Flake8 not available, skipping"
-
-    - name: Check code formatting with Black (warnings only)
-      continue-on-error: true
-      run: |
-        pip list | grep black && black --check --diff . || echo "Black not available or formatting issues found"
-
-    - name: Type checking with mypy (warnings only)
-      continue-on-error: true
-      run: |
-        pip list | grep mypy && mypy src/*.py --ignore-missing-imports || echo "Mypy check completed with warnings"
-
-    - name: Run basic tool tests
+    - name: Verify console script works
       shell: bash
       run: |
-        # Test scanner import
-        python -c "import sys; sys.path.insert(0, 'src'); from scanner import CVEScanner; scanner = CVEScanner(); print('Scanner module OK')"
+        shellockolm version
+        shellockolm --help
 
-        # Test remediation import
-        python -c "import sys; sys.path.insert(0, 'src'); from remediation import Remediator; rem = Remediator(); print('Remediation module OK')"
-
-        # Test scan_simple help
-        python src/scan_simple.py --help || echo "scan_simple.py help command executed"
-
-        # Test auto_fix help
-        python src/auto_fix.py --help || echo "auto_fix.py help command executed"
-
-        echo "All basic imports and help commands successful"
-
-    - name: Test scanner on sample data
+    - name: Verify flat imports resolve from the installed package
       shell: bash
       run: |
-        # Create test package.json
-        mkdir -p test_project
+        # Run from a neutral directory so src/ is NOT implicitly on sys.path;
+        # this proves the installed distribution exposes the flat modules.
+        cd "$RUNNER_TEMP"
+        python -c "import cli, scanners, vulnerability_database, mcp_server; print('flat imports OK')"
 
-        # Create vulnerable package.json with Python (cross-platform)
-        python -c "import json; open('test_project/package.json', 'w').write(json.dumps({'name': 'test-project', 'version': '1.0.0', 'dependencies': {'react': '19.0.0', 'react-dom': '19.0.0'}}, indent=2))"
+    - name: Run test suite
+      run: pytest tests/ -v
 
-        echo "Test project created"
-
-        # Run scanner (allow failure since it's a test)
-        python src/scan_simple.py test_project || echo "Scanner test completed"
-
-        echo "Scanner execution test completed"
-
-  security-scan:
-    name: Security Scanning
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Run Bandit security scan
-      uses: tj-actions/bandit@v5.1
-      continue-on-error: true
-      with:
-        targets: |
-          .
-        options: "-r --format json --output bandit-report.json"
-
-    - name: Upload Bandit report
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: bandit-security-report
-        path: bandit-report.json
-
-  code-quality:
-    name: Code Quality Analysis
+  lint:
+    name: Lint (ruff)
     runs-on: ubuntu-latest
     steps:
     - name: Checkout code
@@ -117,17 +60,196 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.11'
+        python-version: '3.12'
+        cache: 'pip'
 
-    - name: Install dependencies
+    - name: Upgrade pip tooling
+      run: python -m pip install --upgrade pip setuptools wheel
+
+    - name: Install package and dev dependencies
+      run: pip install .[dev]
+
+    - name: Lint with ruff (build-blocking)
+      # BLOCKS the build on any violation in the enforced rule families. The
+      # rule selection + deferred-backlog ignore list is the single source of
+      # truth in [tool.ruff.lint] in pyproject.toml (shared with local runs), so
+      # CI and a local `ruff check src tests scripts` enforce the same gate.
+      #
+      # The gate covers `tests` as well as `src` (build-loop follow-up F25): the
+      # test tree is where every detection claim is actually pinned, so an
+      # unlinted suite is the place a typo'd assertion hides longest. It was
+      # outside the gate and had already drifted (13 violations when extended).
+      #
+      # `scripts` joined the gate in follow-up F26 — it is not inert tooling:
+      # action_summary.py runs inside the shipped GitHub Action and
+      # benchmark_scan.py's corpus generator is imported by the perf tripwire,
+      # so a break there is a break in shipped CI surface.
+      run: ruff check src tests scripts
+
+  typecheck:
+    name: Type check (mypy)
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+        cache: 'pip'
+
+    - name: Upgrade pip tooling
+      run: python -m pip install --upgrade pip setuptools wheel
+
+    - name: Install package and dev dependencies
+      run: pip install .[dev]
+
+    - name: Type check with mypy (build-blocking)
+      # BLOCKS the build on any type error in the checked surface. The scope
+      # (src/scanners + src/licensing.py), import resolution, and strictness are
+      # the single source of truth in [tool.mypy] in pyproject.toml (shared with
+      # a local bare `mypy`), so CI and local runs enforce exactly the same gate.
+      # The scope is a ratchet — widened over time, never narrowed.
+      run: mypy
+
+  coverage:
+    name: Coverage gate
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+        cache: 'pip'
+
+    - name: Upgrade pip tooling
+      run: python -m pip install --upgrade pip setuptools wheel
+
+    - name: Install package and dev dependencies
+      run: pip install .[dev]
+
+    - name: Run test suite with coverage gate
+      # This step BLOCKS the build (no continue-on-error) when total line
+      # coverage drops below the floor. The threshold is read from
+      # [tool.coverage.report] fail_under in pyproject.toml — one source of
+      # truth, shared with local `pytest --cov=src` runs.
+      run: pytest tests/ --cov=src --cov-report=term-missing --cov-report=xml
+
+    - name: Upload coverage report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: coverage-xml
+        path: coverage.xml
+        if-no-files-found: ignore
+
+  smoke-scan:
+    name: Smoke - scanner runs on sample data
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+        cache: 'pip'
+
+    - name: Install package
       run: |
         python -m pip install --upgrade pip
-        pip install radon
+        pip install .
 
-    - name: Check cyclomatic complexity
+    - name: Scanner and remediation import smoke
+      shell: bash
       run: |
-        radon cc . -a -nb
+        python -c "import sys; sys.path.insert(0, 'src'); from scanner import CVEScanner; CVEScanner(); print('Scanner module OK')"
+        python -c "import sys; sys.path.insert(0, 'src'); from remediation import Remediator; Remediator(); print('Remediation module OK')"
 
-    - name: Check maintainability index
+    - name: Run scanner on a generated vulnerable project
+      shell: bash
       run: |
-        radon mi . -nb
+        mkdir -p test_project
+        python -c "import json; open('test_project/package.json', 'w').write(json.dumps({'name': 'test-project', 'version': '1.0.0', 'dependencies': {'next': '14.1.5'}}, indent=2))"
+        python src/scan_simple.py test_project
+
+  self-scan:
+    name: Self-scan (dogfood) - agent supply-chain
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+        cache: 'pip'
+
+    - name: Upgrade pip tooling
+      run: python -m pip install --upgrade pip setuptools wheel
+
+    - name: Install package
+      run: pip install .
+
+    - name: Self-scan this repo (build-blocking, fail on HIGH+)
+      # Dogfooding (build-loop task #43): run shellockolm's flagship agent
+      # supply-chain scanner against its OWN repository on every CI run and BLOCK
+      # the build on any HIGH or CRITICAL finding in a real agent artifact. No
+      # continue-on-error: a regression in this repo's own SKILL.md / mcp.json /
+      # .claude / CLAUDE.md artifacts turns the build red.
+      #
+      # The deliberate detection corpus under tests/fixtures/ is excluded via the
+      # committed shellockolm.toml (those files are intentionally malicious test
+      # data, not real threats); the excluded count is announced, never silent.
+      #
+      # Agent-only keeps the gate deterministic and fully offline (bundled rules,
+      # no live CVE feed), so a red build always means a genuine regression — the
+      # honest basis for any "we scan ourselves" dogfooding claim.
+      run: |
+        shellockolm scan -s agent --fail-on high \
+          --sarif self-scan.sarif -o self-scan.json .
+
+    - name: Upload self-scan reports
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: self-scan-reports
+        path: |
+          self-scan.json
+          self-scan.sarif
+        if-no-files-found: ignore
+
+  security-scan:
+    name: Security Scanning (Bandit)
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Run Bandit from pip
+      # Run bandit directly from PyPI instead of depending on a third-party
+      # action via a mutable tag. -ll reports MEDIUM+ severity; non-blocking.
+      continue-on-error: true
+      run: |
+        python -m pip install --upgrade pip bandit
+        bandit -r src -ll -f json -o bandit-report.json || true
+        bandit -r src -ll || true
+
+    - name: Upload Bandit report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: bandit-security-report
+        path: bandit-report.json
+        if-no-files-found: ignore
