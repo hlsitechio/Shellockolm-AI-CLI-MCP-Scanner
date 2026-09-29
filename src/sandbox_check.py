@@ -947,6 +947,70 @@ def _shell_argv_carries_a_payload(content: str) -> bool:
             return True
     return False
 
+# ---------------------------------------------------------------------------
+# A shell whose name is a variable (F44)
+# ---------------------------------------------------------------------------
+#
+# The no-command arm above needs the shell as a string literal, so the same
+# reverse shell written ``const bin = process.env.SHELL; spawn(bin, [])`` matched
+# nothing. A regex cannot follow the variable, but a short dataflow step can: a
+# name *assigned* a shell literal or a shell-valued env var, then spawned bare
+# within :data:`_SHELL_VARIABLE_WINDOW`. Only that tractable subset is read —
+# ``spawn(cmd, args)`` over two opaque locals is the most common shape in build
+# tooling and stays silent, as does any variable whose assignment is not
+# provably a shell.
+
+#: A shell-valued expression: a shell literal, or the env vars that name one.
+_SHELL_VALUE = (
+    r"(?:process\.env(?:\.(?:SHELL|ComSpec|COMSPEC)"
+    r"|\[\s*['\"](?:SHELL|ComSpec|COMSPEC)['\"]\s*\])"
+    r"|['\"`]\s*(?:" + _SHELL_BINARY + r")\s*['\"`])"
+)
+
+#: Starts on a literal ``=`` so the scan skips ahead by character; the assigned
+#: name is read backwards from the match (see :data:`_ASSIGNED_NAME`) instead of
+#: by a leading lookbehind, which would cost a full-file retry per offset.
+_SHELL_ASSIGNMENT = re.compile(r"=(?!=)\s*" + _SHELL_VALUE, re.IGNORECASE)
+
+_ASSIGNED_NAME = re.compile(r"(?<![\w$.])([A-Za-z_$][\w$]*)\s*$")
+
+#: A spawn call handed a single argument with no argv, or an empty one.
+_BARE_SPAWN_TAIL = r"\s*(?:\)|,\s*\[\s*\]\s*[,)])"
+
+#: The spawn may be several statements after the assignment, not adjacent to it.
+_SHELL_VARIABLE_WINDOW = 800
+
+_INLINE_SHELL_SPAWN = re.compile(
+    r"\b(?:exec(?:Sync|File(?:Sync)?)?|spawn(?:Sync)?)\s*\(\s*"
+    r"process\.env(?:\.(?:SHELL|ComSpec|COMSPEC)"
+    r"|\[\s*['\"](?:SHELL|ComSpec|COMSPEC)['\"]\s*\])" + _BARE_SPAWN_TAIL
+)
+
+
+def _shell_variable_spawned_bare(content: str) -> bool:
+    """Whether a shell held in a variable is spawned with no command (F44)."""
+    if _INLINE_SHELL_SPAWN.search(content):
+        return True
+    for match in _SHELL_ASSIGNMENT.finditer(content):
+        named = _ASSIGNED_NAME.search(content[max(0, match.start() - 80): match.start()])
+        if named is None:
+            continue
+        tail = content[match.end(): match.end() + _SHELL_VARIABLE_WINDOW]
+        spawn = re.compile(
+            r"\b(?:exec(?:Sync|File(?:Sync)?)?|spawn(?:Sync)?)\s*\(\s*"
+            + re.escape(named.group(1)) + r"(?![\w$])" + _BARE_SPAWN_TAIL
+        )
+        if spawn.search(tail):
+            return True
+    return False
+
+
+def _shell_spawn_structural(content: str) -> bool:
+    return _shell_argv_carries_a_payload(content) or _shell_variable_spawned_bare(
+        content
+    )
+
+
 #: How far from a weak input-capture noun (``keystrokes``, ``keylog``) the
 #: corroborating verb may sit. A line bound, like every other window here, and
 #: the value the ``keystrokes`` arm has always used — reused rather than picked
@@ -1130,7 +1194,7 @@ MALWARE_PATTERN_TABLE: Tuple[MalwarePattern, ...] = (
         r")"
         r")",
         "shell process spawned",
-        structural=_shell_argv_carries_a_payload,
+        structural=_shell_spawn_structural,
     ),
     # A command string that fetches and immediately executes. The install-script
     # phase already flags this shape in a lifecycle hook; installed code can run
